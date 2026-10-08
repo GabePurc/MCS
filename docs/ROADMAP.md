@@ -36,6 +36,7 @@ Update this file when work is finished (only list items that are done in the rep
 - [x] External clock fix: frequency changes apply immediately when CLKI is selected; Supply & Clock dialog selects source/prescaler (debugger CCP write) and warns above the speed grade
 - [x] Pin signal generators (square wave / pulse bursts) and momentary push buttons
 - [x] Machine-code source files (.mc) with live disassembly, line-level debugging, and program -> .mc conversion
+- [x] In-app updates (Tauri updater): signed bundles + latest.json from the release workflow, Help > Check for Updates, start-up check, CHANGELOG-based release notes
 
 ## Next
 - [ ] DWARF variable/type info (`.debug_info`) for a typed Watch window and locals

@@ -2,6 +2,11 @@ name: Release
 
 # Push a tag like v0.2.0 (or run manually) to build the Windows installer and the
 # macOS universal app and publish them as a GitHub release.
+#
+# In-app updates: the bundles are signed with the updater key (repository secrets
+# TAURI_SIGNING_PRIVATE_KEY and TAURI_SIGNING_PRIVATE_KEY_PASSWORD) and tauri-action uploads a
+# latest.json that the app reads from releases/latest. Bump the version in package.json,
+# src-tauri/tauri.conf.json and Cargo.toml, add a CHANGELOG.md section, then tag.
 on:
   push:
     tags: ['v*']
@@ -33,13 +38,28 @@ jobs:
           targets: ${{ matrix.rust_targets }}
       - uses: Swatinem/rust-cache@v2
       - run: npm ci
+      - name: Release notes from CHANGELOG.md
+        id: notes
+        shell: bash
+        run: |
+          ver="${GITHUB_REF_NAME#v}"
+          awk -v v="$ver" 'index($0, "## [" v "]") == 1 { f = 1; next } /^## / && f { exit } f' CHANGELOG.md > notes.md
+          { echo 'body<<EOF_NOTES'; cat notes.md; echo 'EOF_NOTES'; } >> "$GITHUB_OUTPUT"
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           tagName: ${{ github.ref_name }}
           releaseName: 'MCS ${{ github.ref_name }}'
+          includeUpdaterJson: true
           releaseBody: |
+            ## What's new
+            ${{ steps.notes.outputs.body }}
+
+            Already have MCS 0.2.0 or later? Use **Help → Check for Updates** in the app instead of downloading.
+
             ## Download
 
             | Platform | File |

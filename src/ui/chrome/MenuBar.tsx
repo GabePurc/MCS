@@ -69,7 +69,7 @@ const MENUS: TopMenu[] = [
     },
   },
   { title: 'Tools', mnemonic: 0, items: () => [cmd('tools.toolchain')] },
-  { title: 'Help', mnemonic: 0, items: () => [cmd('help.isa'), cmd('help.include'), cmd('help.toolchain'), sep, cmd('help.about')] },
+  { title: 'Help', mnemonic: 0, items: () => [cmd('help.isa'), cmd('help.include'), cmd('help.toolchain'), sep, cmd('help.updates'), cmd('help.about')] },
 ];
 
 export function MenuBar(): JSX.Element {

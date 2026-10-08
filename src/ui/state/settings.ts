@@ -19,6 +19,8 @@ export interface Settings {
   /** Step by source line (when line info exists) instead of by instruction. */
   sourceStepping: boolean;
   vcc: number;
+  /** Look for a new release a few seconds after start-up (desktop app). */
+  autoUpdateCheck: boolean;
 }
 
 const DEFAULTS: Settings = {
@@ -34,6 +36,7 @@ const DEFAULTS: Settings = {
   showStartPage: true,
   sourceStepping: true,
   vcc: 5,
+  autoUpdateCheck: true,
 };
 
 const KEY = 'mcs.settings.v1';
@@ -60,7 +63,7 @@ function persist(s: SettingsStore): void {
   const out: Settings = {
     deviceId: s.deviceId, gccPath: s.gccPath, optimize: s.optimize, extraFlags: s.extraFlags, recentFiles: s.recentFiles,
     editorFontSize: s.editorFontSize, speedMode: s.speedMode, speedFactor: s.speedFactor, openFiles: s.openFiles, showStartPage: s.showStartPage,
-    sourceStepping: s.sourceStepping, vcc: s.vcc,
+    sourceStepping: s.sourceStepping, vcc: s.vcc, autoUpdateCheck: s.autoUpdateCheck,
   };
   saveJson(KEY, out);
 }

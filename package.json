@@ -1,7 +1,7 @@
 {
   "name": "mcs",
   "productName": "MCS Microcontroller Simulator",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Cross-platform microcontroller simulator (ATtiny10 first) with a Windows 7-style UI. Rust core + Tauri.",
   "author": "Gabe Purcell",
   "license": "MIT",
@@ -39,6 +39,8 @@
     "@tauri-apps/api": "^2.12.1",
     "@tauri-apps/plugin-dialog": "^2.8.1",
     "@tauri-apps/plugin-opener": "^2.7.0",
+    "@tauri-apps/plugin-process": "^2.4.0",
+    "@tauri-apps/plugin-updater": "^2.13.2",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
     "three": "^0.186.1",

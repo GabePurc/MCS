@@ -360,6 +360,12 @@ export const Icons = {
       <path d="M2.5 10.5h2v-5h3v5h3v-5h3" stroke="#6fe36b" strokeWidth="1.2" fill="none" />
     </S>
   ),
+  Download: (p: P) => (
+    <S {...p}>
+      <path d="M6 1.5h4v5.5h3L8 12.5 3 7h3z" fill="url(#ig-green)" stroke="#1d7d15" strokeWidth="0.8" strokeLinejoin="round" />
+      <path d="M2 12.5v2h12v-2" fill="none" stroke="#5c6878" strokeWidth="1.4" />
+    </S>
+  ),
   MachineCode: (p: P) => (
     <S {...p}>
       <path d="M3.5 1.5h6l3 3v10h-9z" fill="url(#ig-paper)" stroke="#7a8ea8" />

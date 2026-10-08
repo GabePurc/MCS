@@ -13,6 +13,8 @@ Get the latest installers from the **[Releases page](https://github.com/GabePurc
 
 Assembly programs work out of the box. To build C programs, also install avr-gcc (see [C support](#c-support)).
 
+**Updating:** from version 0.2.0 on, use **Help ▸ Check for Updates**. MCS also checks by itself a few seconds after it starts. Updates are downloaded from the GitHub release, their signature is verified, and they install and restart the app. If you have 0.1.0, download 0.2.0 once by hand.
+
 ## Features
 
 - **Simulation engine in Rust** (`crates/mcs-sim`)
@@ -84,7 +86,14 @@ Other commands:
 | `npm test` | Runs all Rust tests plus the front-end unit tests |
 | `npm run typecheck` | Type-checks the UI |
 
-Pushing a `v*` tag runs `.github/workflows/release.yml`, which builds installers for all three platforms.
+Pushing a `v*` tag runs `.github/workflows/release.yml`, which builds the Windows and macOS installers and publishes them as a GitHub release.
+
+### Releasing an update
+
+1. Bump the version in `package.json`, `src-tauri/tauri.conf.json` and `Cargo.toml`, and add a section to `CHANGELOG.md`. That section becomes the release notes shown in the app.
+2. Push a tag such as `v0.2.1`. The workflow signs the bundles with the updater key and uploads `latest.json`, which installed apps poll.
+
+The updater's private key lives outside the repository, in `~/.tauri/mcs-updater.key` and in the repository secrets `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`. Keep a backup: installed apps only accept updates signed with this key. Local `npm run build` needs the key in those environment variables.
 
 ### C support
 

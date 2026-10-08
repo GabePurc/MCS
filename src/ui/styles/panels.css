@@ -225,3 +225,7 @@ a.link:hover { text-decoration: underline; }
 .speed-presets { display: flex; flex-wrap: wrap; gap: 4px; margin-left: 22px; }
 .speed-presets .seg-btn { border: 1px solid #8e9bb0; border-radius: 3px; height: 21px; }
 .speed-row.disabled, .speed-presets.disabled { opacity: 0.55; }
+
+/* ---------------------------------------------------------------- updates */
+.update-notes { max-height: 220px; overflow: auto; margin: 6px 0 0; padding: 6px 8px; border: 1px solid var(--border-soft); background: #fff; white-space: pre-wrap; font-family: var(--font-ui); }
+.update-badge { color: #fff; background: linear-gradient(#5fb85a, #2f8f2b); font-weight: 600; }

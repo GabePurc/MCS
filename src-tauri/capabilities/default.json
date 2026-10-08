@@ -21,6 +21,8 @@
     "core:window:allow-set-title",
     "core:webview:allow-create-webview-window",
     "dialog:default",
-    "opener:default"
+    "opener:default",
+    "updater:default",
+    "process:allow-restart"
   ]
 }

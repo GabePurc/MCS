@@ -5,6 +5,7 @@ import { useSettings } from '../state/settings';
 import { formatHz, formatTime } from '../format';
 import { speedLabel } from '../services/commands';
 import { openDialog } from '../state/dialogs';
+import { useUpdates } from '../services/updater';
 
 export function StatusBar(): JSX.Element {
   const st = useSim((s) => s.state);
@@ -16,6 +17,7 @@ export function StatusBar(): JSX.Element {
   const hasDoc = useWorkspace((s) => !!s.activeDocId);
   const speedMode = useSettings((s) => s.speedMode);
   const speedFactor = useSettings((s) => s.speedFactor);
+  const update = useUpdates((s) => s.state);
 
   let led = 'idle';
   let text = 'Ready';
@@ -67,6 +69,11 @@ export function StatusBar(): JSX.Element {
       <div className="status-cell clickable" data-tip="Effective simulation speed (click to change)" onClick={() => openDialog('speed')}>
         {running ? `${formatHz(st?.speedHz ?? 0)} (${ratio >= 10 ? ratio.toFixed(0) : ratio >= 0.01 ? ratio.toFixed(2) : ratio.toExponential(1)}x)` : `Speed: ${speedLabel(speedMode, speedFactor)}`}
       </div>
+      {(update.kind === 'available' || update.kind === 'downloading') && (
+        <div className="status-cell clickable update-badge" data-tip="A new version of MCS is available - click to install" onClick={() => openDialog('update')}>
+          {update.kind === 'available' ? `Update ${update.version} available` : `Downloading ${update.version}...`}
+        </div>
+      )}
       {hasDoc && (
         <div className="status-cell">
           Ln {cursor.line} Col {cursor.col}

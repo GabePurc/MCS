@@ -12,6 +12,7 @@ import { DialogHost } from './dialogs/Dialogs';
 import { renderPanel } from './panels/registry';
 import { FloatingWindows } from './dock/FloatingWindows';
 import { initMainWindowBridge } from './services/windows';
+import { scheduleStartupCheck } from './services/updater';
 import { handleShortcut } from './services/commands';
 import { connectSim, sim } from './services/simClient';
 import { confirmQuit, openPath, restoreSession } from './services/files';
@@ -36,6 +37,7 @@ export function App(): JSX.Element {
     void loadDevices();
     void connectSim();
     void initMainWindowBridge();
+    scheduleStartupCheck();
     sim({ type: 'init', deviceId: s.deviceId });
     sim({ type: 'setSpeed', mode: s.speedMode, factor: s.speedFactor });
     if (s.vcc !== 5) sim({ type: 'setVcc', volts: s.vcc });

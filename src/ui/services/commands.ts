@@ -14,6 +14,8 @@ import { openDialog } from '../state/dialogs';
 import { buildActive, importHexOrElf, isBuildStale, openProgramAsMachineCode } from './build';
 import { closeDocument, confirmQuit, newFile, openFileDialog, saveAll, saveDoc } from './files';
 import { formatHz } from '../format';
+import { openUpdateDialog } from './updater';
+import { inTauri } from '../backend/api';
 import { sim } from './simClient';
 import { sourceToPc } from './debugInfo';
 import { exportHexDialog } from './exporting';
@@ -236,6 +238,7 @@ const list: CommandDef[] = [
   { id: 'help.isa', label: 'Instruction Set Reference', icon: 'Book', keys: ['F1'], run: () => useLayout.getState().show('isa') },
   { id: 'help.include', label: 'Device Definitions (.inc)', run: () => openDialog('include') },
   { id: 'help.toolchain', label: 'C Toolchain Setup', run: () => openDialog('toolchainHelp') },
+  { id: 'help.updates', label: 'Check for Updates...', icon: 'Download', run: openUpdateDialog, enabled: () => inTauri },
   { id: 'help.about', label: 'About MCS', icon: 'App', run: () => openDialog('about') },
 ];
 

@@ -8,6 +8,7 @@ import type { SpeedMode, ToolchainInfo } from '../backend/types';
 import { sim } from '../services/simClient';
 import { setSpeed, speedLabel } from '../services/commands';
 import { formatHz, hex, parseHz } from '../format';
+import { APP_VERSION, checkForUpdates, installUpdate, useUpdates } from '../services/updater';
 
 /** Aero-framed modal dialog with a Windows 7 TaskDialog-style button area. */
 export function Dialog({ title, children, buttons, width = 460, gray }: { title: string; children: ReactNode; buttons?: ReactNode; width?: number; gray?: boolean }): JSX.Element {
@@ -52,6 +53,7 @@ export function DialogHost(): JSX.Element | null {
     case 'fuses': return <FusesDialog />;
     case 'supply': return <SupplyDialog />;
     case 'speed': return <SpeedDialog />;
+    case 'update': return <UpdateDialog />;
     case 'include': return <IncludeDialog />;
     default: return null;
   }
@@ -64,7 +66,7 @@ function AboutDialog(): JSX.Element {
         <img src={new URL('../assets/app-icon-32.png', import.meta.url).href} width={48} height={48} alt="" />
         <div>
           <h2 className="dialog-main-instruction">MCS Microcontroller Simulator</h2>
-          <p>Version 0.1.0</p>
+          <p>Version {APP_VERSION}</p>
           <p>Cycle-accurate microcontroller simulation with a built-in AVR assembler, avr-gcc integration and a source-level debugger. Simulation core written in Rust; UI rendered with Tauri.</p>
           <p className="dim">Fonts: Selawik (© Microsoft, SIL OFL 1.1), Cascadia Mono (© Microsoft, SIL OFL 1.1).</p>
         </div>
@@ -356,6 +358,53 @@ function SpeedDialog(): JSX.Element {
           <input type="radio" checked={mode === 'max'} onChange={() => setMode('max')} />
           <span><b>Maximum</b> - as fast as this computer can simulate (typically 100-200 million instructions per second, far beyond any real AVR).</span>
         </label>
+      </div>
+    </Dialog>
+  );
+}
+
+function UpdateDialog(): JSX.Element {
+  const st = useUpdates((s) => s.state);
+  const auto = useSettings((s) => s.autoUpdateCheck);
+  const pct = st.kind === 'downloading' && st.total > 0 ? Math.min(100, (st.done / st.total) * 100) : null;
+  return (
+    <Dialog
+      title="Check for Updates"
+      width={520}
+      gray
+      buttons={
+        <>
+          <label className="w7-check left">
+            <input type="checkbox" checked={auto} onChange={(e) => useSettings.getState().set({ autoUpdateCheck: e.target.checked })} /> Check automatically at start-up
+          </label>
+          {st.kind === 'available' && <button className="w7-btn default" onClick={() => void installUpdate()}><span>Install and Restart</span></button>}
+          {(st.kind === 'none' || st.kind === 'error') && <button className="w7-btn" onClick={() => void checkForUpdates(true)}><span>Check Again</span></button>}
+          <button className="w7-btn" disabled={st.kind === 'downloading' || st.kind === 'installed'} onClick={closeDialog}><span>{st.kind === 'available' ? 'Later' : 'Close'}</span></button>
+        </>
+      }
+    >
+      <div className="w7-group">
+        <span className="w7-group-title">MCS Microcontroller Simulator {APP_VERSION}</span>
+        {st.kind === 'checking' && <p>Looking for a newer version...</p>}
+        {st.kind === 'idle' && <p>Press "Check Again" to look for a newer version.</p>}
+        {st.kind === 'none' && <p><Icons.Success size={13} /> You have the latest version.</p>}
+        {st.kind === 'error' && (
+          <p><Icons.Warning size={13} /> Could not check for updates: <span className="dim">{st.message}</span><br />Check the internet connection, or download the latest release from github.com/GabePurc/MCS.</p>
+        )}
+        {st.kind === 'available' && (
+          <>
+            <p><b>Version {st.version}</b> is available{st.date ? ` (released ${st.date.slice(0, 10)})` : ''}. It downloads and installs itself, then MCS restarts. Open files are kept; you are asked to save unsaved changes first.</p>
+            {st.notes && <pre className="update-notes selectable">{st.notes}</pre>}
+          </>
+        )}
+        {st.kind === 'downloading' && (
+          <>
+            <p>Downloading version {st.version}...{st.total > 0 ? ` ${(st.done / 1048576).toFixed(1)} of ${(st.total / 1048576).toFixed(1)} MB` : ''}</p>
+            <div className={`w7-progress${pct === null ? ' marquee' : ''}`}><div style={{ width: `${pct ?? 100}%` }} /></div>
+          </>
+        )}
+        {st.kind === 'installed' && <p><Icons.Success size={13} /> Version {st.version} is installed. Restarting...</p>}
+        {st.kind === 'checking' && <div className="w7-progress marquee"><div /></div>}
       </div>
     </Dialog>
   );
