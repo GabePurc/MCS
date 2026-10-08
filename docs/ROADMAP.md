@@ -16,7 +16,7 @@ Update this file when work is finished (only list items that are done in the rep
 ### Tooling
 - [x] avrasm2-compatible assembler with generated device includes, macros, conditionals, diagnostics, listing, line table
 - [x] Intel HEX import/export, ELF + DWARF v2–v5 line-table loader
-- [x] avr-gcc integration (auto-detection on Windows/macOS/Linux, GCC diagnostics parsing)
+- [x] avr-gcc integration (auto-detection on Windows/macOS/Linux, GCC diagnostics parsing); C verified end-to-end with avr-gcc 14.3 (compile, DWARF line mapping incl. inlined headers, timing, interrupts, source stepping)
 
 ### Application
 - [x] Tauri desktop app (Windows/macOS/Linux), frameless window with Aero caption
@@ -25,7 +25,7 @@ Update this file when work is finished (only list items that are done in the rep
 - [x] Panels: Processor, I/O View, Memory (hex editor), Disassembly, Pins & Stimulus, Waveform, Output, Symbols, Call Stack, Breakpoints
 - [x] Example programs (assembly + C), start page, recent files, session restore
 - [x] WebAssembly build of the core; UI runs in a browser too
-- [x] CI (tests on all three OSes) and tag-triggered installer builds
+- [x] CI (tests on all three OSes) and tag-triggered releases: Windows NSIS installer (per-user, WebView2 bootstrap) + macOS universal .dmg
 
 ## Next
 - [ ] DWARF variable/type info (`.debug_info`) for a typed Watch window and locals

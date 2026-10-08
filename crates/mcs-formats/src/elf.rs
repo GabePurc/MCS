@@ -626,6 +626,18 @@ fn read_symbols(elf: &ElfFile<'_>, is_avr: bool) -> Result<(Vec<ProgramSymbol>, 
         if is_abs && st_type == STT_NOTYPE && name.starts_with("__") {
             continue;
         }
+        // Compiler-internal local labels (.L*, .Loc.*) and anything defined in a
+        // non-allocated section (.debug_*, .comment) are not program symbols.
+        if name.starts_with(".L") {
+            continue;
+        }
+        if shndx < SHN_LORESERVE {
+            if let Some(sec) = elf.sections.get(shndx as usize) {
+                if sec.flags & SHF_ALLOC == 0 {
+                    continue;
+                }
+            }
+        }
 
         let mut kind = match st_type {
             STT_FUNC => SymbolKind::Func,

@@ -35,7 +35,18 @@ export function pcToSource(p: LoadedProgram | null | undefined, pcWord: number):
     } else hi = mid - 1;
   }
   if (idx < 0) return null;
-  const row = rows[idx];
+  // Several rows can share an address (`for(;;)` and its first statement, or a call site and
+  // inlined header code). Like the simulator's stepping: take the file of the first statement
+  // row, then the last statement row from that file.
+  while (idx > 0 && rows[idx - 1].address === rows[idx].address) idx--;
+  let row = rows[idx];
+  let file = -1;
+  for (let j = idx; j < rows.length && rows[j].address === rows[idx].address; j++) {
+    const r = rows[j];
+    if (!r.isStmt) continue;
+    if (file === -1) file = r.file;
+    if (r.file === file) row = r;
+  }
   // Reject addresses far past the last row of a sequence (e.g. unmapped library code).
   const next = rows[idx + 1];
   if (!next && addr - row.address > 64) return null;

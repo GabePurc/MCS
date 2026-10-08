@@ -143,6 +143,9 @@ pub fn compile(req: &CompileRequest) -> CompileResult {
         if let Some(d) = &req.dir {
             args.push(format!("-I{}", d.display()));
         }
+        // Debug info should name the user's file, not the temporary copy we compile.
+        let real_dir = req.dir.as_ref().map(|d| d.display().to_string()).unwrap_or_else(|| ".".into());
+        args.push(format!("-ffile-prefix-map={}={}", tmp.display(), real_dir));
         args.extend(req.extra_flags.iter().filter(|f| !f.is_empty()).cloned());
         args.push("-o".into());
         args.push(out.to_string_lossy().into_owned());
@@ -163,8 +166,12 @@ pub fn compile(req: &CompileRequest) -> CompileResult {
         }
         let elf = std::fs::read(&out).map_err(|e| e.to_string())?;
         let mut text = text;
-        let size_tool = Path::new(&tc.gcc).with_file_name(if cfg!(windows) { "avr-size.exe" } else { "avr-size" });
-        if size_tool.is_file() {
+        // avr-size normally sits next to avr-gcc; Homebrew's keg-only avr-gcc keeps binutils elsewhere.
+        let size_exe = if cfg!(windows) { "avr-size.exe" } else { "avr-size" };
+        let size_tool = std::iter::once(Path::new(&tc.gcc).with_file_name(size_exe))
+            .chain(candidate_dirs().into_iter().map(|d| d.join(size_exe)))
+            .find(|p| p.is_file());
+        if let Some(size_tool) = size_tool {
             if let Ok(o) = Command::new(size_tool).arg(&out).output() {
                 text.push_str(&String::from_utf8_lossy(&o.stdout).replace(&out.to_string_lossy().into_owned(), "program.elf"));
             }
@@ -214,5 +221,92 @@ mod tests {
         assert_eq!(d[1].file, "C:\\p\\a.c");
         assert_eq!(d[1].severity, Severity::Warning);
         assert_eq!((d[2].file.as_str(), d[2].line), ("foo.c", 7));
+    }
+}
+
+/// End-to-end C tests (skipped when avr-gcc is not installed).
+#[cfg(test)]
+mod c_tests {
+    use super::*;
+    use mcs_core::avr::devices;
+    use mcs_core::program::LoadedProgram;
+    use mcs_sim::avr::Machine;
+    use mcs_sim::protocol::{Command, StepKind};
+    use mcs_sim::session::Session;
+
+    fn build(example: &str) -> Option<LoadedProgram> {
+        detect(None)?;
+        let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../examples");
+        let source = std::fs::read_to_string(dir.join(example)).unwrap();
+        let r = compile(&CompileRequest { source: &source, file_name: example, dir: Some(dir), mcu: "attiny10", optimize: "Os", extra_flags: &[], gcc_path: None });
+        let elf = r.elf.unwrap_or_else(|| panic!("{example} failed to compile:\n{}", r.output));
+        let out = mcs_api::program_from_elf(&elf, example, "attiny10", r.diagnostics, r.output);
+        assert!(out.ok, "{example}: {:#?}", out.diagnostics);
+        out.program
+    }
+
+    fn edges(m: &Machine) -> Vec<u64> {
+        let (_, c, l) = m.sys.trace.read_since(0, usize::MAX);
+        (1..c.len()).filter(|&i| (l[i] ^ l[i - 1]) & 1 == 1).map(|i| c[i]).collect()
+    }
+
+    #[test]
+    fn blink_c_compiles_maps_lines_and_runs() {
+        let Some(p) = build("blink.c") else { return eprintln!("avr-gcc not found: skipping") };
+        assert_eq!(p.device.as_deref(), Some("attiny10"));
+        assert!(p.files.iter().any(|f| f.ends_with("blink.c")), "{:?}", p.files);
+        assert!(p.lines.iter().any(|l| l.line == 14), "no row for the PINB toggle line");
+        assert!(p.symbols.iter().any(|s| s.name == "main"));
+        let mut m = Machine::new(devices::get("attiny10").unwrap());
+        m.load(&p);
+        m.run(1_000_000);
+        let e = edges(&m);
+        assert!(e.len() >= 8, "{e:?}");
+        let period = e[4] - e[3];
+        assert!((99_000..=101_500).contains(&period), "toggle period {period} cycles");
+    }
+
+    #[test]
+    fn pwm_fade_c_uses_the_timer_interrupt() {
+        let Some(p) = build("pwm_fade.c") else { return eprintln!("avr-gcc not found: skipping") };
+        assert!(p.symbols.iter().any(|s| s.name == "__vector_4"), "TIM0_OVF ISR missing");
+        let mut m = Machine::new(devices::get("attiny10").unwrap());
+        m.load(&p);
+        m.run(2_000_000);
+        assert!(edges(&m).len() > 1000);
+        // The ISR keeps changing the duty cycle (OCR0A) while the PWM runs.
+        let d1 = m.peek_data(0x26);
+        m.run(2_050_000);
+        assert_ne!(d1, m.peek_data(0x26));
+    }
+
+    #[test]
+    fn c_source_level_stepping() {
+        let Some(p) = build("blink.c") else { return eprintln!("avr-gcc not found: skipping") };
+        let mut s = Session::new();
+        s.handle(Command::Load { device_id: "attiny10".into(), program: Box::new(p.clone()) });
+        s.handle(Command::SetSpeed { mode: mcs_sim::protocol::SpeedMode::Max, factor: 1.0 });
+        let mut lines = Vec::new();
+        for _ in 0..6 {
+            s.handle(Command::Step { kind: StepKind::Over, source: true });
+            for _ in 0..10_000 {
+                if !s.is_running() {
+                    break;
+                }
+                s.slice();
+            }
+            assert!(!s.is_running(), "step did not finish");
+            let pc = s.machine().unwrap().cpu.pc * 2;
+            // First row at the closest address <= pc (the call site wins over inlined rows).
+            let best = p.lines.iter().filter(|r| r.address <= pc).map(|r| r.address).max().unwrap();
+            let at: Vec<_> = p.lines.iter().filter(|r| r.address == best && r.is_stmt).collect();
+            let row = at.iter().rev().find(|r| r.file == at[0].file).unwrap();
+            assert!(p.files[row.file as usize].ends_with("blink.c"), "stopped in {}", p.files[row.file as usize]);
+            lines.push(row.line);
+        }
+        // From reset: main's first statement (11), the toggle (14), the inlined delay (15), then
+        // the for(;;) loop-back branch (13) and around again.
+        assert_eq!(lines, vec![11, 14, 15, 13, 14, 15]);
+        assert!(lines.iter().all(|&l| l <= 20), "stepped into a header: {lines:?}");
     }
 }

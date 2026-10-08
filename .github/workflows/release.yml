@@ -1,7 +1,7 @@
 name: Release
 
-# Push a tag like v0.2.0 to build installers for Windows, macOS and Linux
-# and attach them to a draft GitHub release.
+# Push a tag like v0.2.0 (or run manually) to build the Windows installer and the
+# macOS universal app and publish them as a GitHub release.
 on:
   push:
     tags: ['v*']
@@ -15,14 +15,12 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - platform: macos-latest
-            args: --target aarch64-apple-darwin
-          - platform: macos-latest
-            args: --target x86_64-apple-darwin
-          - platform: ubuntu-22.04
-            args: ''
           - platform: windows-latest
-            args: ''
+            rust_targets: ''
+            args: --bundles nsis
+          - platform: macos-latest
+            rust_targets: aarch64-apple-darwin,x86_64-apple-darwin
+            args: --target universal-apple-darwin --bundles app,dmg
     runs-on: ${{ matrix.platform }}
     steps:
       - uses: actions/checkout@v4
@@ -32,13 +30,8 @@ jobs:
           cache: npm
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+          targets: ${{ matrix.rust_targets }}
       - uses: Swatinem/rust-cache@v2
-      - name: Linux system dependencies
-        if: matrix.platform == 'ubuntu-22.04'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
       - run: npm ci
       - uses: tauri-apps/tauri-action@v0
         env:
@@ -46,6 +39,27 @@ jobs:
         with:
           tagName: ${{ github.ref_name }}
           releaseName: 'MCS ${{ github.ref_name }}'
-          releaseDraft: true
+          releaseBody: |
+            ## Download
+
+            | Platform | File |
+            |---|---|
+            | **Windows 10 / 11** (64-bit) | `MCS.Microcontroller.Simulator_*_x64-setup.exe` |
+            | **macOS** 10.15+ (Apple Silicon and Intel) | `MCS.Microcontroller.Simulator_*_universal.dmg` |
+
+            ### Windows
+            1. Download and run the `..._x64-setup.exe` installer (no administrator rights needed).
+            2. The installer is not code-signed yet, so Windows SmartScreen may say *"Windows protected your PC"*: click **More info → Run anyway**.
+            3. If the PC lacks Microsoft Edge WebView2, the installer downloads it automatically (internet required).
+            4. Start **MCS Microcontroller Simulator** from the Start menu.
+
+            ### macOS
+            1. Open the `.dmg` and drag **MCS Microcontroller Simulator** to *Applications*.
+            2. The app is not notarized yet: the first time, right-click the app → **Open** → **Open** (or run `xattr -dr com.apple.quarantine "/Applications/MCS Microcontroller Simulator.app"`).
+
+            ### Getting started
+            Open an example from the Start Page (e.g. *Blink (assembly)*), press **F7** to build and **F5** to run.
+            Assembly works out of the box. C programs need avr-gcc (see *Help → C Toolchain Setup* in the app).
+          releaseDraft: false
           prerelease: false
           args: ${{ matrix.args }}

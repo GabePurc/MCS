@@ -206,10 +206,17 @@ impl Session {
         let words = self.m().cpu.flash_words as usize;
         let mut key = vec![-1i32; words];
         if let Some(p) = &self.program {
+            // Several statement rows can share an address (`for(;;)` + its first statement,
+            // or a call site + inlined header code). Use the file of the first one and the
+            // last row from that file: the most specific statement in the user's file.
             for row in p.lines.iter().filter(|r| r.is_stmt) {
                 let w = (row.address >> 1) as usize;
-                if w < words && key[w] == -1 {
-                    key[w] = ((row.file as i32) << 20) | (row.line as i32 & 0xfffff);
+                if w >= words {
+                    continue;
+                }
+                let k = ((row.file as i32) << 20) | (row.line as i32 & 0xfffff);
+                if key[w] == -1 || key[w] >> 20 == k >> 20 {
+                    key[w] = k;
                 }
             }
         }
@@ -377,13 +384,25 @@ impl Session {
                 }));
             }
             (StepKind::Over, true) => {
+                // Source-level step over:
+                // * without a source context (e.g. at the reset vector, before the C runtime
+                //   calls main) stop at the first line with debug info, at any call depth;
+                // * skip called functions (deeper frames) and stop when the current one returns;
+                // * stay in the current file, so code inlined from headers (e.g. _delay_ms)
+                //   is stepped over as part of its call-site line.
                 m.step_predicate = Some(Box::new(move |cpu| {
-                    let d = cpu.shadow_stack.len();
-                    if d > depth0 {
+                    let k = line_key[cpu.pc as usize];
+                    if k == -1 {
                         return false;
                     }
-                    let k = line_key[cpu.pc as usize];
-                    k != -1 && (k != start_key || d < depth0)
+                    if start_key == -1 {
+                        return true;
+                    }
+                    let d = cpu.shadow_stack.len();
+                    if d != depth0 {
+                        return d < depth0;
+                    }
+                    (k >> 20) == (start_key >> 20) && k != start_key
                 }));
             }
         }
