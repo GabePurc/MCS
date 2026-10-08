@@ -1,6 +1,14 @@
 # MCS — Microcontroller Simulator
 
-A cycle-accurate microcontroller simulator and source-level debugger with a Windows 7–style interface. It runs on Windows, macOS and Linux. The first supported family is the **ATtiny4/5/9/10**: the AVRrc reduced core in a SOT-23-6 package.
+A cycle-accurate microcontroller simulator and source-level debugger with a Windows 7–style interface. It runs on Windows, macOS and Linux.
+
+Supported microcontrollers:
+
+| Family | Parts | Package |
+|---|---|---|
+| tinyAVR, reduced core | ATtiny4, ATtiny5, ATtiny9, ATtiny10 | SOT-23-6 |
+| tinyAVR, classic core | ATtiny25, ATtiny45, ATtiny85 | PDIP-8 |
+| megaAVR | ATmega48PA, ATmega88PA, ATmega168PA, ATmega328P (Arduino Uno) | PDIP-28 |
 
 ![MCS stopped at a breakpoint in blink.asm](docs/screenshot.jpg)
 
@@ -21,15 +29,21 @@ Assembly programs work out of the box. To build C programs, also install avr-gcc
   - Pre-decoded flash and a jump-table executor give about 140 MIPS on an Apple M-series chip. That is roughly 180× real time for an ATtiny10 at 1 MHz.
   - Peripherals are event-driven, so they cost nothing while idle. In sleep, the simulator skips straight to the next event.
   - Peripheral models:
-    - GPIO with pull-ups, the PINx toggle and the RESET pin
-    - INT0 and pin-change interrupts
-    - Timer0: all 16 waveform-generation modes, PWM output, input capture, external clock and the TEMP register
-    - Analog comparator
-    - 8-bit ADC with auto-trigger
-    - Watchdog: interrupt and reset modes, WDRF/WDE lock, CCP-protected changes
-    - Clock source and prescaler (CCP protected)
-    - Sleep modes with the datasheet's wake-up sources
-    - Power reduction, VCC level monitor, reset flags, NVM, fuse and signature mapping
+    - GPIO ports with pull-ups (PUD), the PINx toggle, digital input disable and the RESET pin
+    - INT0/INT1 (level or edge) and every pin-change interrupt group
+    - 16-bit timers with all 16 waveform-generation modes, input capture and the TEMP register
+    - 8-bit timers (normal, CTC, fast PWM, phase-correct PWM), including Timer2 running in power-save
+    - ATtiny85 high-speed Timer1 with the 64 MHz PLL, OCR1C TOP and complementary PWM outputs
+    - USART: frames travel bit by bit on TXD/RXD
+    - SPI master and slave
+    - TWI (I²C) master on an empty bus
+    - USI
+    - EEPROM controller: EEMPE/EEPE timed writes and the 3.4 ms programming time; contents survive resets
+    - 8-bit and 10-bit ADCs: references, left adjust, internal bandgap/GND/temperature channels, differential inputs with gain
+    - Analog comparator with bandgap input, the ADC multiplexer (ACME) and Timer1 input capture
+    - Watchdog with the CCP (ATtiny10) or WDCE timed sequences
+    - Clock from the CKSEL fuses (RC, 128 kHz, crystal, external, PLL), CLKPR with CKDIV8, brown-out detection, BOOTRST/IVSEL boot loader vectors
+    - Multi-byte fuses, sleep modes with the datasheet's wake-up sources, power reduction, reset flags, VLM, NVM and signature mapping
   - Timing follows the ATtiny4/5/9/10 datasheet: instruction cycle counts, 4-cycle interrupt response, and the extra instruction after `SEI` and `RETI`.
 - **Test bench**
   - Signal generators on any pin: square waves from 0.01 Hz to 20 MHz, or bursts of N pulses (active high or low). They are event driven and keep their frequency when the firmware changes the CPU clock.
@@ -51,6 +65,7 @@ Assembly programs work out of the box. To build C programs, also install avr-gcc
   - Hex memory editor for data space and flash
   - Disassembly, plus a symbols and watch list
   - Pin stimulus: logic levels, analog voltages and VCC
+  - **Serial Monitor**: decodes UART frames from any pin (the USART's TXD or a software-serial pin) and sends typed text into any pin, at any baud rate and frame format
   - Logic-analyzer waveform window with measurement cursors
   - **Chip View**: a 3D model of the chip (package, lead frame, gold bond wires, die) with soft shadows and ambient occlusion, or a flat die view. The die shows the running program live: a flash heat map with the PC, SRAM and stack bytes, the register file, the instruction being decoded, SREG, peripheral activity and pin levels.
   - **Device Info**: specifications, speed grades, memory map, peripherals, pins, vectors and the die floorplan, with a link to a real die photo

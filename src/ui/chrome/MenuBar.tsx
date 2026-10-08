@@ -21,7 +21,7 @@ const MENUS: TopMenu[] = [
     mnemonic: 0,
     items: () => [
       cmd('file.newAsm'), cmd('file.newC'), cmd('file.newMc'), cmd('file.open'),
-      { kind: 'sub', label: 'Open Example', items: () => SHOWCASE.map((e) => ({ kind: 'action', label: e.title, run: () => openExample(e.name) })) },
+      { kind: 'sub', label: 'Open Example', items: () => SHOWCASE.map((e) => ({ kind: 'action', label: e.device ? `${e.title}  [${e.device}]` : e.title, run: () => openExample(e.name) })) },
       sep, cmd('file.save'), cmd('file.saveAs'), cmd('file.saveAll'), cmd('file.close'),
       sep, cmd('file.import'), cmd('file.exportHex'),
       sep,
@@ -61,8 +61,14 @@ const MENUS: TopMenu[] = [
     mnemonic: 1,
     items: () => {
       const cur = useSettings.getState().deviceId;
+      const devs = useDevices.getState().devices;
+      const fams = [...new Set(devs.map((d) => d.family))];
       return [
-        ...useDevices.getState().devices.map((d): MenuItem => ({ kind: 'action', label: `${d.name}  (${d.flashSize} B flash, ${d.sramSize} B SRAM)`, checked: d.id === cur, run: () => selectDevice(d.id) })),
+        ...fams.map((fam): MenuItem => ({
+          kind: 'sub',
+          label: fam,
+          items: () => devs.filter((d) => d.family === fam).map((d): MenuItem => ({ kind: 'action', label: `${d.name}  (${d.flashSize >= 1024 ? `${d.flashSize / 1024} KB` : `${d.flashSize} B`} flash, ${d.sramSize} B SRAM, ${d.package})`, checked: d.id === cur, run: () => selectDevice(d.id) })),
+        })),
         sep, cmd('device.info'), cmd('device.chip'),
         sep, cmd('device.fuses'), cmd('device.supply'),
       ];

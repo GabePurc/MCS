@@ -16,6 +16,9 @@ let forward: ((cmd: SimCommand) => void) | null = null;
 
 /** Observers of every raw backend output (the window bridge forwards them to pop-outs). */
 export const outputTaps = new Set<(o: SimOutput) => void>();
+/** Receivers of Serial Monitor bytes. */
+export const serialTaps = new Set<(bytes: number[]) => void>();
+
 /** Latest device spec and raw state (for pop-out snapshots). */
 export const latest: { spec: AvrDeviceSpec | null; state: RawMachineState | null } = { spec: null, state: null };
 
@@ -78,6 +81,7 @@ function convert(r: RawMachineState): MachineState {
     traceCycles: Float64Array.from(r.traceCycles),
     traceLevels: Uint32Array.from(r.traceLevels),
     execHeat: r.execHeat ? Uint32Array.from(r.execHeat) : undefined,
+    eeprom: r.eeprom ? Uint8Array.from(r.eeprom) : undefined,
   };
 }
 
@@ -87,6 +91,8 @@ function applyState(st: MachineState): void {
   if (!forward) for (const m of st.messages) appendOutput(m.level === 'warning' ? 'warning' : m.level === 'error' ? 'error' : 'info', `[sim @ ${m.cycle}] ${m.text}`);
   const patch: Partial<typeof cur> = { state: st, running: st.running };
   if (st.flash) patch.flash = st.flash;
+  if (st.eeprom) patch.eeprom = st.eeprom;
+  if (st.serial?.length) serialTaps.forEach((f) => f(st.serial!));
   if (st.stop?.reason === 'load' || (st.stop?.reason === 'reset' && st.cycles === 0)) {
     trace.clear();
   }

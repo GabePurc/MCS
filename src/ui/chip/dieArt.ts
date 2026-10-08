@@ -496,7 +496,7 @@ function peripheralLines(b: Block, d: LiveData): string[] {
   const { st, spec } = d;
   const info = st.peripherals.find((p) => p.name === (b.kind === 'clock' ? 'SYSTEM' : b.group));
   if (b.kind === 'clock') return [st.hz >= 1e6 ? `${+(st.hz / 1e6).toFixed(3)} MHz` : `${+(st.hz / 1e3).toFixed(1)} kHz`, info?.values.find((v) => v[0] === 'Clock source')?.[1] ?? ''];
-  if (b.kind === 'nvm') return [`Fuse 0x${hex2(st.fuse)}  Lock 0x${hex2(st.lock)}`, `Sig ${spec.signature.map(hex2).join(' ')}`];
+  if (b.kind === 'nvm') return [`Fuses ${st.fuses.map(hex2).join(' ')}  Lock ${hex2(st.lock)}`, `Sig ${spec.signature.map(hex2).join(' ')}`];
   if (info) return info.values.slice(0, 3).map(([k, v]) => `${k}: ${v}`);
   return spec.registers.filter((r) => r.group === b.group).slice(0, 3).map((r) => `${r.name} 0x${hex2(st.data[r.addr] ?? 0)}`);
 }

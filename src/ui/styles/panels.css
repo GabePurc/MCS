@@ -229,3 +229,14 @@ a.link:hover { text-decoration: underline; }
 /* ---------------------------------------------------------------- updates */
 .update-notes { max-height: 220px; overflow: auto; margin: 6px 0 0; padding: 6px 8px; border: 1px solid var(--border-soft); background: #fff; white-space: pre-wrap; font-family: var(--font-ui); }
 .update-badge { color: #fff; background: linear-gradient(#5fb85a, #2f8f2b); font-weight: 600; }
+
+/* ---------------------------------------------------------------- serial monitor */
+.serial-panel .panel-toolbar .grow { flex: 1; }
+.serial-out { flex: 1; min-height: 0; margin: 0; padding: 4px 8px; overflow: auto; background: #fff; white-space: pre-wrap; word-break: break-all; font-size: var(--fs-mono); }
+.serial-input { display: flex; gap: 6px; padding: 4px 6px; border-top: 1px solid var(--border-soft); background: #f7f9fc; }
+.serial-input .w7-input { flex: 1; }
+.fuse-row { display: flex !important; align-items: center; gap: 8px; margin: 5px 0; }
+.fuse-row .w7-select { max-width: 380px; }
+.fuse-hex { width: 52px; height: 20px; padding: 0 4px; font-size: 12px; }
+
+.dev-badge { margin-left: 6px; padding: 0 4px; border-radius: 2px; font-size: 9.5px; font-weight: 600; color: #fff; background: linear-gradient(#7c9cc4, #4a6c99); vertical-align: 1px; }

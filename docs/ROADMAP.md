@@ -37,6 +37,8 @@ Update this file when work is finished (only list items that are done in the rep
 - [x] Pin signal generators (square wave / pulse bursts) and momentary push buttons
 - [x] Machine-code source files (.mc) with live disassembly, line-level debugging, and program -> .mc conversion
 - [x] In-app updates (Tauri updater): signed bundles + latest.json from the release workflow, Help > Check for Updates, start-up check, CHANGELOG-based release notes
+- [x] ATmega48PA/88PA/168PA/328P and ATtiny25/45/85: specs, generalized timers (8/16-bit, shared flag registers, GTCCR), ATtiny85 PLL Timer1, USART, SPI, TWI (empty bus), USI, EEPROM, 10-bit ADC, comparator ACME/bandgap, INT0/INT1/PCINT groups, classic system control (CKSEL fuses, CLKPR, BOD, BOOTRST/IVSEL), multi-byte fuses, canonical sleep modes
+- [x] Serial Monitor (UART decode/inject on any pin), EEPROM view/edit, fuse dialog with field menus and presets, DIP packages in the Chip View
 
 ## Next
 - [ ] DWARF variable/type info (`.debug_info`) for a typed Watch window and locals
@@ -44,7 +46,9 @@ Update this file when work is finished (only list items that are done in the rep
 - [ ] More virtual components on the pin panel (LED, potentiometer, logic probe); serial (UART) stimulus
 - [ ] Waveform: analog traces, protocol decoders (UART, SPI, I²C), export (VCD)
 - [ ] Input synchronizer latency and input-capture noise canceler delay
-- [ ] More devices (issue #1): classic ATtiny/ATmega first (ATtiny85, ATmega328P: 8-bit timers, USART, SPI, TWI, EEPROM, 10-bit ADC), then ATtiny20/40 and the rest of the families
+- [ ] More devices (issue #1): ATtiny13A/2313/84, ATmega8/16/32/644/1284/2560, ATtiny20/40, then the AVR-0/1 series (new register map)
+- [ ] Virtual I²C/SPI devices on the bus (EEPROM, sensors) so TWI/SPI transfers get answers
+- [ ] SPM self-programming, debugWIRE, timer asynchronous (TOSC) mode, USART synchronous / MSPIM modes
 - [ ] ARM Cortex-M (STM32) targets: needs the architecture abstraction below plus a Thumb-2 core, NVIC/SysTick and per-family peripherals
 - [ ] Architecture abstraction for non-AVR targets (machine trait, register descriptions in specs)
 - [ ] Project files (multi-file C builds, per-project device/clock/fuses)

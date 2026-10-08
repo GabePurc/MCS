@@ -56,12 +56,16 @@ logic is Rust; TypeScript only renders and routes user input.
 
 ## Adding a microcontroller
 
-1. **Same family (another AVR):** add a spec in `crates/mcs-core/src/avr/devices/` and register
-   it in `devices/mod.rs`. If its peripherals differ, add a `PeripheralSet` variant and a wiring
-   function in `crates/mcs-sim/src/avr/peripherals/mod.rs`, reusing or adding peripheral models
-   (port, timer16, analog, exint, system are parameterized by register addresses). Classic
-   cores (ATmega) mainly need `regs_in_data_space = true`, `io_base = 0x20` and the feature
-   flags; the executor already implements the full AVR instruction set.
+1. **Same family (another AVR):** add a spec in `crates/mcs-core/src/avr/devices/` (see
+   `tiny_rc.rs`, `tiny_x5.rs`, `mega_x8.rs`: registers with bits, vectors, pins with GPIO
+   indices, fuse bytes, sleep control, boot sections) and register it in `devices/mod.rs`. Wire
+   it with a `PeripheralSet` recipe in `crates/mcs-sim/src/avr/peripherals/mod.rs`; the models
+   are parameterized by addresses, bit masks, pins and vectors: `Port`, `ExtInt` (any INTn /
+   PCINT layout), `Timer` (8/16-bit) + `IrqFlags` (TIFR/TIMSK, shareable) + `Gtccr`, `Usart`,
+   `Spi`, `Twi`, `Usi`, `Eeprom`, `Adc`/`AnalogComparator`, `Watchdog` (CCP or WDCE),
+   `ClassicSystem` (CKSEL clock sources, CLKPR, BOD, MCUCR). Registers shared between modules
+   have one owner that announces writes with `Event::RegWritten`; cross-module signals use
+   `Trigger`s.
 2. **New architecture (e.g. ARM Cortex-M0, PIC):** add `mcs_core::<arch>` (ISA + device
    descriptions) and `mcs_sim::<arch>` (machine). The session/protocol layer is the seam: give
    the session a machine abstraction (trait) and keep `MachineState` architecture-neutral

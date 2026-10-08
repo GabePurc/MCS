@@ -123,6 +123,7 @@ export const PANELS: [PanelId, string, IconName][] = [
   ['chip', 'Chip View (3D)', 'Chip3D'],
   ['info', 'Device Info', 'Info'],
   ['isa', 'Instruction Set', 'Book'],
+  ['serial', 'Serial Monitor', 'Serial'],
 ];
 
 export const PANEL_TITLES: Record<PanelId, string> = Object.fromEntries(PANELS.map(([id, t]) => [id, t])) as Record<PanelId, string>;

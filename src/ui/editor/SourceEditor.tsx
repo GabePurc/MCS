@@ -228,6 +228,8 @@ function createState(doc: Doc, text: string): EditorState {
       theme,
       EditorView.updateListener.of((u) => {
         if (u.docChanged && currentDocId) {
+          // Builds read the text from here: keep it in step with the view.
+          editorStates.set(currentDocId, u.state);
           markDirty(currentDocId);
           remapBreakpoints(u.startState, u.state, u.changes);
         }

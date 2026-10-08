@@ -10,7 +10,8 @@ const FLAGS = ['I', 'T', 'H', 'S', 'V', 'N', 'Z', 'C'];
 const FLAG_DESC: Record<string, string> = {
   I: 'Global Interrupt Enable', T: 'Bit Copy Storage', H: 'Half Carry', S: 'Sign (N xor V)', V: "Two's Complement Overflow", N: 'Negative', Z: 'Zero', C: 'Carry',
 };
-const SLEEP_MODES = ['Idle', 'ADC Noise Reduction', 'Power-down', 'Reserved', 'Standby', 'Reserved', 'Reserved', 'Reserved'];
+/** Canonical sleep modes (simulator `SleepKind`). */
+const SLEEP_MODES = ['Idle', 'ADC Noise Reduction', 'Power-down', 'Power-save', 'Standby', 'Extended Standby'];
 
 export function ProcessorPanel(): JSX.Element {
   const st = useSim((s) => s.state);

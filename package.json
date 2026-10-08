@@ -2,7 +2,7 @@
   "name": "mcs",
   "productName": "MCS Microcontroller Simulator",
   "version": "0.2.0",
-  "description": "Cross-platform microcontroller simulator (ATtiny10 first) with a Windows 7-style UI. Rust core + Tauri.",
+  "description": "Cross-platform AVR microcontroller simulator (ATtiny, ATmega) with a Windows 7-style UI. Rust core + Tauri.",
   "author": "Gabe Purcell",
   "license": "MIT",
   "private": true,

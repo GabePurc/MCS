@@ -5,7 +5,7 @@ import { sim } from '../services/simClient';
 import { hex, hexRaw, parseNumber } from '../format';
 import { EmptyHint } from './common';
 
-type Space = 'data' | 'flash' | 'nvm';
+type Space = 'data' | 'flash' | 'eeprom' | 'nvm';
 const ROW_H = 18;
 let savedSpace: Space = 'data';
 let savedCols = 16;
@@ -16,6 +16,7 @@ export function MemoryPanel(): JSX.Element {
   const st = useSim((s) => s.state);
   const base = useSim((s) => s.baseline);
   const flash = useSim((s) => s.flash);
+  const eeprom = useSim((s) => s.eeprom);
   const build = useWorkspace((s) => s.build);
   const [space, setSpaceState] = useState<Space>(savedSpace);
   const [cols, setColsState] = useState(savedCols);
@@ -46,13 +47,17 @@ export function MemoryPanel(): JSX.Element {
   if (space === 'nvm') {
     const rows: [string, string, string][] = [
       ['Signature', spec.signature.map((b) => hexRaw(b)).join(' '), `${spec.name} device ID`],
-      ['Fuse (config)', hex(st.fuse), spec.fuseBits.map((f) => `${f.name}=${st.fuse & f.mask ? 1 : 0}`).join('  ')],
+      ...spec.fuses.map((fb, i): [string, string, string] => [
+        `${fb.name} fuse`,
+        hex(st.fuses[i] ?? 0xff),
+        fb.bits.map((f) => `${f.name}=${(((st.fuses[i] ?? 0xff) & f.mask) >> Math.log2(f.mask & -f.mask)).toString(2).padStart(Math.round(Math.log2((f.mask >> Math.log2(f.mask & -f.mask)) + 1)), '0')}`).join('  '),
+      ]),
       ['Lock bits', hex(st.lock), 'NVLB'],
       ['Calibration', hex(spec.calibration), 'Factory OSCCAL value'],
     ];
     return (
       <div className="panel">
-        <MemToolbar space={space} setSpace={setSpace} cols={cols} setCols={setCols} gotoText={gotoText} setGotoText={setGotoText} onGoto={() => {}} />
+        <MemToolbar space={space} setSpace={setSpace} cols={cols} setCols={setCols} gotoText={gotoText} setGotoText={setGotoText} onGoto={() => {}} eeprom={spec.eepromSize > 0} />
         <div className="panel-scroll">
           <table className="grid-table">
             <thead>
@@ -69,7 +74,8 @@ export function MemoryPanel(): JSX.Element {
     );
   }
 
-  const bytes = space === 'data' ? st.data : flash ?? new Uint8Array(spec.flashSize).fill(0xff);
+  const space2: Space = space === 'eeprom' && spec.eepromSize === 0 ? 'data' : space;
+  const bytes = space2 === 'data' ? st.data : space2 === 'eeprom' ? eeprom ?? new Uint8Array(spec.eepromSize).fill(0xff) : flash ?? new Uint8Array(spec.flashSize).fill(0xff);
   const prev = space === 'data' ? base?.data : undefined;
   const total = bytes.length;
   const rowsN = Math.ceil(total / cols);
@@ -84,12 +90,13 @@ export function MemoryPanel(): JSX.Element {
     return '';
   };
   const tipFor = (a: number) => {
-    const n = names.get(a);
-    const region = space === 'flash' ? 'Flash' : a < spec.sramStart ? 'I/O' : 'SRAM';
+    const n = space === 'data' ? names.get(a) : undefined;
+    const region = space === 'flash' ? 'Flash' : space === 'eeprom' ? 'EEPROM' : a < spec.sramStart ? 'I/O' : 'SRAM';
     return `${region} ${hex(a, addrDigits)}${n ? ` - ${n}` : ''} = ${hex(bytes[a])} (${bytes[a]})${a === st.sp && space === 'data' ? '\n<- SP' : ''}\nDouble-click to edit`;
   };
   const commit = (a: number, v: number) => {
     if (space === 'data') sim({ type: 'writeData', addr: a, value: v });
+    else if (space === 'eeprom') sim({ type: 'writeEeprom', addr: a, value: v });
     else sim({ type: 'writeFlash', addr: a, value: v });
   };
   const goto = () => {
@@ -100,7 +107,7 @@ export function MemoryPanel(): JSX.Element {
 
   return (
     <div className="panel">
-      <MemToolbar space={space} setSpace={setSpace} cols={cols} setCols={setCols} gotoText={gotoText} setGotoText={setGotoText} onGoto={goto} />
+      <MemToolbar space={space2} setSpace={setSpace} cols={cols} setCols={setCols} gotoText={gotoText} setGotoText={setGotoText} onGoto={goto} eeprom={spec.eepromSize > 0} />
       <div className="hex-header mono">
         <span className="hex-addr">Address</span>
         {Array.from({ length: cols }, (_, i) => (
@@ -169,14 +176,15 @@ export function MemoryPanel(): JSX.Element {
   );
 }
 
-function MemToolbar(p: { space: Space; setSpace: (s: Space) => void; cols: number; setCols: (c: number) => void; gotoText: string; setGotoText: (s: string) => void; onGoto: () => void }): JSX.Element {
+function MemToolbar(p: { space: Space; setSpace: (s: Space) => void; cols: number; setCols: (c: number) => void; gotoText: string; setGotoText: (s: string) => void; onGoto: () => void; eeprom: boolean }): JSX.Element {
   return (
     <div className="panel-toolbar">
       <span>Memory:</span>
       <select className="w7-select" value={p.space} onChange={(e) => p.setSpace(e.target.value as Space)}>
         <option value="data">data (I/O + SRAM)</option>
         <option value="flash">prog (Flash)</option>
-        <option value="nvm">NVM (fuses, lock, signature)</option>
+        {p.eeprom && <option value="eeprom">eeprom (EEPROM)</option>}
+        <option value="nvm">fuses, lock, signature</option>
       </select>
       {p.space !== 'nvm' && (
         <>

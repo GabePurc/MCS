@@ -360,6 +360,14 @@ export const Icons = {
       <path d="M2.5 10.5h2v-5h3v5h3v-5h3" stroke="#6fe36b" strokeWidth="1.2" fill="none" />
     </S>
   ),
+  Serial: (p: P) => (
+    <S {...p}>
+      <rect x="1.5" y="2.5" width="13" height="10" rx="1" fill="#20303f" stroke="#11161c" strokeWidth="0.6" />
+      <path d="M3.5 5.5l2 1.5-2 1.5" stroke="#6fe36b" strokeWidth="1.1" fill="none" />
+      <path d="M7 9h4" stroke="#6fe36b" strokeWidth="1.1" />
+      <rect x="5" y="12.5" width="6" height="2" fill="url(#ig-steel)" stroke="#5c6878" strokeWidth="0.5" />
+    </S>
+  ),
   Download: (p: P) => (
     <S {...p}>
       <path d="M6 1.5h4v5.5h3L8 12.5 3 7h3z" fill="url(#ig-green)" stroke="#1d7d15" strokeWidth="0.8" strokeLinejoin="round" />

@@ -13,6 +13,8 @@ export interface SimStore {
   lastStop: StopInfo | null;
   /** Program memory as last reported by the worker. */
   flash: Uint8Array | null;
+  /** EEPROM as last reported. */
+  eeprom: Uint8Array | null;
   stopwatch: { cycles: number; time: number };
   /** Incremented whenever the user should be shown the current PC (stop events). */
   revealSeq: number;
@@ -27,6 +29,7 @@ export const useSim = create<SimStore>(() => ({
   running: false,
   lastStop: null,
   flash: null,
+  eeprom: null,
   stopwatch: { cycles: 0, time: 0 },
   revealSeq: 0,
   error: null,

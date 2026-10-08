@@ -81,8 +81,12 @@ export function Toolbar(): JSX.Element {
       </select>
       <span className="tb-label">Device:</span>
       <select className="w7-select" value={deviceId} data-tip="Target microcontroller" onChange={(e) => selectDevice(e.target.value)}>
-        {devices.map((d) => (
-          <option key={d.id} value={d.id}>{d.name}</option>
+        {[...new Set(devices.map((d) => d.family))].map((fam) => (
+          <optgroup key={fam} label={fam}>
+            {devices.filter((d) => d.family === fam).map((d) => (
+              <option key={d.id} value={d.id}>{d.name}</option>
+            ))}
+          </optgroup>
         ))}
       </select>
     </div>

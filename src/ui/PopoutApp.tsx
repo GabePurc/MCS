@@ -12,6 +12,7 @@ import { initPopoutBridge, leavePopout } from './services/windows';
 import { inTauri, win } from './backend/api';
 import { EmptyHint } from './panels/common';
 import type { PanelId } from './state/layout';
+import { startSerial } from './state/serial';
 
 let started = false;
 
@@ -26,7 +27,10 @@ export function PopoutApp({ panel }: { panel: PanelId }): JSX.Element {
     document.title = title;
     if (started) return;
     started = true;
-    void initPopoutBridge(panel, () => (inTauri ? win.destroy() : window.close())).then(() => setReady(true));
+    void initPopoutBridge(panel, () => (inTauri ? win.destroy() : window.close())).then(() => {
+      startSerial();
+      setReady(true);
+    });
   }, [panel, title]);
 
   useEffect(() => {

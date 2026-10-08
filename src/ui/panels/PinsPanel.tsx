@@ -14,7 +14,7 @@ function setDrive(pin: number, ext: ExtDrive, volts: number): void {
 }
 
 function driverText(p: PinState): string {
-  if (p.reserved) return 'RESET input';
+  if (p.reserved) return p.reservedBy === 'RESET' || !p.reservedBy ? 'RESET input' : `${p.reservedBy} (clock)`;
   if (p.dir) return p.ovEnable ? 'Timer output' : 'PORT output';
   if (p.gen) return 'Signal generator';
   if (p.ext === 'analog') return 'Analog input';
@@ -204,6 +204,7 @@ function ChipDiagram({ pins, states, name, vcc }: { pins: PinSpec[]; states: Pin
   const pinColor = (p: PinSpec) => {
     if (p.kind === 'vcc') return 'url(#pin-vcc)';
     if (p.kind === 'gnd') return 'url(#pin-gnd)';
+    if (p.kind === 'ref') return 'url(#pin-analog)';
     const s = states[p.gpio!];
     if (!s) return 'url(#pin-idle)';
     if (s.ext === 'analog' && !s.dir) return 'url(#pin-analog)';
@@ -234,7 +235,7 @@ function ChipDiagram({ pins, states, name, vcc }: { pins: PinSpec[]; states: Pin
         const lx = left ? x0 - 26 : x0 + bodyW;
         const s = p.gpio !== undefined ? states[p.gpio] : undefined;
         const interactive = p.kind === 'io' && s && !s.reserved;
-        const label = p.kind === 'io' ? p.name : p.kind === 'vcc' ? `VCC ${vcc.toFixed(1)}V` : 'GND';
+        const label = p.kind === 'io' ? p.name : p.kind === 'vcc' ? `VCC ${vcc.toFixed(1)}V` : p.kind === 'ref' ? p.name : 'GND';
         const fns = p.functions.filter((f) => f !== p.name).slice(0, 3).join(' / ');
         return (
           <g

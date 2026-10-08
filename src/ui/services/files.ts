@@ -4,7 +4,9 @@ import { getDocText, initialTexts } from '../editor/docText';
 import { useSettings } from '../state/settings';
 import { activeDoc, addDoc, appendOutput, closeDoc, languageFor, untitledName, updateDoc, useWorkspace, type Doc } from '../state/workspace';
 import { baseName } from './debugInfo';
-import { EXAMPLES } from './examples';
+import { EXAMPLES, templateFor } from './examples';
+import { useDevices } from '../state/devices';
+import { selectDevice } from './device';
 
 const SOURCE_FILTERS = [
   { name: 'Source files', extensions: ['asm', 's', 'S', 'inc', 'c', 'h', 'cpp', 'mc'] },
@@ -15,8 +17,9 @@ const SOURCE_FILTERS = [
 ];
 
 export function newFile(kind: 'asm' | 'c' | 'mc'): void {
-  const ex = EXAMPLES.find((e) => e.template === kind);
-  addDoc(untitledName(`.${kind}`), null, ex?.text ?? '', kind);
+  const id = useSettings.getState().deviceId;
+  const name = useDevices.getState().devices.find((d) => d.id === id)?.name ?? 'ATtiny10';
+  addDoc(untitledName(`.${kind}`), null, templateFor(kind, name), kind);
 }
 
 export async function openFileDialog(): Promise<void> {
@@ -39,7 +42,12 @@ export async function openPath(path: string): Promise<boolean> {
 
 export function openExample(name: string): void {
   const ex = EXAMPLES.find((e) => e.name === name);
-  if (ex) addDoc(ex.name, null, ex.text);
+  if (!ex) return;
+  // Examples written for another chip switch the target (assembly would do it at build time,
+  // C needs the right -mmcu).
+  const dev = useDevices.getState().devices.find((d) => d.name === (ex.device ?? 'ATtiny10'));
+  if (dev && (ex.device || /\.c$/.test(name))) selectDevice(dev.id);
+  addDoc(ex.name, null, ex.text);
 }
 
 export async function saveDoc(doc: Doc | undefined = activeDoc(), forceDialog = false): Promise<boolean> {

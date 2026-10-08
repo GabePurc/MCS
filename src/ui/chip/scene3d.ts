@@ -38,14 +38,18 @@ interface PackageDims {
   leadT: number;
   /** How far the leads reach beyond the body. */
   reach: number;
+  /** Through-hole package (straight legs into the board). */
+  dip: boolean;
+  /** Pins per side. */
+  half: number;
 }
 
-function packageDims(spec: AvrDeviceSpec, plan: Floorplan): PackageDims {
+/** Package outlines (mm x 100): SOT-23-6 (6ST1), PDIP 0.3" (8P3 / 28P3), SOIC fallback. */
+function packageDims(spec: AvrDeviceSpec): PackageDims {
   const half = Math.ceil(spec.pins.length / 2);
-  if (/SOT-23/i.test(spec.package)) return { len: 290, wid: 160, hgt: 110, standoff: 8, pitch: 95, leadW: 40, leadT: 14, reach: 60 };
-  const pitch = /DIP/i.test(spec.package) ? 254 : 127;
-  const len = Math.max(half * pitch + 60, plan.w / U + 80);
-  return { len, wid: Math.max(390, plan.h / U + 120), hgt: /DIP/i.test(spec.package) ? 330 : 150, standoff: 10, pitch, leadW: 45, leadT: 20, reach: /DIP/i.test(spec.package) ? 40 : 100 };
+  if (/SOT-23/i.test(spec.package)) return { len: 290, wid: 160, hgt: 110, standoff: 8, pitch: 95, leadW: 40, leadT: 14, reach: 60, dip: false, half };
+  if (/DIP/i.test(spec.package)) return { len: half * 254 - 30, wid: 650, hgt: 330, standoff: 40, pitch: 254, leadW: 50, leadT: 25, reach: 60, dip: true, half };
+  return { len: half * 127 + 60, wid: 390, hgt: 150, standoff: 10, pitch: 127, leadW: 42, leadT: 20, reach: 100, dip: false, half };
 }
 
 export class Chip3D {
@@ -64,6 +68,8 @@ export class Chip3D {
   private composer: EffectComposer;
   private gtao: GTAOPass;
   private shaded = true;
+  /** Overall model size (units) for camera framing. */
+  private span = 290;
   private overlays: { mesh: THREE.Mesh; tex: THREE.CanvasTexture; layer: BlockLayers['layers'][number] }[] = [];
   private pinMats: { pad: Pad; mats: THREE.MeshStandardMaterial[] }[] = [];
   private disposables: { dispose(): void }[] = [];
@@ -103,7 +109,7 @@ export class Chip3D {
     this.controls.enableDamping = false;
     this.controls.maxPolarAngle = Math.PI * 0.495;
     this.controls.minDistance = 40;
-    this.controls.maxDistance = 4000;
+    this.controls.maxDistance = 30000;
     this.controls.addEventListener('change', () => this.request());
 
     this.build();
@@ -113,7 +119,8 @@ export class Chip3D {
     this.composer = new EffectComposer(this.renderer, target);
     this.composer.addPass(new RenderPass(this.scene, this.camera));
     this.gtao = new GTAOPass(this.scene, this.camera, 1, 1);
-    this.gtao.updateGtaoMaterial({ radius: 34, distanceExponent: 1.6, thickness: 10, scale: 1.6, samples: 16 });
+    const kk = Math.min(3, Math.sqrt(this.span / 290));
+    this.gtao.updateGtaoMaterial({ radius: 34 * kk, distanceExponent: 1.6, thickness: 10 * kk, scale: 1.6, samples: 16 });
     this.gtao.updatePdMaterial({ lumaPhi: 10, depthPhi: 2, normalPhi: 3, radius: 6, rings: 2, samples: 16 });
     this.gtao.blendIntensity = 1.0;
     // Translucent / overlay surfaces must not occlude the parts behind them.
@@ -164,7 +171,11 @@ export class Chip3D {
 
   private build(): void {
     const { plan, spec } = this;
-    const d = packageDims(spec, plan);
+    const d = packageDims(spec);
+    // Scene scale relative to the SOT-23 the lighting was tuned for.
+    const span = Math.max(d.len, d.wid + 2 * d.reach, plan.w / U + 100);
+    const k = span / 290;
+    this.span = span;
     const std = (color: string, metalness: number, roughness: number, extra: THREE.MeshStandardMaterialParameters = {}) => {
       const m = new THREE.MeshStandardMaterial({ color, metalness, roughness, ...extra });
       this.disposables.push(m);
@@ -182,25 +193,25 @@ export class Chip3D {
 
     // Lights: shadow-casting key light, cool fill, sky/ground ambient.
     const sun = new THREE.DirectionalLight('#fff6e8', 2.4);
-    sun.position.set(-260, 620, 380);
+    sun.position.set(-260 * k, 620 * k, 380 * k);
     sun.castShadow = true;
     sun.shadow.mapSize.set(2048, 2048);
-    sun.shadow.camera.left = -260;
-    sun.shadow.camera.right = 260;
-    sun.shadow.camera.top = 220;
-    sun.shadow.camera.bottom = -220;
-    sun.shadow.camera.near = 100;
-    sun.shadow.camera.far = 1600;
+    sun.shadow.camera.left = -260 * k;
+    sun.shadow.camera.right = 260 * k;
+    sun.shadow.camera.top = 220 * k;
+    sun.shadow.camera.bottom = -220 * k;
+    sun.shadow.camera.near = 100 * k;
+    sun.shadow.camera.far = 1600 * k;
     sun.shadow.bias = -0.0004;
     sun.shadow.normalBias = 0.6;
     sun.shadow.radius = 4;
     const fill = new THREE.DirectionalLight('#cfe0ff', 0.55);
-    fill.position.set(400, 300, -300);
+    fill.position.set(400 * k, 300 * k, -300 * k);
     this.scene.add(sun, fill, new THREE.HemisphereLight('#dfe9f5', '#20262c', 0.35));
 
     // PCB with copper pads under the leads.
-    const pcbW = d.len + 2 * d.reach + 900;
-    const pcbD = d.wid + 2 * d.reach + 700;
+    const pcbW = d.len + 2 * d.reach + 900 * Math.min(k, 2);
+    const pcbD = d.wid + 2 * d.reach + 700 * Math.min(k, 2);
     const pcbTex = new THREE.CanvasTexture(pcbCanvas(pcbW, pcbD, d));
     pcbTex.colorSpace = THREE.SRGBColorSpace;
     pcbTex.anisotropy = 8;
@@ -219,8 +230,13 @@ export class Chip3D {
     this.dieTop = frameY + dieThick;
 
     const n = spec.pins.length;
-    const half = Math.ceil(n / 2);
+    const half = d.half;
     const leadX = (i: number, count: number) => (i - (count - 1) / 2) * d.pitch;
+    const zEdge = d.wid / 2;
+    // Lead finger tips fan in towards the die (SOT-23: no fan-in needed).
+    const zTip = Math.min(dieD / 2 + 30, zEdge - 20);
+    const t = d.leadT;
+    const copper = std('#b9823c', 0.8, 0.4, { envMapIntensity: 0.5 });
     for (let i = 0; i < n; i++) {
       const front = i < half;
       const k = front ? i : n - 1 - i;
@@ -231,20 +247,39 @@ export class Chip3D {
       const mats: THREE.MeshStandardMaterial[] = [];
       const leadMat = std('#8d959e', 1, 0.3, { emissive: '#000000', envMapIntensity: 0.7 });
       mats.push(leadMat);
-      // Gull-wing profile in the (z, y) plane, extruded along x.
-      const zIn = dieD / 2 + 14;
-      const zEdge = d.wid / 2;
-      const zFoot = zEdge + d.reach;
-      const t = d.leadT;
+      const tipSpan = Math.min(d.pitch * (count - 1), Math.max(dieW * 1.2, 55 * (count - 1)));
+      const tipX = count > 1 ? (k / (count - 1) - 0.5) * tipSpan : 0;
+      // Inner finger: a flat strip in the lead-frame plane from the tip to the body edge.
+      const dx = x - tipX;
+      const dz = zEdge - 10 - zTip;
+      const flen = Math.hypot(dx, dz);
+      if (flen > 1) {
+        const finger = add(new THREE.BoxGeometry(d.leadW * 0.7, t * 0.6, flen), leadMat, (x + tipX) / 2, frameY - t * 0.3, side * (zTip + dz / 2));
+        finger.rotation.y = Math.atan2(dx, dz) * side;
+      }
+      // Outer lead profile in the (z, y) plane, extruded along x.
       const shape = new THREE.Shape();
-      shape.moveTo(zIn, frameY);
-      shape.lineTo(zEdge + 12, frameY);
-      shape.lineTo(zEdge + d.reach * 0.55, t);
-      shape.lineTo(zFoot, t);
-      shape.lineTo(zFoot, 0);
-      shape.lineTo(zEdge + d.reach * 0.55 - t * 0.7, 0);
-      shape.lineTo(zEdge + 12 - t * 0.7, frameY - t);
-      shape.lineTo(zIn, frameY - t);
+      const z0 = zEdge - 12;
+      const zFoot = zEdge + d.reach;
+      if (d.dip) {
+        // Shoulder out of the body, then a straight leg through the board.
+        shape.moveTo(z0, frameY);
+        shape.lineTo(zFoot, frameY);
+        shape.lineTo(zFoot, -300);
+        shape.lineTo(zFoot - t, -300);
+        shape.lineTo(zFoot - t, frameY - t);
+        shape.lineTo(z0, frameY - t);
+      } else {
+        // Gull wing.
+        shape.moveTo(z0, frameY);
+        shape.lineTo(zEdge + 12, frameY);
+        shape.lineTo(zEdge + d.reach * 0.55, t);
+        shape.lineTo(zFoot, t);
+        shape.lineTo(zFoot, 0);
+        shape.lineTo(zEdge + d.reach * 0.55 - t * 0.7, 0);
+        shape.lineTo(zEdge + 12 - t * 0.7, frameY - t);
+        shape.lineTo(z0, frameY - t);
+      }
       shape.closePath();
       // Profile (z, y) extruded along x: after rotateY(-90°) the profile runs along +z.
       const bevel = Math.min(2.5, t * 0.18);
@@ -253,13 +288,17 @@ export class Chip3D {
       geo.translate(d.leadW / 2 - bevel, 0, 0);
       const lead = add(geo, leadMat, x, 0, 0);
       if (side < 0) lead.rotation.y = Math.PI;
-      add(new THREE.BoxGeometry(d.leadW + 24, 2, d.reach * 0.9), std('#b9823c', 0.8, 0.4, { envMapIntensity: 0.5 }), x, 0.5, side * (zFoot - d.reach * 0.45));
+      if (d.dip) {
+        add(new THREE.CylinderGeometry(80, 80, 2, 24), copper, x, 0.5, side * (zFoot - t / 2));
+      } else {
+        add(new THREE.BoxGeometry(d.leadW + 24, 2, d.reach * 0.9), copper, x, 0.5, side * (zFoot - d.reach * 0.45));
+      }
 
       // Bond wire: die pad -> lead finger tip.
       const px = pad.x / U - dieW / 2;
       const pz = pad.y / U - dieD / 2;
-      const ex = x * 0.85;
-      const ez = side * (zIn + 8);
+      const ex = tipX;
+      const ez = side * (zTip + 4);
       const curve = new THREE.CatmullRomCurve3([
         new THREE.Vector3(px, this.dieTop + 1, pz),
         new THREE.Vector3(px + (ex - px) * 0.12, this.dieTop + 20, pz + (ez - pz) * 0.12),
@@ -370,7 +409,7 @@ export class Chip3D {
 
   resetView(): void {
     // The whole package, seen from the front-left above pin 1.
-    const s = Math.max(this.plan.w, this.plan.h) / U;
+    const s = this.span * 0.47;
     this.camera.position.set(-s * 0.6, this.dieTop + s * 2.7, s * 1.9);
     this.controls.target.set(0, this.dieTop * 0.6, 0);
     this.controls.update();
@@ -450,7 +489,7 @@ export class Chip3D {
 
 /** Solder mask with fibre-glass grain, copper traces to the footprint and a silkscreen outline. */
 function pcbCanvas(w: number, d: number, p: PackageDims): HTMLCanvasElement {
-  const px = 1.6;
+  const px = Math.min(1.6, 2400 / Math.max(w, d));
   const c = document.createElement('canvas');
   c.width = Math.round(w * px);
   c.height = Math.round(d * px);
@@ -463,22 +502,22 @@ function pcbCanvas(w: number, d: number, p: PackageDims): HTMLCanvasElement {
   const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
   for (let i = 0; i < 2600; i++) {
     ctx.fillStyle = rnd() > 0.5 ? 'rgba(255,255,255,0.025)' : 'rgba(0,0,0,0.04)';
-    ctx.fillRect(rnd() * w, rnd() * d, 6 + rnd() * 30, 1 + rnd() * 2);
+    ctx.fillRect(rnd() * w, rnd() * d, (6 + rnd() * 30) * (w / 1300), 1 + rnd() * 2);
   }
   const cx = w / 2;
   const cz = d / 2;
-  const half = 3;
   // Traces from each footprint pad off the board edge (under the solder mask).
   ctx.strokeStyle = 'rgba(150,200,120,0.12)';
-  ctx.lineWidth = 16;
+  ctx.lineWidth = Math.max(16, p.leadW * 0.6);
   ctx.lineCap = 'round';
-  for (let i = 0; i < half; i++) {
-    const x = cx + (i - (half - 1) / 2) * p.pitch;
+  for (let i = 0; i < p.half; i++) {
+    const x = cx + (i - (p.half - 1) / 2) * p.pitch;
     for (const side of [1, -1]) {
+      const z = cz + side * (p.wid / 2 + p.reach * 0.6);
       ctx.beginPath();
-      ctx.moveTo(x, cz + side * (p.wid / 2 + p.reach * 0.6));
-      ctx.lineTo(x + (i - 1) * 60, cz + side * (p.wid / 2 + p.reach + 120));
-      ctx.lineTo(x + (i - 1) * 140, side > 0 ? d : 0);
+      ctx.moveTo(x, z);
+      ctx.lineTo(x + (i - (p.half - 1) / 2) * 40, cz + side * (p.wid / 2 + p.reach + 120));
+      ctx.lineTo(x + (i - (p.half - 1) / 2) * 90, side > 0 ? d : 0);
       ctx.stroke();
     }
   }

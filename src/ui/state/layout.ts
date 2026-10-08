@@ -9,7 +9,7 @@ import { loadJson, saveJson } from './persist';
 
 export type PanelId =
   | 'processor' | 'io' | 'memory' | 'disasm' | 'pins' | 'wave' | 'output' | 'symbols' | 'callstack' | 'breakpoints'
-  | 'chip' | 'info' | 'isa';
+  | 'chip' | 'info' | 'isa' | 'serial';
 export type ZoneId = 'rightTop' | 'rightBottom' | 'bottomLeft' | 'bottomRight';
 
 export const ZONES: ZoneId[] = ['rightTop', 'rightBottom', 'bottomLeft', 'bottomRight'];
@@ -54,7 +54,7 @@ const DEFAULT: LayoutData = {
   home: {
     processor: 'rightTop', io: 'rightTop', pins: 'rightBottom', symbols: 'rightBottom',
     output: 'bottomLeft', wave: 'bottomLeft', memory: 'bottomLeft', disasm: 'bottomRight', callstack: 'bottomRight', breakpoints: 'bottomRight',
-    chip: 'bottomLeft', info: 'rightTop', isa: 'rightBottom',
+    chip: 'bottomLeft', info: 'rightTop', isa: 'rightBottom', serial: 'bottomLeft',
   },
   floatHome: ['chip', 'info', 'isa'],
   floating: [],

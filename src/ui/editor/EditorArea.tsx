@@ -6,6 +6,7 @@ import { useSettings } from '../state/settings';
 import { SHOWCASE } from '../services/examples';
 import { baseName } from '../services/debugInfo';
 import { Icons } from '../icons';
+import { useDevices } from '../state/devices';
 import { SourceEditor } from './SourceEditor';
 import { openContextMenu } from '../controls/Menu';
 import { runCommand } from '../services/commands';
@@ -61,7 +62,7 @@ function StartPage(): JSX.Element {
     <div className="start-page">
       <div className="start-hero">
         <h1>MCS Microcontroller Simulator</h1>
-        <p>Cycle-accurate {device.toUpperCase().replace('ATTINY', 'ATtiny')} simulation - write assembly or C, build, then step through your code while watching registers, memory, pins and waveforms.</p>
+        <p>Cycle-accurate {useDevices.getState().devices.find((d) => d.id === device)?.name ?? device} simulation - write assembly, C or machine code, build, then step through your code while watching registers, memory, pins and waveforms.</p>
       </div>
       <div className="start-columns">
         <div>
@@ -77,7 +78,7 @@ function StartPage(): JSX.Element {
           {SHOWCASE.map((e) => (
             <a key={e.name} className="start-link" onClick={() => openExample(e.name)}>
               <Icons.Disasm />
-              <span>{e.title}<span className="desc">{e.description}</span></span>
+              <span>{e.title}{e.device && <span className="dev-badge">{e.device}</span>}<span className="desc">{e.description}</span></span>
             </a>
           ))}
         </div>

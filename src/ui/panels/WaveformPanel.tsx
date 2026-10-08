@@ -4,6 +4,7 @@ import { useSim } from '../state/sim';
 import { Icons } from '../icons';
 import { formatHz, formatTime } from '../format';
 import { EmptyHint } from './common';
+import { gpioNames } from '../services/device';
 
 /** View state survives tab switches. */
 const view = { start: 0, cyclesPerPx: 200, follow: true, cursorA: -1, cursorB: -1 };
@@ -22,7 +23,7 @@ export function WaveformPanel(): JSX.Element {
   const wrapRef = useRef<HTMLDivElement>(null);
   const [, setTick] = useState(0);
   const rerender = () => setTick((t) => t + 1);
-  const names = spec ? Array.from({ length: spec.gpioCount }, (_, i) => `P${spec.gpioPortName}${i}`) : [];
+  const names = spec ? gpioNames(spec) : [];
 
   useEffect(() => {
     const canvas = canvasRef.current;

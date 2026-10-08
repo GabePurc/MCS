@@ -13,6 +13,7 @@ import { CallStackPanel } from './CallStackPanel';
 import { BreakpointsPanel } from './BreakpointsPanel';
 import { DeviceInfoPanel } from './DeviceInfoPanel';
 import { IsaPanel } from './IsaPanel';
+import { SerialPanel } from './SerialPanel';
 import { EmptyHint } from './common';
 
 // The 3D view pulls in three.js: load it only when the panel is first shown.
@@ -40,6 +41,7 @@ const PANELS: Record<PanelId, () => JSX.Element> = {
   chip: ChipPanel,
   info: DeviceInfoPanel,
   isa: IsaPanel,
+  serial: SerialPanel,
 };
 
 export function renderPanel(id: PanelId): JSX.Element {

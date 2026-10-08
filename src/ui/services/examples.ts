@@ -6,11 +6,13 @@ export interface Example {
   title: string;
   description: string;
   text: string;
+  /** Device the example is written for (display name), when not the ATtiny10. */
+  device?: string;
   /** Set for the documents used as "New file" templates. */
   template?: 'asm' | 'c' | 'mc';
 }
 
-const META: Record<string, { title: string; description: string }> = {
+const META: Record<string, { title: string; description: string; device?: string }> = {
   'blink.asm': { title: 'Blink (assembly)', description: 'Toggle PB0 with a software delay loop' },
   'pwm_fade.asm': { title: 'PWM fade (assembly)', description: 'Fast PWM on OC0A, duty ramp in the overflow interrupt' },
   'button_interrupt.asm': { title: 'Button interrupt (assembly)', description: 'INT0 falling edge toggles an LED; idle sleep' },
@@ -19,6 +21,10 @@ const META: Record<string, { title: string; description: string }> = {
   'blink.mc': { title: 'Blink (machine code)', description: 'The blink program written as raw instruction words' },
   'blink.c': { title: 'Blink (C)', description: '_delay_ms toggle loop (needs avr-gcc)' },
   'pwm_fade.c': { title: 'PWM fade (C)', description: 'Timer interrupt fading an LED (needs avr-gcc)' },
+  'm328p_blink.asm': { title: 'Uno LED blink (assembly)', description: 'Timer1 interrupt blinks PB5 / pin 13', device: 'ATmega328P' },
+  'm328p_serial.c': { title: 'Serial hello + echo (C)', description: 'USART at 9600 baud: open View > Serial Monitor', device: 'ATmega328P' },
+  't85_pwm.asm': { title: 'Pot to PWM via the PLL (assembly)', description: 'ADC on PB2 sets the 64 MHz-PLL PWM on PB1', device: 'ATtiny85' },
+  't85_blink.c': { title: 'Timer blink (C)', description: 'Timer0 overflow interrupt toggles PB3', device: 'ATtiny85' },
 };
 
 const ASM_TEMPLATE = `; ATtiny10 assembly program
@@ -76,3 +82,19 @@ export const EXAMPLES: Example[] = [
 ];
 
 export const SHOWCASE = EXAMPLES.filter((e) => !e.template);
+
+/** avrasm2 definitions include for a device name (ATtiny85 -> tn85def.inc, ATmega328P -> m328Pdef.inc). */
+export function defIncludeName(device: string): string {
+  for (const [prefix, short] of [['ATtiny', 'tn'], ['ATmega', 'm']] as const) {
+    if (device.toLowerCase().startsWith(prefix.toLowerCase())) return `${short}${device.slice(prefix.length)}def.inc`;
+  }
+  return `${device}def.inc`;
+}
+
+/** New-file template for the selected device. */
+export function templateFor(kind: 'asm' | 'c' | 'mc', device: string): string {
+  const ex = EXAMPLES.find((e) => e.template === kind);
+  if (!ex || kind === 'mc' || device === 'ATtiny10') return ex?.text ?? '';
+  if (kind === 'asm') return ex.text.replace('; ATtiny10 assembly program', `; ${device} assembly program`).replace('"tn10def.inc"', `"${defIncludeName(device)}"`);
+  return ex.text;
+}

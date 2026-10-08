@@ -50,8 +50,10 @@ const ANALOG_GROUPS = new Set(['ADC', 'AC', 'VLM']);
 const SKIP_GROUPS = new Set(['CPU', 'NVM']);
 
 export function buildFloorplan(spec: AvrDeviceSpec): Floorplan {
-  const W = spec.die?.widthUm ?? 1400;
-  const H = spec.die?.heightUm ?? 950;
+  // Measured die size when known; otherwise an estimate that grows with the memories.
+  const area = 1.3e6 * (1 + (spec.flashSize / 1024) * 0.18 + (spec.sramSize / 1024) * 0.5 + (spec.eepromSize / 1024) * 0.1);
+  const W = spec.die?.widthUm ?? Math.round(Math.sqrt(area * 1.35));
+  const H = spec.die?.heightUm ?? Math.round(area / Math.sqrt(area * 1.35));
   const ring = Math.min(W, H) * 0.16;
   const core = { x: ring, y: ring, w: W - 2 * ring, h: H - 2 * ring };
   const gap = Math.min(W, H) * 0.012;

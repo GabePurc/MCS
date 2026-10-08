@@ -78,10 +78,25 @@ export interface VectorSpec {
 export interface PinSpec {
   number: number;
   name: string;
-  kind: 'io' | 'vcc' | 'gnd';
+  kind: 'io' | 'vcc' | 'gnd' | 'ref';
   gpio?: number;
   functions: string[];
 }
+
+export interface FuseBitSpec {
+  name: string;
+  /** Contiguous mask; programmed = 0. */
+  mask: number;
+  desc: string;
+}
+
+export interface FuseByteSpec {
+  name: string;
+  default: number;
+  bits: FuseBitSpec[];
+}
+
+export type SleepKind = 'idle' | 'adc-noise-reduction' | 'power-down' | 'power-save' | 'standby' | 'extended-standby';
 
 export interface AvrDeviceSpec {
   id: string;
@@ -100,15 +115,15 @@ export interface AvrDeviceSpec {
   nvmMap: { lock: number; config: number; calibration: number; signature: number } | null;
   signature: [number, number, number];
   calibration: number;
-  fuseBits: { name: string; mask: number; desc: string }[];
-  fuseDefault: number;
+  fuses: FuseByteSpec[];
+  sleep: { register: string; seMask: number; smMask: number; modes: [number, SleepKind][] };
+  boot: { sizesWords: [number, number, number, number] } | null;
   vectors: VectorSpec[];
   registers: IoRegisterSpec[];
   groups: { name: string; desc: string }[];
   package: string;
   pins: PinSpec[];
   gpioCount: number;
-  gpioPortName: string;
   hasAdc: boolean;
   clock: { internalHz: number; slowHz: number; defaultPrescaleLog2: number };
   vcc: number;
@@ -157,8 +172,23 @@ export type SimCommand =
   | { type: 'writeFlash'; addr: number; value: number }
   | { type: 'writeReg'; reg: number; value: number }
   | { type: 'writeCpu'; field: 'pc' | 'sp' | 'sreg'; value: number }
-  | { type: 'writeFuse'; value: number }
+  | { type: 'writeFuse'; index: number; value: number }
+  | { type: 'writeEeprom'; addr: number; value: number }
+  | { type: 'setSerial'; config: SerialConfig }
+  | { type: 'serialSend'; bytes: number[] }
   | { type: 'requestState' };
+
+export interface SerialConfig {
+  /** GPIO decoded into the Serial Monitor (the MCU's TX). */
+  monitor: number | null;
+  /** GPIO driven with the bytes typed in the Serial Monitor (the MCU's RX). */
+  inject: number | null;
+  baud: number;
+  dataBits: number;
+  /** 0 none, 1 even, 2 odd. */
+  parity: number;
+  stopBits: number;
+}
 
 export interface PinState {
   level: number;
@@ -170,6 +200,8 @@ export interface PinState {
   extVolts: number;
   volts: number;
   reserved: boolean;
+  /** Function holding a reserved pin ("RESET", "XTAL1"...). */
+  reservedBy?: string;
   gen?: PinGenerator;
 }
 
@@ -210,8 +242,13 @@ export interface RawMachineState {
   data: number[];
   flash?: number[];
   flashVersion: number;
-  fuse: number;
+  fuses: number[];
   lock: number;
+  /** EEPROM contents, present only when they changed. */
+  eeprom?: number[];
+  /** Bytes received by the Serial Monitor since the previous state. */
+  serial?: number[];
+  serialConfig: SerialConfig;
   pins: PinState[];
   vcc: number;
   callStack: CallFrame[];
@@ -227,7 +264,8 @@ export interface RawMachineState {
 }
 
 /** State as used by the UI (typed arrays). */
-export interface MachineState extends Omit<RawMachineState, 'regs' | 'data' | 'flash' | 'traceCycles' | 'traceLevels' | 'execHeat'> {
+export interface MachineState extends Omit<RawMachineState, 'regs' | 'data' | 'flash' | 'traceCycles' | 'traceLevels' | 'execHeat' | 'eeprom'> {
+  eeprom?: Uint8Array;
   regs: Uint8Array;
   data: Uint8Array;
   flash?: Uint8Array;

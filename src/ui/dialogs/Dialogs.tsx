@@ -4,7 +4,7 @@ import { closeDialog, useDialogs } from '../state/dialogs';
 import { useSettings } from '../state/settings';
 import { useSim } from '../state/sim';
 import { defInclude, detectToolchain, pickFile, platform } from '../backend/api';
-import type { SpeedMode, ToolchainInfo } from '../backend/types';
+import type { AvrDeviceSpec, FuseBitSpec, SpeedMode, ToolchainInfo } from '../backend/types';
 import { sim } from '../services/simClient';
 import { setSpeed, speedLabel } from '../services/commands';
 import { formatHz, hex, parseHz } from '../format';
@@ -168,33 +168,116 @@ function ToolchainHelpDialog(): JSX.Element {
   );
 }
 
+/** "(0000 external clock, 0010 internal RC, 1000-1111 crystal)" -> value labels. */
+function fieldOptions(f: FuseBitSpec, spec: AvrDeviceSpec): string[] {
+  const width = popcount8(f.mask);
+  const n = 1 << width;
+  const labels = Array.from({ length: n }, () => '');
+  if (f.name === 'BOOTSZ' && spec.boot) {
+    return labels.map((_, v) => {
+      const words = spec.boot!.sizesWords[v];
+      const start = spec.flashSize / 2 - words;
+      return `${words} words (boot at 0x${(start * 2).toString(16).toUpperCase()})`;
+    });
+  }
+  const inner = /\(([^)]*)\)/.exec(f.desc)?.[1] ?? '';
+  for (const item of inner.split(/,\s*/)) {
+    const m = /^([01]+)(?:-([01]+))?\s+(.*)$/.exec(item.trim());
+    if (!m) continue;
+    const a = parseInt(m[1], 2);
+    const b = m[2] ? parseInt(m[2], 2) : a;
+    for (let v = a; v <= b && v < n; v++) labels[v] = m[3];
+  }
+  return labels;
+}
+
+function popcount8(m: number): number {
+  let c = 0;
+  for (; m; m &= m - 1) c++;
+  return c;
+}
+
+/** Common fuse settings per device family. */
+function fusePresets(spec: AvrDeviceSpec): [string, number[]][] {
+  const out: [string, number[]][] = [['Factory default', spec.fuses.map((f) => f.default)]];
+  if (spec.id === 'atmega328p') out.push(['Arduino Uno (16 MHz crystal, boot loader, BOD 2.7 V)', [0xff, 0xde, 0xfd]]);
+  if (spec.id === 'atmega168pa') out.push(['Arduino Diecimila (16 MHz crystal, boot loader)', [0xff, 0xdd, 0xf8]]);
+  if (spec.peripheralSet === 'mega-x8') out.push(['Internal 8 MHz (no clock divider)', [0xe2, ...spec.fuses.slice(1).map((f) => f.default)]]);
+  if (spec.peripheralSet === 'tiny-x5') {
+    out.push(['Internal 8 MHz (no clock divider)', [0xe2, 0xdf, 0xff]]);
+    out.push(['16 MHz PLL clock (Digispark style)', [0xf1, 0xdd, 0xfe]]);
+  }
+  return out;
+}
+
 function FusesDialog(): JSX.Element {
   const spec = useSim((s) => s.spec);
   const st = useSim((s) => s.state);
-  const [fuse, setFuse] = useState(st?.fuse ?? spec?.fuseDefault ?? 0xff);
+  const [fuses, setFuses] = useState<number[]>(() => st?.fuses.slice() ?? spec?.fuses.map((f) => f.default) ?? []);
   if (!spec) return <Dialog title="Fuses">No device loaded.</Dialog>;
+  const setByte = (i: number, v: number) => setFuses((f) => f.map((x, k) => (k === i ? v & 0xff : x)));
+  const apply = () => {
+    fuses.forEach((v, i) => {
+      if (v !== st?.fuses[i]) sim({ type: 'writeFuse', index: i, value: v });
+    });
+    closeDialog();
+  };
   return (
     <Dialog
       title={`Fuses - ${spec.name}`}
+      width={spec.fuses.length > 1 ? 620 : 460}
       gray
       buttons={
         <>
           <span className="left dim">Applying power-cycles the MCU.</span>
-          <button className="w7-btn default" onClick={() => { sim({ type: 'writeFuse', value: fuse }); closeDialog(); }}><span>Apply</span></button>
+          <button className="w7-btn default" onClick={apply}><span>Apply</span></button>
           <button className="w7-btn" onClick={closeDialog}><span>Cancel</span></button>
         </>
       }
     >
-      <div className="w7-group">
-        <span className="w7-group-title">Configuration byte = {hex(fuse)}</span>
-        {spec.fuseBits.map((f) => (
-          <label key={f.name} className="w7-check" style={{ display: 'flex', margin: '6px 0' }} data-tip={f.desc}>
-            <input type="checkbox" checked={(fuse & f.mask) === 0} onChange={(e) => setFuse(e.target.checked ? fuse & ~f.mask : fuse | f.mask)} />
-            <b>{f.name}</b>&nbsp;<span className="dim">{f.desc}</span>
-          </label>
-        ))}
-        <p className="dim" style={{ marginBottom: 0 }}>Checked = programmed (bit value 0), like Atmel Studio's fuse view.</p>
-      </div>
+      {fusePresets(spec).length > 1 && (
+        <div className="supply-row" style={{ marginBottom: 8 }}>
+          <span>Preset:</span>
+          <select className="w7-select" value="" onChange={(e) => { const p = fusePresets(spec)[Number(e.target.value)]; if (p) setFuses(p[1].slice()); }}>
+            <option value="">Choose...</option>
+            {fusePresets(spec).map(([n], i) => <option key={n} value={i}>{n}</option>)}
+          </select>
+        </div>
+      )}
+      {spec.fuses.map((fb, i) => (
+        <div key={fb.name} className="w7-group">
+          <span className="w7-group-title">
+            {fb.name} fuse ={' '}
+            <input className="w7-input mono fuse-hex" value={hex(fuses[i] ?? 0xff)} onChange={(e) => { const v = parseInt(e.target.value.replace(/^0x/i, ''), 16); if (!Number.isNaN(v)) setByte(i, v); }} />
+            {fuses[i] !== fb.default && <span className="dim"> (default {hex(fb.default)})</span>}
+          </span>
+          {fb.bits.map((f) => {
+            const shift = Math.log2(f.mask & -f.mask);
+            const value = ((fuses[i] ?? 0xff) & f.mask) >> shift;
+            if (popcount8(f.mask) === 1) {
+              return (
+                <label key={f.name} className="w7-check fuse-row" data-tip={f.desc}>
+                  <input type="checkbox" checked={value === 0} onChange={(e) => setByte(i, e.target.checked ? fuses[i] & ~f.mask : fuses[i] | f.mask)} />
+                  <b>{f.name}</b>&nbsp;<span className="dim">{f.desc}</span>
+                </label>
+              );
+            }
+            const labels = fieldOptions(f, spec);
+            const width = popcount8(f.mask);
+            return (
+              <div key={f.name} className="fuse-row" data-tip={f.desc}>
+                <b>{f.name}</b>
+                <select className="w7-select mono" value={value} onChange={(e) => setByte(i, (fuses[i] & ~f.mask) | ((Number(e.target.value) << shift) & f.mask))}>
+                  {labels.map((l, v) => (
+                    <option key={v} value={v}>{v.toString(2).padStart(width, '0')}{l ? ` - ${l}` : ''}</option>
+                  ))}
+                </select>
+              </div>
+            );
+          })}
+        </div>
+      ))}
+      <p className="dim" style={{ marginBottom: 0 }}>Checked = programmed (bit value 0), like Atmel Studio's fuse view. Clock-source fuses (CKSEL, CKDIV8) take effect at the power cycle; set the crystal / external frequency under Device &gt; Supply &amp; Clock.</p>
     </Dialog>
   );
 }
@@ -207,8 +290,9 @@ function SupplyDialog(): JSX.Element {
   const vcc = useSettings((s) => s.vcc);
   const msr = spec?.registers.find((r) => r.name === 'CLKMSR');
   const psr = spec?.registers.find((r) => r.name === 'CLKPSR');
+  const clkpr = spec?.registers.find((r) => r.name === 'CLKPR');
   const curSource = msr && st ? st.data[msr.addr] & 3 : 0;
-  const curPs = psr && st ? st.data[psr.addr] & 0x0f : spec?.clock.defaultPrescaleLog2 ?? 0;
+  const curPs = (psr ?? clkpr) && st ? st.data[(psr ?? clkpr)!.addr] & 0x0f : spec?.clock.defaultPrescaleLog2 ?? 0;
   const [source, setSource] = useState(curSource);
   const [ps, setPs] = useState(Math.min(curPs, 8));
   const [ext, setExt] = useState(formatHz(st?.extClockHz ?? 8e6));
@@ -219,7 +303,7 @@ function SupplyDialog(): JSX.Element {
   const sourceNames = [`Internal ${formatHz(spec?.clock.internalHz ?? 8e6)} RC oscillator`, `Internal ${formatHz(spec?.clock.slowHz ?? 128e3)} oscillator`, `External clock on CLKI${clki ? ` (${clki.name}, pin ${clki.number})` : ''}`];
   const apply = () => {
     if (extHz > 0) sim({ type: 'setExternalClock', hz: extHz });
-    if (msr && psr) sim({ type: 'setClockConfig', source, prescaleLog2: ps });
+    if ((msr && psr) || clkpr) sim({ type: 'setClockConfig', source, prescaleLog2: ps });
   };
   return (
     <Dialog
@@ -271,16 +355,53 @@ function SupplyDialog(): JSX.Element {
             <span>Result:</span>
             <b className="mono">{formatHz(resulting)}</b>
           </div>
+        ) : clkpr && spec ? (
+          <ClassicClock spec={spec} ext={ext} setExt={setExt} extHz={extHz} ps={ps} setPs={setPs} />
         ) : (
           <div className="supply-row">
             External clock: <input className="w7-input mono" value={ext} onChange={(e) => setExt(e.target.value)} style={{ width: 120 }} />
           </div>
         )}
         <p className="dim" style={{ marginBottom: 0 }}>
-          On this chip the program selects the clock itself (CLKMSR/CLKPSR, protected by CCP). Apply writes those registers the way the debugger would; firmware that changes them later wins. The external frequency is used whenever the external source is selected.
+          {msr
+            ? 'On this chip the program selects the clock itself (CLKMSR/CLKPSR, protected by CCP). Apply writes those registers the way the debugger would; firmware that changes them later wins. The external frequency is used whenever the external source is selected.'
+            : 'On this chip the clock source is chosen by the CKSEL fuses (changing them power-cycles the chip); the program can only change the prescaler (CLKPR). The external / crystal frequency is used when CKSEL selects an external clock or a crystal.'}
         </p>
       </div>
     </Dialog>
+  );
+}
+
+/** Clock source of a fuse-configured AVR (CKSEL / CKDIV8 in the low fuse, CLKPR at run time). */
+function ClassicClock({ spec, ext, setExt, extHz, ps, setPs }: { spec: AvrDeviceSpec; ext: string; setExt: (s: string) => void; extHz: number; ps: number; setPs: (n: number) => void }): JSX.Element {
+  const st = useSim((s) => s.state);
+  const fuses = st?.fuses ?? spec.fuses.map((f) => f.default);
+  const low = fuses[0] ?? 0xff;
+  const cksel = low & 0x0f;
+  const ckselField = spec.fuses[0]?.bits.find((b) => b.name === 'CKSEL');
+  const labels = ckselField ? fieldOptions(ckselField, spec) : [];
+  const usesExt = /external|crystal/i.test(labels[cksel] ?? '') && !/32 kHz/.test(labels[cksel] ?? '');
+  const setLow = (v: number) => sim({ type: 'writeFuse', index: 0, value: v & 0xff });
+  return (
+    <div className="form-grid">
+      <span>Source (CKSEL fuses):</span>
+      <select className="w7-select" value={cksel} onChange={(e) => setLow((low & 0xf0) | Number(e.target.value))} data-tip="Writes the low fuse and power-cycles the chip">
+        {labels.map((l, v) => <option key={v} value={v}>{v.toString(2).padStart(4, '0')}{l ? ` - ${l}` : ' - reserved'}</option>)}
+      </select>
+      <span>CKDIV8 fuse:</span>
+      <label className="w7-check" data-tip="Programmed: the prescaler starts at /8 after reset (writes the low fuse and power-cycles)">
+        <input type="checkbox" checked={(low & 0x80) === 0} onChange={(e) => setLow(e.target.checked ? low & 0x7f : low | 0x80)} /> Divide by 8 at reset (factory setting)
+      </label>
+      <span>{usesExt ? 'Crystal / external clock:' : 'External clock:'}</span>
+      <div className="supply-row">
+        <input className="w7-input mono" value={ext} onChange={(e) => setExt(e.target.value)} style={{ width: 120 }} />
+        <span className={extHz > 0 ? 'dim' : 'error-text'}>{extHz > 0 ? (usesExt ? 'in use' : 'used when CKSEL selects it') : 'e.g. 16 MHz'}</span>
+      </div>
+      <span>Prescaler (CLKPR):</span>
+      <select className="w7-select" value={ps} onChange={(e) => setPs(Number(e.target.value))} style={{ width: 120 }}>
+        {PRESCALERS.map((p) => <option key={p} value={p}>/{2 ** p}</option>)}
+      </select>
+    </div>
   );
 }
 

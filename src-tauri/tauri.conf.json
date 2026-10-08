@@ -34,8 +34,8 @@
     "active": true,
     "targets": "all",
     "category": "DeveloperTool",
-    "shortDescription": "Microcontroller simulator (ATtiny10 first)",
-    "longDescription": "Cycle-accurate microcontroller simulator with assembler, C toolchain integration and a Windows 7 style debugger UI.",
+    "shortDescription": "AVR microcontroller simulator (ATtiny, ATmega)",
+    "longDescription": "Cycle-accurate AVR microcontroller simulator (ATtiny4-10, ATtiny25/45/85, ATmega48-328P) with assembler, C toolchain integration, machine code, a 3D chip view and a Windows 7 style debugger UI.",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
