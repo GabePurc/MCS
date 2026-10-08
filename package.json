@@ -1,0 +1,55 @@
+{
+  "name": "mcs",
+  "productName": "MCS Microcontroller Simulator",
+  "version": "0.1.0",
+  "description": "Cross-platform microcontroller simulator (ATtiny10 first) with a Windows 7-style UI. Rust core + Tauri.",
+  "author": "Gabe Purcell",
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20.19"
+  },
+  "scripts": {
+    "dev": "tauri dev",
+    "dev:web": "vite",
+    "build": "tauri build",
+    "build:web": "tsc -p tsconfig.json --noEmit && vite build",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "cargo test --workspace && vitest run",
+    "test:rust": "cargo test --workspace",
+    "test:web": "vitest run",
+    "tauri": "tauri",
+    "icons": "tauri icon app-icon.svg",
+    "build:wasm": "cargo build -p mcs-wasm --target wasm32-unknown-unknown --release && node -e \"require('fs').copyFileSync('target/wasm32-unknown-unknown/release/mcs_wasm.wasm','src/ui/assets/mcs.wasm')\"",
+    "web": "npm run build:wasm && vite",
+    "build:site": "npm run build:wasm && tsc -p tsconfig.json --noEmit && vite build"
+  },
+  "dependencies": {
+    "@codemirror/autocomplete": "^6.20.3",
+    "@codemirror/commands": "^6.11.1",
+    "@codemirror/lang-cpp": "^6.0.3",
+    "@codemirror/language": "^6.13.1",
+    "@codemirror/lint": "^6.9.7",
+    "@codemirror/search": "^6.7.2",
+    "@codemirror/state": "^6.7.6",
+    "@codemirror/view": "^6.43.14",
+    "@fontsource/cascadia-mono": "^5.3.0",
+    "@lezer/highlight": "^1.2.5",
+    "@tauri-apps/api": "^2.12.1",
+    "@tauri-apps/plugin-dialog": "^2.8.1",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
+    "zustand": "^5.0.15"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.12.1",
+    "@types/node": "^26.6.4",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.1.2",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.4",
+    "vitest": "^5.0.3"
+  }
+}

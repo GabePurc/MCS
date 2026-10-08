@@ -1,0 +1,14 @@
+[package]
+name = "mcs-sim"
+description = "Cycle-accurate AVR simulation engine: CPU core, peripherals, debugger session"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+mcs-core.workspace = true
+serde.workspace = true
+
+[dev-dependencies]
+mcs-asm.workspace = true
+serde_json.workspace = true

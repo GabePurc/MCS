@@ -1,0 +1,15 @@
+[package]
+name = "mcs-wasm"
+description = "WebAssembly build of the MCS simulator (browser front-end / web demo)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+mcs-api.workspace = true
+mcs-sim.workspace = true
+serde.workspace = true
+serde_json.workspace = true

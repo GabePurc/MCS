@@ -1,0 +1,31 @@
+[workspace]
+resolver = "2"
+members = ["crates/mcs-core", "crates/mcs-sim", "crates/mcs-asm", "crates/mcs-formats", "crates/mcs-api", "crates/mcs-wasm", "src-tauri"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+authors = ["Gabe Purcell"]
+repository = "https://github.com/GabePurc/MCS"
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+mcs-core = { path = "crates/mcs-core" }
+mcs-sim = { path = "crates/mcs-sim" }
+mcs-asm = { path = "crates/mcs-asm" }
+mcs-formats = { path = "crates/mcs-formats" }
+mcs-api = { path = "crates/mcs-api" }
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+
+# Keep tests and dev builds of the simulator fast.
+[profile.dev.package.mcs-sim]
+opt-level = 3
+[profile.test]
+opt-level = 2

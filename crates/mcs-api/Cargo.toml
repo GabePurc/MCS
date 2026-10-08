@@ -1,0 +1,12 @@
+[package]
+name = "mcs-api"
+description = "Front-end facing services of MCS (build, import, disassembly, device info) shared by the desktop and WebAssembly hosts"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+mcs-core.workspace = true
+mcs-asm.workspace = true
+mcs-formats.workspace = true
+serde.workspace = true

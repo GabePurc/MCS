@@ -1,0 +1,24 @@
+[package]
+name = "mcs-app"
+description = "MCS Microcontroller Simulator desktop application (Tauri)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+default-run = "mcs-app"
+
+[lib]
+name = "mcs_app_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+serde.workspace = true
+serde_json.workspace = true
+mcs-api.workspace = true
+mcs-core.workspace = true
+mcs-sim.workspace = true
+mcs-formats.workspace = true

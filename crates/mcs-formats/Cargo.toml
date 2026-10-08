@@ -1,0 +1,9 @@
+[package]
+name = "mcs-formats"
+description = "Program image loaders for MCS: Intel HEX, ELF and DWARF line tables"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+mcs-core.workspace = true

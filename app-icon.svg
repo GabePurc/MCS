@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#7fc0ff"/>
+      <stop offset="0.48" stop-color="#2f80d8"/>
+      <stop offset="0.52" stop-color="#1d63b8"/>
+      <stop offset="1" stop-color="#2a74c9"/>
+    </linearGradient>
+    <linearGradient id="gloss" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.75"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0.05"/>
+    </linearGradient>
+    <linearGradient id="chip" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#5b6675"/>
+      <stop offset="0.5" stop-color="#2f3843"/>
+      <stop offset="1" stop-color="#151a20"/>
+    </linearGradient>
+    <linearGradient id="pin" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#fff3c0"/>
+      <stop offset="1" stop-color="#c9952a"/>
+    </linearGradient>
+    <radialGradient id="led" cx="0.35" cy="0.3" r="0.7">
+      <stop offset="0" stop-color="#e3ffd9"/>
+      <stop offset="0.5" stop-color="#3ec22b"/>
+      <stop offset="1" stop-color="#166e0b"/>
+    </radialGradient>
+  </defs>
+  <rect x="64" y="64" width="896" height="896" rx="180" fill="url(#bg)" stroke="#0f3a6b" stroke-width="16"/>
+  <path d="M80 300 Q80 80 300 80 H724 Q944 80 944 300 V430 Q512 560 80 430 Z" fill="url(#gloss)"/>
+  <g>
+    <rect x="252" y="252" width="520" height="520" rx="48" fill="url(#chip)" stroke="#0b0e12" stroke-width="12"/>
+    <g fill="url(#pin)" stroke="#7a5a12" stroke-width="6">
+      <rect x="150" y="320" width="102" height="64" rx="10"/>
+      <rect x="150" y="480" width="102" height="64" rx="10"/>
+      <rect x="150" y="640" width="102" height="64" rx="10"/>
+      <rect x="772" y="320" width="102" height="64" rx="10"/>
+      <rect x="772" y="480" width="102" height="64" rx="10"/>
+      <rect x="772" y="640" width="102" height="64" rx="10"/>
+    </g>
+    <circle cx="330" cy="330" r="26" fill="#6a7686"/>
+    <path d="M330 600 h80 v-130 h90 v130 h90 v-130 h90" fill="none" stroke="#5df07b" stroke-width="26" stroke-linejoin="round" stroke-linecap="round"/>
+    <circle cx="700" cy="350" r="40" fill="url(#led)" stroke="#0b3d05" stroke-width="6"/>
+  </g>
+</svg>

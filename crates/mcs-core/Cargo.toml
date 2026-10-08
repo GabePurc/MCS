@@ -1,0 +1,9 @@
+[package]
+name = "mcs-core"
+description = "Architecture definitions shared by the MCS simulator: program images, debug info, AVR instruction set and device descriptions"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+serde.workspace = true

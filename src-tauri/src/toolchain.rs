@@ -1,0 +1,218 @@
+//! External toolchain integration (avr-gcc) for C and GNU assembler (.S) sources.
+//!
+//! Detection searches PATH plus the usual install locations on Windows, macOS and Linux
+//! (Microchip/Atmel toolchain, Arduino IDE bundled toolchain, Homebrew, distro packages).
+
+use std::path::{Path, PathBuf};
+use std::process::Command;
+use std::sync::atomic::{AtomicU32, Ordering};
+
+use mcs_core::program::{Diagnostic, Severity};
+use serde::Serialize;
+
+#[derive(Clone, Debug, Serialize)]
+pub struct ToolchainInfo {
+    pub gcc: String,
+    pub version: String,
+}
+
+pub struct CompileRequest<'a> {
+    pub source: &'a str,
+    /// File name with extension (.c / .S / .cpp); selects the language and names diagnostics.
+    pub file_name: &'a str,
+    /// Directory of the saved file so relative #include works; None for untitled documents.
+    pub dir: Option<PathBuf>,
+    pub mcu: &'a str,
+    pub optimize: &'a str,
+    pub extra_flags: &'a [String],
+    pub gcc_path: Option<&'a str>,
+}
+
+pub struct CompileResult {
+    pub elf: Option<Vec<u8>>,
+    pub output: String,
+    pub command: String,
+    pub diagnostics: Vec<Diagnostic>,
+}
+
+const EXE: &str = if cfg!(windows) { "avr-gcc.exe" } else { "avr-gcc" };
+
+fn list_dirs(p: &Path) -> Vec<String> {
+    std::fs::read_dir(p)
+        .map(|rd| rd.filter_map(|e| e.ok()).filter(|e| e.path().is_dir()).filter_map(|e| e.file_name().into_string().ok()).collect())
+        .unwrap_or_default()
+}
+
+fn arduino_tools(base: PathBuf, out: &mut Vec<PathBuf>) {
+    let tools = base.join("packages/arduino/tools/avr-gcc");
+    let mut versions = list_dirs(&tools);
+    versions.sort();
+    for v in versions.into_iter().rev() {
+        out.push(tools.join(v).join("bin"));
+    }
+}
+
+fn candidate_dirs() -> Vec<PathBuf> {
+    let mut dirs: Vec<PathBuf> = std::env::var_os("PATH").map(|p| std::env::split_paths(&p).collect()).unwrap_or_default();
+    let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")).map(PathBuf::from).unwrap_or_default();
+    if cfg!(target_os = "macos") {
+        for base in ["/opt/homebrew", "/usr/local"] {
+            dirs.push(PathBuf::from(base).join("bin"));
+            let opt = PathBuf::from(base).join("opt");
+            for v in list_dirs(&opt).into_iter().filter(|v| v.starts_with("avr-gcc")) {
+                dirs.push(opt.join(v).join("bin"));
+            }
+        }
+        arduino_tools(home.join("Library/Arduino15"), &mut dirs);
+    } else if cfg!(windows) {
+        for var in ["ProgramFiles", "ProgramFiles(x86)"] {
+            let Some(base) = std::env::var_os(var).map(PathBuf::from) else { continue };
+            let studio = base.join("Atmel").join("Studio");
+            for v in list_dirs(&studio) {
+                dirs.push(studio.join(v).join("toolchain/avr8/avr8-gnu-toolchain/bin"));
+            }
+            let mchp = base.join("Microchip");
+            for v in list_dirs(&mchp) {
+                dirs.push(mchp.join(&v).join("bin"));
+                dirs.push(mchp.join(&v).join("avr8-gnu-toolchain-win32_x86_64").join("bin"));
+            }
+            dirs.push(base.join("Arduino/hardware/tools/avr/bin"));
+        }
+        if let Some(local) = std::env::var_os("LOCALAPPDATA") {
+            arduino_tools(PathBuf::from(local).join("Arduino15"), &mut dirs);
+        }
+        dirs.push(PathBuf::from("C:\\avr-gcc\\bin"));
+        dirs.push(PathBuf::from("C:\\WinAVR\\bin"));
+    } else {
+        for d in ["/usr/bin", "/usr/local/bin", "/opt/avr-gcc/bin"] {
+            dirs.push(PathBuf::from(d));
+        }
+        arduino_tools(home.join(".arduino15"), &mut dirs);
+    }
+    dirs
+}
+
+fn version_of(gcc: &Path) -> Option<String> {
+    let out = Command::new(gcc).arg("--version").output().ok()?;
+    out.status.success().then(|| String::from_utf8_lossy(&out.stdout).lines().next().unwrap_or("").trim().to_string())
+}
+
+pub fn detect(preferred: Option<&str>) -> Option<ToolchainInfo> {
+    let mut seen = std::collections::HashSet::new();
+    let candidates = preferred.filter(|p| !p.is_empty()).map(PathBuf::from).into_iter().chain(candidate_dirs().into_iter().map(|d| d.join(EXE)));
+    for c in candidates {
+        if !seen.insert(c.clone()) || !c.is_file() {
+            continue;
+        }
+        if let Some(version) = version_of(&c) {
+            return Some(ToolchainInfo { gcc: c.to_string_lossy().into_owned(), version });
+        }
+    }
+    None
+}
+
+fn temp_dir() -> std::io::Result<PathBuf> {
+    static COUNTER: AtomicU32 = AtomicU32::new(0);
+    let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+    let dir = std::env::temp_dir().join(format!("mcs-build-{}-{}", std::process::id(), n));
+    std::fs::create_dir_all(&dir)?;
+    Ok(dir)
+}
+
+pub fn compile(req: &CompileRequest) -> CompileResult {
+    let Some(tc) = detect(req.gcc_path) else {
+        let msg = "avr-gcc was not found. Install an AVR GCC toolchain (see Help > Toolchain Setup) or set its path in Tools > Toolchain Options.";
+        return CompileResult { elf: None, output: msg.into(), command: String::new(), diagnostics: vec![Diagnostic::error(msg, "", 0, 0)] };
+    };
+    let tmp = match temp_dir() {
+        Ok(t) => t,
+        Err(e) => return CompileResult { elf: None, output: e.to_string(), command: String::new(), diagnostics: vec![] },
+    };
+    let base = Path::new(req.file_name).file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "main.c".into());
+    let src = tmp.join(&base);
+    let out = tmp.join("program.elf");
+    let result = (|| {
+        std::fs::write(&src, req.source).map_err(|e| e.to_string())?;
+        let ext = Path::new(&base).extension().map(|e| e.to_string_lossy().into_owned()).unwrap_or_default();
+        let mut args: Vec<String> = vec![format!("-mmcu={}", req.mcu), format!("-{}", req.optimize), "-g".into(), "-gdwarf-4".into(), "-Wall".into(), "-Wextra".into()];
+        match ext.as_str() {
+            "cpp" | "cc" => args.push("-std=gnu++17".into()),
+            "s" | "S" | "sx" => {}
+            _ => args.push("-std=gnu11".into()),
+        }
+        if let Some(d) = &req.dir {
+            args.push(format!("-I{}", d.display()));
+        }
+        args.extend(req.extra_flags.iter().filter(|f| !f.is_empty()).cloned());
+        args.push("-o".into());
+        args.push(out.to_string_lossy().into_owned());
+        args.push(src.to_string_lossy().into_owned());
+        let output = Command::new(&tc.gcc).args(&args).current_dir(req.dir.as_deref().unwrap_or(&tmp)).output().map_err(|e| e.to_string())?;
+        // Report diagnostics against the user's file instead of the temp copy.
+        let shown = req.dir.as_ref().map(|d| d.join(&base).to_string_lossy().into_owned()).unwrap_or(base.clone());
+        let src_s = src.to_string_lossy().into_owned();
+        let text = format!("{}{}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr)).replace(&src_s, &shown);
+        let gcc_name = Path::new(&tc.gcc).file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+        let command = format!(
+            "{gcc_name} {}",
+            args.iter().map(|a| if *a == src_s { shown.clone() } else if a.ends_with("program.elf") { "program.elf".into() } else { a.clone() }).collect::<Vec<_>>().join(" ")
+        );
+        let diagnostics = parse_gcc_diagnostics(&text);
+        if !output.status.success() || !out.is_file() {
+            return Ok(CompileResult { elf: None, output: text, command, diagnostics });
+        }
+        let elf = std::fs::read(&out).map_err(|e| e.to_string())?;
+        let mut text = text;
+        let size_tool = Path::new(&tc.gcc).with_file_name(if cfg!(windows) { "avr-size.exe" } else { "avr-size" });
+        if size_tool.is_file() {
+            if let Ok(o) = Command::new(size_tool).arg(&out).output() {
+                text.push_str(&String::from_utf8_lossy(&o.stdout).replace(&out.to_string_lossy().into_owned(), "program.elf"));
+            }
+        }
+        Ok(CompileResult { elf: Some(elf), output: text, command, diagnostics })
+    })();
+    let _ = std::fs::remove_dir_all(&tmp);
+    result.unwrap_or_else(|e: String| CompileResult { elf: None, output: e.clone(), command: String::new(), diagnostics: vec![Diagnostic::error(e, "", 0, 0)] })
+}
+
+/// Parses `file:line:col: error: message` lines from GCC output.
+pub fn parse_gcc_diagnostics(text: &str) -> Vec<Diagnostic> {
+    let mut out = Vec::new();
+    for l in text.lines() {
+        for (marker, sev) in [(": error: ", Severity::Error), (": fatal error: ", Severity::Error), (": warning: ", Severity::Warning), (": note: ", Severity::Info)] {
+            let Some(pos) = l.find(marker) else { continue };
+            let head = &l[..pos];
+            let msg = &l[pos + marker.len()..];
+            // head = file:line[:col]   (file may contain ':' on Windows, so parse from the right)
+            let mut parts = head.rsplitn(3, ':');
+            let a = parts.next().unwrap_or("");
+            let b = parts.next().unwrap_or("");
+            let rest = parts.next();
+            let (file, line, col) = match (rest, b.parse::<u32>(), a.parse::<u32>()) {
+                (Some(f), Ok(line), Ok(col)) => (f.to_string(), line, col),
+                _ => match a.parse::<u32>() {
+                    Ok(line) => (format!("{}{}", rest.map(|r| format!("{r}:")).unwrap_or_default(), b), line, 0),
+                    Err(_) => (head.to_string(), 0, 0),
+                },
+            };
+            out.push(Diagnostic::new(sev, msg, file, line, col));
+            break;
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_gcc_lines() {
+        let d = parse_gcc_diagnostics("main.c:12:5: error: 'x' undeclared\nC:\\p\\a.c:3:1: warning: unused\nfoo.c:7: note: here");
+        assert_eq!(d.len(), 3);
+        assert_eq!((d[0].file.as_str(), d[0].line, d[0].column), ("main.c", 12, 5));
+        assert_eq!(d[1].file, "C:\\p\\a.c");
+        assert_eq!(d[1].severity, Severity::Warning);
+        assert_eq!((d[2].file.as_str(), d[2].line), ("foo.c", 7));
+    }
+}
