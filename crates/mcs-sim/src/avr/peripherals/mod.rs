@@ -3,31 +3,51 @@
 //! addresses, vectors and pin mapping.
 
 pub mod analog;
+pub mod classic;
+pub mod eeprom;
 pub mod exint;
+pub mod irqflags;
 pub mod port;
+pub mod serial;
+pub mod spi;
 pub mod stimulus;
 pub mod system;
-pub mod timer16;
+pub mod timer;
+pub mod timer1hs;
+pub mod twi;
+pub mod usart;
+pub mod usi;
 
-use mcs_core::avr::device::PeripheralSet;
+use mcs_core::avr::device::{PeripheralSet, SleepKind};
 
-use super::machine::Machine;
-use analog::{AcConfig, Adc, AdcConfig, AnalogComparator};
-use exint::{ExtInt, ExtIntConfig};
+use super::machine::{Machine, Peripheral, Trigger};
+use analog::{AcConfig, AcmeConfig, Adc, AdcConfig, AdcInput, AdcRef, AnalogComparator, BANDGAP_V, TINY10_TRIGGERS};
+use classic::{ClassicSystem, ClassicSystemConfig, ClockSource};
+use eeprom::{Eeprom, EepromConfig};
+use exint::{ExtInt, ExtIntConfig, IntSpec, PcGroupSpec};
+use irqflags::{Gtccr, GtccrConfig, IrqFlags, IrqFlagsConfig};
 use port::{Port, PortConfig};
+use spi::{Spi, SpiConfig};
 use system::{System, SystemConfig, Watchdog, WatchdogConfig};
-use timer16::{Timer16, Timer16Config};
+use timer::{Timer, TimerBits, TimerConfig, CS_SYNC, CS_TIMER2};
+use timer1hs::{Timer1Hs, Timer1HsConfig};
+use twi::{Twi, TwiConfig};
+use usart::{Usart, UsartConfig};
+use usi::{Usi, UsiConfig};
 
 pub fn wire(m: &mut Machine) {
     match m.spec.peripheral_set {
         PeripheralSet::TinyRc => wire_tiny_rc(m),
+        PeripheralSet::MegaX8 => wire_mega_x8(m),
+        PeripheralSet::TinyX5 => wire_tiny_x5(m),
     }
-    // Test-bench signal generators (every device).
+    // Test bench (every device): signal generators and the Serial Monitor's serial port.
     let pins = m.sys.pins.len();
     m.stimulus = Some(m.add_peripheral(Box::new(stimulus::Stimulus::new(pins))));
+    m.serial = Some(m.add_peripheral(Box::new(serial::SerialBridge::new())));
 }
 
-fn add(m: &mut Machine, p: Box<dyn super::machine::Peripheral>, regs: Vec<(u16, u8)>, vectors: &[Option<u8>]) -> u8 {
+fn add(m: &mut Machine, p: Box<dyn Peripheral>, regs: Vec<(u16, u8)>, vectors: &[Option<u8>]) -> u8 {
     let idx = m.add_peripheral(p);
     for (addr, rmw) in regs {
         m.claim_io(addr, idx, rmw);
@@ -37,6 +57,49 @@ fn add(m: &mut Machine, p: Box<dyn super::machine::Peripheral>, regs: Vec<(u16, 
     }
     idx
 }
+
+/// Adds a port; PINx gets the SBI/CBI toggle-one-bit semantics.
+fn add_port(m: &mut Machine, c: PortConfig) {
+    let port = Port::new(c);
+    let mut regs: Vec<(u16, u8)> = port.registers().into_iter().map(|a| (a, 0)).collect();
+    regs[0].1 = 0xff; // SBI/CBI on PINx only toggle the addressed bit
+    add(m, Box::new(port), regs, &[]);
+}
+
+/// Adds timers sharing one TIFR/TIMSK pair plus the pair's owner.
+fn add_timers(m: &mut Machine, name: &'static str, tifr: u16, timsk: u16, timers: Vec<Box<dyn Peripheral>>, regs: Vec<Vec<(u16, u8)>>, map: Vec<(u8, u8)>) {
+    for (t, r) in timers.into_iter().zip(regs) {
+        add(m, t, r, &[]);
+    }
+    let flags = IrqFlags::new(IrqFlagsConfig { name, flag_reg: tifr, mask_reg: timsk, map });
+    let (regs, vecs) = (flags.registers(), flags.vectors());
+    add(m, Box::new(flags), regs, &vecs);
+}
+
+fn add_timer(m: &mut Machine, c: TimerConfig) {
+    let (tifr, timsk, name) = (c.tifr, c.timsk, c.name);
+    let t = Timer::new(c);
+    let (regs, map) = (t.registers(), t.irq_map());
+    add_timers(m, name, tifr, timsk, vec![Box::new(t)], vec![regs], map);
+}
+
+/// Wake-up vectors per canonical sleep mode.
+fn set_wake(m: &mut Machine, table: &[(SleepKind, &[&str])]) {
+    let n = m.cpu.vector_count;
+    let mut masks = vec![vec![true; n]; SleepKind::COUNT];
+    for (kind, names) in table {
+        let mut a = vec![false; n];
+        for name in *names {
+            if let Some(i) = m.spec.vector(name) {
+                a[i as usize] = true;
+            }
+        }
+        masks[*kind as usize] = a;
+    }
+    m.cpu.wake_mask = masks;
+}
+
+const ALL_SLEEP: u8 = 0;
 
 /// ATtiny4/5/9/10.
 fn wire_tiny_rc(m: &mut Machine) {
@@ -52,61 +115,305 @@ fn wire_tiny_rc(m: &mut Machine) {
     let regs = sys.registers();
     add(m, Box::new(sys), regs, &[v("VLM")]);
 
-    let port = Port::new(PortConfig {
-        name: "PORTB", pin: r("PINB"), ddr: r("DDRB"), port: r("PORTB"), pue: Some(r("PUEB")), didr: Some(r("DIDR0")),
+    add_port(m, PortConfig {
+        name: "PORTB", pin: r("PINB"), ddr: r("DDRB"), port: r("PORTB"), pue: Some(r("PUEB")),
+        didr: (0..4).map(|i| Some((r("DIDR0"), 1u8 << i))).collect(), pud: None,
         gpios: vec![0, 1, 2, 3], reset_gpio: Some(3),
     });
-    let mut regs: Vec<(u16, u8)> = port.registers().into_iter().map(|a| (a, 0)).collect();
-    regs[0].1 = 0xff; // SBI/CBI on PINx only toggle the addressed bit
-    add(m, Box::new(port), regs, &[]);
 
     let ext = ExtInt::new(ExtIntConfig {
-        eicra: r("EICRA"), eimsk: r("EIMSK"), eifr: r("EIFR"), pcicr: r("PCICR"), pcifr: r("PCIFR"), pcmsk: r("PCMSK"),
-        int0_gpio: 2, int0_vector: v("INT0").unwrap(), pc_vector: v("PCINT0").unwrap(), pc_gpios: vec![0, 1, 2, 3],
+        ints: vec![IntSpec { gpio: 2, vector: v("INT0").unwrap(), isc_reg: r("EICRA"), isc_shift: 0, mask_reg: r("EIMSK"), mask_bit: 1, flag_reg: r("EIFR"), flag_bit: 1 }],
+        groups: vec![PcGroupSpec { gpios: vec![0, 1, 2, 3], msk_reg: r("PCMSK"), vector: v("PCINT0").unwrap(), enable_reg: r("PCICR"), enable_bit: 1, flag_reg: r("PCIFR"), flag_bit: 1 }],
+        owned: vec![(r("EICRA"), 0x03, false), (r("EIMSK"), 0x01, false), (r("EIFR"), 0, true), (r("PCICR"), 0x01, false), (r("PCIFR"), 0, true)],
     });
-    let regs = ext.registers();
-    add(m, Box::new(ext), regs, &[v("INT0"), v("PCINT0")]);
+    let (regs, vecs) = (ext.registers(), ext.vectors());
+    add(m, Box::new(ext), regs, &vecs);
 
-    let timer = Timer16::new(Timer16Config {
-        name: "TC0",
-        tccr_a: r("TCCR0A"), tccr_b: r("TCCR0B"), tccr_c: r("TCCR0C"), tcnt_l: r("TCNT0L"), tcnt_h: r("TCNT0H"),
-        ocr_a_l: r("OCR0AL"), ocr_a_h: r("OCR0AH"), ocr_b_l: r("OCR0BL"), ocr_b_h: r("OCR0BH"), icr_l: r("ICR0L"), icr_h: r("ICR0H"),
-        timsk: r("TIMSK0"), tifr: r("TIFR0"), gtccr: r("GTCCR"),
-        v_capt: v("TIM0_CAPT").unwrap(), v_ovf: v("TIM0_OVF").unwrap(), v_comp_a: v("TIM0_COMPA").unwrap(), v_comp_b: v("TIM0_COMPB").unwrap(),
-        oc_a_gpio: 0, oc_b_gpio: 1, icp_gpio: 1, t_gpio: 2, prr_mask: 0x01,
+    add_timer(m, TimerConfig {
+        name: "TC0", id: 0, wide: true,
+        tccr_a: r("TCCR0A"), tccr_b: r("TCCR0B"), foc_reg: r("TCCR0C"), tcnt: r("TCNT0L"), ocr_a: r("OCR0AL"), ocr_b: r("OCR0BL"), icr: Some(r("ICR0L")),
+        tifr: r("TIFR0"), timsk: r("TIMSK0"), bits: TimerBits { tov: 0x01, ocfa: 0x02, ocfb: 0x04, icf: 0x20 },
+        v_ovf: v("TIM0_OVF").unwrap(), v_comp_a: v("TIM0_COMPA").unwrap(), v_comp_b: v("TIM0_COMPB").unwrap(), v_capt: v("TIM0_CAPT"),
+        oc_a_gpio: Some(0), oc_b_gpio: Some(1), icp_gpio: Some(1), t_gpio: Some(2), clock: CS_SYNC, prescaler_group: 1, prr_mask: 0x01, sleep_run: ALL_SLEEP,
     });
-    let regs = timer.registers();
-    add(m, Box::new(timer), regs, &[v("TIM0_CAPT"), v("TIM0_OVF"), v("TIM0_COMPA"), v("TIM0_COMPB")]);
+    let g = Gtccr::new(GtccrConfig { addr: r("GTCCR"), tsm: 0x80, psr: vec![(0x01, 1)], strobes: 0, config: 0 });
+    let regs = g.registers();
+    add(m, Box::new(g), regs, &[]);
 
-    let ac = AnalogComparator::new(AcConfig { acsr: r("ACSR"), ain0_gpio: 0, ain1_gpio: 1, vector: v("ANA_COMP").unwrap() });
+    let ac = AnalogComparator::new(AcConfig { acsr: r("ACSR"), ain0_gpio: 0, ain1_gpio: 1, vector: v("ANA_COMP").unwrap(), acbg: false, acic: true, acme: None });
     let regs = ac.registers();
     add(m, Box::new(ac), regs, &[v("ANA_COMP")]);
 
     if s.has_adc {
         let adc = Adc::new(AdcConfig {
-            adcsra: r("ADCSRA"), adcsrb: r("ADCSRB"), admux: r("ADMUX"), adcl: r("ADCL"), channels: vec![0, 1, 2, 3], vector: v("ADC").unwrap(), prr_mask: 0x02,
+            adcsra: r("ADCSRA"), adcsrb: r("ADCSRB"), admux: r("ADMUX"), adcl: r("ADCL"), adch: None,
+            mux_mask: 0x03, inputs: (0..4).map(|g| Some(AdcInput::Pin(g))).collect(),
+            ref_mask: 0, ref_extra: 0, refs: vec![Some(AdcRef::Vcc)], adlar: 0, admux_mask: 0x03, adcsrb_mask: 0x07, bin: 0,
+            triggers: TINY10_TRIGGERS, vector: v("ADC").unwrap(), prr_mask: 0x02, notify: false,
         });
         let regs = adc.registers();
         add(m, Box::new(adc), regs, &[v("ADC")]);
     }
 
-    let wdt = Watchdog::new(WatchdogConfig { wdtcsr: r("WDTCSR"), rstflr: r("RSTFLR"), vector: v("WDT").unwrap() });
+    let wdt = Watchdog::new(WatchdogConfig { wdtcsr: r("WDTCSR"), rstflr: r("RSTFLR"), vector: v("WDT").unwrap(), wdce: false });
     let regs = wdt.registers();
     add(m, Box::new(wdt), regs, &[v("WDT")]);
 
-    // Wake-up sources per sleep mode (datasheet table 8-1).
-    let n = m.cpu.vector_count;
-    let mask = |names: &[&str]| {
-        let mut a = vec![false; n];
-        for name in names {
-            if let Some(i) = s.vector(name) {
-                a[i as usize] = true;
-            }
-        }
-        a
+    // Wake-up sources per sleep mode (datasheet table 7-1).
+    let deep: &[&str] = &["INT0", "PCINT0", "WDT"];
+    set_wake(m, &[
+        (SleepKind::AdcNoiseReduction, &["INT0", "PCINT0", "ADC", "WDT", "VLM"]),
+        (SleepKind::PowerDown, deep),
+        (SleepKind::PowerSave, deep),
+        (SleepKind::Standby, deep),
+        (SleepKind::ExtendedStandby, deep),
+    ]);
+}
+
+/// Bandgap and temperature sensor readings at 25 °C (DS40002061B table 24-2, Atmel-2586Q 17.12).
+const MEGA_TEMP_V: f64 = 0.314;
+const TINY85_TEMP_V: f64 = 300.0 / 1024.0 * BANDGAP_V;
+
+/// ATmega48PA/88PA/168PA/328P.
+fn wire_mega_x8(m: &mut Machine) {
+    let s = m.spec;
+    let r = |n: &str| s.reg(n);
+    let v = |n: &str| s.vector(n).unwrap();
+    // GPIO numbering: PB0-7 = 0-7, PC0-6 = 8-14, PD0-7 = 15-22.
+    const PB: usize = 0;
+    const PC: usize = 8;
+    const PD: usize = 15;
+
+    let crystal = |k: u8| (k, ClockSource::Crystal);
+    let mut cksel = vec![(0, ClockSource::External), (2, ClockSource::Rc8M), (3, ClockSource::Rc128k), (4, ClockSource::LowFreqCrystal), (5, ClockSource::LowFreqCrystal), crystal(6), crystal(7)];
+    cksel.extend((8..16).map(crystal));
+    let sys = ClassicSystem::new(ClassicSystemConfig {
+        clkpr: r("CLKPR"), mcusr: r("MCUSR"), mcucr: r("MCUCR"), mcucr_plain: 0x10,
+        ivsel: s.boot.as_ref().map(|_| (0x02, 0x01)), bods: Some((0x40, 0x20)),
+        prr: r("PRR"), prr_mask: 0xef, osccal: r("OSCCAL"), pllcsr: None, cksel,
+        xtal1: Some(PB + 6), xtal2: Some(PB + 7),
+        bod_levels: vec![(6, 1.8), (5, 2.7), (4, 4.3)],
+    });
+    let regs = sys.registers();
+    add(m, Box::new(sys), regs, &[]);
+
+    let pud = Some((r("MCUCR"), 0x10));
+    add_port(m, PortConfig { name: "PORTB", pin: r("PINB"), ddr: r("DDRB"), port: r("PORTB"), pue: None, didr: vec![], pud, gpios: (PB..PB + 8).collect(), reset_gpio: None });
+    add_port(m, PortConfig {
+        name: "PORTC", pin: r("PINC"), ddr: r("DDRC"), port: r("PORTC"), pue: None,
+        didr: (0..6).map(|i| Some((r("DIDR0"), 1u8 << i))).collect(), pud, gpios: (PC..PC + 7).collect(), reset_gpio: Some(PC + 6),
+    });
+    add_port(m, PortConfig {
+        name: "PORTD", pin: r("PIND"), ddr: r("DDRD"), port: r("PORTD"), pue: None,
+        didr: vec![None, None, None, None, None, None, Some((r("DIDR1"), 0x01)), Some((r("DIDR1"), 0x02))], pud, gpios: (PD..PD + 8).collect(), reset_gpio: None,
+    });
+
+    let int = |gpio: usize, vector: u8, n: u8| IntSpec { gpio: gpio as u8, vector, isc_reg: r("EICRA"), isc_shift: n * 2, mask_reg: r("EIMSK"), mask_bit: 1 << n, flag_reg: r("EIFR"), flag_bit: 1 << n };
+    let group = |base: usize, count: usize, msk: &str, vector: u8, n: u8| PcGroupSpec {
+        gpios: (base..base + count).map(|g| g as u8).collect(), msk_reg: r(msk), vector, enable_reg: r("PCICR"), enable_bit: 1 << n, flag_reg: r("PCIFR"), flag_bit: 1 << n,
     };
-    let all = vec![true; n];
-    let adc_nr = mask(&["INT0", "PCINT0", "ADC", "WDT", "VLM"]);
-    let deep = mask(&["INT0", "PCINT0", "WDT"]);
-    m.cpu.wake_mask = vec![all, adc_nr, deep.clone(), deep.clone(), deep.clone(), deep.clone(), deep.clone(), deep];
+    let ext = ExtInt::new(ExtIntConfig {
+        ints: vec![int(PD + 2, v("INT0"), 0), int(PD + 3, v("INT1"), 1)],
+        groups: vec![group(PB, 8, "PCMSK0", v("PCINT0"), 0), group(PC, 7, "PCMSK1", v("PCINT1"), 1), group(PD, 8, "PCMSK2", v("PCINT2"), 2)],
+        owned: vec![(r("EICRA"), 0x0f, false), (r("EIMSK"), 0x03, false), (r("EIFR"), 0, true), (r("PCICR"), 0x07, false), (r("PCIFR"), 0, true)],
+    });
+    let (regs, vecs) = (ext.registers(), ext.vectors());
+    add(m, Box::new(ext), regs, &vecs);
+
+    let bits8 = TimerBits { tov: 0x01, ocfa: 0x02, ocfb: 0x04, icf: 0 };
+    add_timer(m, TimerConfig {
+        name: "TC0", id: 0, wide: false,
+        tccr_a: r("TCCR0A"), tccr_b: r("TCCR0B"), foc_reg: r("TCCR0B"), tcnt: r("TCNT0"), ocr_a: r("OCR0A"), ocr_b: r("OCR0B"), icr: None,
+        tifr: r("TIFR0"), timsk: r("TIMSK0"), bits: bits8,
+        v_ovf: v("TIMER0_OVF"), v_comp_a: v("TIMER0_COMPA"), v_comp_b: v("TIMER0_COMPB"), v_capt: None,
+        oc_a_gpio: Some(PD + 6), oc_b_gpio: Some(PD + 5), icp_gpio: None, t_gpio: Some((PD + 4) as u8), clock: CS_SYNC, prescaler_group: 1, prr_mask: 0x20, sleep_run: ALL_SLEEP,
+    });
+    add_timer(m, TimerConfig {
+        name: "TC1", id: 1, wide: true,
+        tccr_a: r("TCCR1A"), tccr_b: r("TCCR1B"), foc_reg: r("TCCR1C"), tcnt: r("TCNT1L"), ocr_a: r("OCR1AL"), ocr_b: r("OCR1BL"), icr: Some(r("ICR1L")),
+        tifr: r("TIFR1"), timsk: r("TIMSK1"), bits: TimerBits { tov: 0x01, ocfa: 0x02, ocfb: 0x04, icf: 0x20 },
+        v_ovf: v("TIMER1_OVF"), v_comp_a: v("TIMER1_COMPA"), v_comp_b: v("TIMER1_COMPB"), v_capt: Some(v("TIMER1_CAPT")),
+        oc_a_gpio: Some(PB + 1), oc_b_gpio: Some(PB + 2), icp_gpio: Some(PB as u8), t_gpio: Some((PD + 5) as u8), clock: CS_SYNC, prescaler_group: 1, prr_mask: 0x08, sleep_run: ALL_SLEEP,
+    });
+    add_timer(m, TimerConfig {
+        name: "TC2", id: 2, wide: false,
+        tccr_a: r("TCCR2A"), tccr_b: r("TCCR2B"), foc_reg: r("TCCR2B"), tcnt: r("TCNT2"), ocr_a: r("OCR2A"), ocr_b: r("OCR2B"), icr: None,
+        tifr: r("TIFR2"), timsk: r("TIMSK2"), bits: bits8,
+        v_ovf: v("TIMER2_OVF"), v_comp_a: v("TIMER2_COMPA"), v_comp_b: v("TIMER2_COMPB"), v_capt: None,
+        oc_a_gpio: Some(PB + 3), oc_b_gpio: Some(PD + 3), icp_gpio: None, t_gpio: None, clock: CS_TIMER2, prescaler_group: 2, prr_mask: 0x40,
+        // Timer2 keeps running in power-save and extended standby (DS40002061B 10.6).
+        sleep_run: (1 << SleepKind::PowerSave as u8) | (1 << SleepKind::ExtendedStandby as u8),
+    });
+    let g = Gtccr::new(GtccrConfig { addr: r("GTCCR"), tsm: 0x80, psr: vec![(0x01, 1), (0x02, 2)], strobes: 0, config: 0 });
+    let regs = g.registers();
+    add(m, Box::new(g), regs, &[]);
+
+    let usart = Usart::new(UsartConfig {
+        name: "USART0", udr: r("UDR0"), ucsra: r("UCSR0A"), ucsrb: r("UCSR0B"), ucsrc: r("UCSR0C"), ubrrl: r("UBRR0L"), ubrrh: r("UBRR0H"),
+        rx_gpio: PD, tx_gpio: PD + 1, v_rx: v("USART_RX"), v_udre: v("USART_UDRE"), v_tx: v("USART_TX"), prr_mask: 0x02,
+    });
+    let (regs, vecs) = (usart.registers(), usart.vectors());
+    add(m, Box::new(usart), regs, &vecs);
+
+    let spi = Spi::new(SpiConfig {
+        spcr: r("SPCR"), spsr: r("SPSR"), spdr: r("SPDR"), ss_gpio: PB + 2, mosi_gpio: PB + 3, miso_gpio: PB + 4, sck_gpio: PB + 5, vector: v("SPI_STC"), prr_mask: 0x04,
+    });
+    let regs = spi.registers();
+    add(m, Box::new(spi), regs, &[Some(v("SPI_STC"))]);
+
+    let twi = Twi::new(TwiConfig { twbr: r("TWBR"), twsr: r("TWSR"), twar: r("TWAR"), twdr: r("TWDR"), twcr: r("TWCR"), twamr: r("TWAMR"), vector: v("TWI"), prr_mask: 0x80 });
+    let regs = twi.registers();
+    add(m, Box::new(twi), regs, &[Some(v("TWI"))]);
+
+    let ac = AnalogComparator::new(AcConfig {
+        acsr: r("ACSR"), ain0_gpio: (PD + 6) as u8, ain1_gpio: (PD + 7) as u8, vector: v("ANALOG_COMP"), acbg: true, acic: true,
+        acme: Some(AcmeConfig {
+            reg: r("ADCSRB"), bit: 0x40, adcsra: r("ADCSRA"), admux: r("ADMUX"), mux_mask: 0x07,
+            channels: (0..8).map(|i| (i < 6).then_some(PC + i)).collect(),
+        }),
+    });
+    let regs = ac.registers();
+    add(m, Box::new(ac), regs, &[Some(v("ANALOG_COMP"))]);
+
+    let mut inputs: Vec<Option<AdcInput>> = (0..16).map(|i| (i < 6).then_some(AdcInput::Pin(PC + i))).collect();
+    inputs[8] = Some(AdcInput::Temp(MEGA_TEMP_V));
+    inputs[14] = Some(AdcInput::Volts(BANDGAP_V));
+    inputs[15] = Some(AdcInput::Volts(0.0));
+    let adc = Adc::new(AdcConfig {
+        adcsra: r("ADCSRA"), adcsrb: r("ADCSRB"), admux: r("ADMUX"), adcl: r("ADCL"), adch: Some(r("ADCH")), mux_mask: 0x0f, inputs,
+        // REFS1:0 = 00 AREF (tied to VCC here), 01 AVCC, 11 internal 1.1 V.
+        ref_mask: 0xc0, ref_extra: 0, refs: vec![Some(AdcRef::Aref(None)), Some(AdcRef::Vcc), None, Some(AdcRef::Volts(BANDGAP_V))],
+        adlar: 0x20, admux_mask: 0xef, adcsrb_mask: 0x47, bin: 0,
+        triggers: [None, Some(Trigger::Ac), Some(Trigger::Int0), Some(Trigger::TimerCompA(0)), Some(Trigger::TimerOvf(0)), Some(Trigger::TimerCompB(1)), Some(Trigger::TimerOvf(1)), Some(Trigger::TimerCapt(1))],
+        vector: v("ADC"), prr_mask: 0x01, notify: true,
+    });
+    let regs = adc.registers();
+    add(m, Box::new(adc), regs, &[Some(v("ADC"))]);
+
+    let ee = Eeprom::new(EepromConfig { eecr: r("EECR"), eedr: r("EEDR"), eearl: r("EEARL"), eearh: Some(r("EEARH")), vector: v("EE_READY") });
+    let regs = ee.registers();
+    add(m, Box::new(ee), regs, &[Some(v("EE_READY"))]);
+
+    let wdt = Watchdog::new(WatchdogConfig { wdtcsr: r("WDTCSR"), rstflr: r("MCUSR"), vector: v("WDT"), wdce: true });
+    let regs = wdt.registers();
+    add(m, Box::new(wdt), regs, &[Some(v("WDT"))]);
+
+    // Wake-up sources per sleep mode (DS40002061B table 10-1).
+    let pd: &[&str] = &["INT0", "INT1", "PCINT0", "PCINT1", "PCINT2", "TWI", "WDT"];
+    let ps: &[&str] = &["INT0", "INT1", "PCINT0", "PCINT1", "PCINT2", "TWI", "WDT", "TIMER2_COMPA", "TIMER2_COMPB", "TIMER2_OVF"];
+    set_wake(m, &[
+        (SleepKind::AdcNoiseReduction, &["INT0", "INT1", "PCINT0", "PCINT1", "PCINT2", "TWI", "TIMER2_COMPA", "TIMER2_COMPB", "TIMER2_OVF", "SPM_READY", "EE_READY", "ADC", "WDT"]),
+        (SleepKind::PowerDown, pd),
+        (SleepKind::PowerSave, ps),
+        (SleepKind::Standby, pd),
+        (SleepKind::ExtendedStandby, ps),
+    ]);
+}
+
+/// ATtiny25/45/85.
+fn wire_tiny_x5(m: &mut Machine) {
+    let s = m.spec;
+    let r = |n: &str| s.reg(n);
+    let v = |n: &str| s.vector(n).unwrap();
+
+    let crystal = |k: u8| (k, ClockSource::Crystal);
+    let mut cksel = vec![(0, ClockSource::External), (1, ClockSource::Pll16M), (2, ClockSource::Rc8M), (3, ClockSource::Rc6M4), (4, ClockSource::Rc128k), (6, ClockSource::LowFreqCrystal)];
+    cksel.extend((8..16).map(crystal));
+    let sys = ClassicSystem::new(ClassicSystemConfig {
+        clkpr: r("CLKPR"), mcusr: r("MCUSR"), mcucr: r("MCUCR"),
+        // PUD, SE, SM1:0 and ISC01:00 are plain bits (sleep and INT0 read them).
+        mcucr_plain: 0x7b, ivsel: None, bods: Some((0x80, 0x04)),
+        prr: r("PRR"), prr_mask: 0x0f, osccal: r("OSCCAL"), pllcsr: Some(r("PLLCSR")), cksel,
+        xtal1: Some(3), xtal2: Some(4),
+        bod_levels: vec![(6, 1.8), (5, 2.7), (4, 4.3)],
+    });
+    let regs = sys.registers();
+    add(m, Box::new(sys), regs, &[]);
+
+    let didr = r("DIDR0");
+    add_port(m, PortConfig {
+        name: "PORTB", pin: r("PINB"), ddr: r("DDRB"), port: r("PORTB"), pue: None,
+        // DIDR0: AIN0D (PB0), AIN1D (PB1), ADC1D (PB2), ADC3D (PB3), ADC2D (PB4), ADC0D (PB5).
+        didr: [0x01, 0x02, 0x04, 0x08, 0x10, 0x20].iter().map(|&b| Some((didr, b))).collect(),
+        pud: Some((r("MCUCR"), 0x40)), gpios: (0..6).collect(), reset_gpio: Some(5),
+    });
+
+    let ext = ExtInt::new(ExtIntConfig {
+        ints: vec![IntSpec { gpio: 2, vector: v("INT0"), isc_reg: r("MCUCR"), isc_shift: 0, mask_reg: r("GIMSK"), mask_bit: 0x40, flag_reg: r("GIFR"), flag_bit: 0x40 }],
+        groups: vec![PcGroupSpec { gpios: (0..6).collect(), msk_reg: r("PCMSK"), vector: v("PCINT0"), enable_reg: r("GIMSK"), enable_bit: 0x20, flag_reg: r("GIFR"), flag_bit: 0x20 }],
+        owned: vec![(r("GIMSK"), 0x60, false), (r("GIFR"), 0, true)],
+    });
+    let (regs, vecs) = (ext.registers(), ext.vectors());
+    add(m, Box::new(ext), regs, &vecs);
+
+    // Timer0 and Timer1 share TIFR/TIMSK.
+    let t0 = Timer::new(TimerConfig {
+        name: "TC0", id: 0, wide: false,
+        tccr_a: r("TCCR0A"), tccr_b: r("TCCR0B"), foc_reg: r("TCCR0B"), tcnt: r("TCNT0"), ocr_a: r("OCR0A"), ocr_b: r("OCR0B"), icr: None,
+        tifr: r("TIFR"), timsk: r("TIMSK"), bits: TimerBits { tov: 0x02, ocfa: 0x10, ocfb: 0x08, icf: 0 },
+        v_ovf: v("TIM0_OVF"), v_comp_a: v("TIM0_COMPA"), v_comp_b: v("TIM0_COMPB"), v_capt: None,
+        oc_a_gpio: Some(0), oc_b_gpio: Some(1), icp_gpio: None, t_gpio: Some(2), clock: CS_SYNC, prescaler_group: 1, prr_mask: 0x04, sleep_run: ALL_SLEEP,
+    });
+    let t1 = Timer1Hs::new(Timer1HsConfig {
+        tccr1: r("TCCR1"), gtccr: r("GTCCR"), tcnt1: r("TCNT1"), ocr1a: r("OCR1A"), ocr1b: r("OCR1B"), ocr1c: r("OCR1C"), pllcsr: r("PLLCSR"),
+        tifr: r("TIFR"), timsk: r("TIMSK"), ocfa: 0x40, ocfb: 0x20, tov: 0x04,
+        v_comp_a: v("TIM1_COMPA"), v_comp_b: v("TIM1_COMPB"), v_ovf: v("TIM1_OVF"),
+        oc: [1, 0, 4, 3], prescaler_group: 2, prr_mask: 0x08,
+    });
+    let mut map = t0.irq_map();
+    map.extend(t1.irq_map());
+    let regs = vec![t0.registers(), t1.registers()];
+    add_timers(m, "TIMERS", r("TIFR"), r("TIMSK"), vec![Box::new(t0), Box::new(t1)], regs, map);
+    let g = Gtccr::new(GtccrConfig { addr: r("GTCCR"), tsm: 0x80, psr: vec![(0x01, 1), (0x02, 2)], strobes: 0x0c, config: 0x70 });
+    let regs = g.registers();
+    add(m, Box::new(g), regs, &[]);
+
+    let usi = Usi::new(UsiConfig {
+        usicr: r("USICR"), usisr: r("USISR"), usidr: r("USIDR"), usibr: r("USIBR"), port: r("PORTB"),
+        di_gpio: 0, do_gpio: 1, usck_gpio: 2, usck_bit: 0x04, v_start: v("USI_START"), v_ovf: v("USI_OVF"), prr_mask: 0x02,
+    });
+    let regs = usi.registers();
+    add(m, Box::new(usi), regs, &[Some(v("USI_START")), Some(v("USI_OVF"))]);
+
+    let ac = AnalogComparator::new(AcConfig {
+        acsr: r("ACSR"), ain0_gpio: 0, ain1_gpio: 1, vector: v("ANA_COMP"), acbg: true, acic: false,
+        acme: Some(AcmeConfig { reg: r("ADCSRB"), bit: 0x40, adcsra: r("ADCSRA"), admux: r("ADMUX"), mux_mask: 0x03, channels: vec![Some(5), Some(2), Some(4), Some(3)] }),
+    });
+    let regs = ac.registers();
+    add(m, Box::new(ac), regs, &[Some(v("ANA_COMP"))]);
+
+    // ADC0 = PB5, ADC1 = PB2, ADC2 = PB4, ADC3 = PB3 (Atmel-2586Q table 17-4).
+    let p = AdcInput::Pin;
+    let d = AdcInput::Diff;
+    let inputs = vec![
+        Some(p(5)), Some(p(2)), Some(p(4)), Some(p(3)),
+        Some(d(4, 4, 1.0)), Some(d(4, 4, 20.0)), Some(d(4, 3, 1.0)), Some(d(4, 3, 20.0)),
+        Some(d(5, 5, 1.0)), Some(d(5, 5, 20.0)), Some(d(5, 2, 1.0)), Some(d(5, 2, 20.0)),
+        Some(AdcInput::Volts(BANDGAP_V)), Some(AdcInput::Volts(0.0)), None, Some(AdcInput::Temp(TINY85_TEMP_V)),
+    ];
+    let adc = Adc::new(AdcConfig {
+        adcsra: r("ADCSRA"), adcsrb: r("ADCSRB"), admux: r("ADMUX"), adcl: r("ADCL"), adch: Some(r("ADCH")), mux_mask: 0x0f, inputs,
+        // REFS2:0 = 000 VCC, 001 AREF (PB0), 010 1.1 V, 110/111 2.56 V.
+        ref_mask: 0xc0, ref_extra: 0x10,
+        refs: vec![Some(AdcRef::Vcc), Some(AdcRef::Aref(Some(0))), Some(AdcRef::Volts(BANDGAP_V)), None, None, None, Some(AdcRef::Volts(2.56)), Some(AdcRef::Volts(2.56))],
+        adlar: 0x20, admux_mask: 0xff, adcsrb_mask: 0xe7, bin: 0x80,
+        triggers: [None, Some(Trigger::Ac), Some(Trigger::Int0), Some(Trigger::TimerCompA(0)), Some(Trigger::TimerOvf(0)), Some(Trigger::TimerCompB(0)), Some(Trigger::PcInt), None],
+        vector: v("ADC"), prr_mask: 0x01, notify: true,
+    });
+    let regs = adc.registers();
+    add(m, Box::new(adc), regs, &[Some(v("ADC"))]);
+
+    let ee = Eeprom::new(EepromConfig { eecr: r("EECR"), eedr: r("EEDR"), eearl: r("EEARL"), eearh: Some(r("EEARH")), vector: v("EE_RDY") });
+    let regs = ee.registers();
+    add(m, Box::new(ee), regs, &[Some(v("EE_RDY"))]);
+
+    let wdt = Watchdog::new(WatchdogConfig { wdtcsr: r("WDTCR"), rstflr: r("MCUSR"), vector: v("WDT"), wdce: true });
+    let regs = wdt.registers();
+    add(m, Box::new(wdt), regs, &[Some(v("WDT"))]);
+
+    // Wake-up sources per sleep mode (Atmel-2586Q table 7-1).
+    set_wake(m, &[
+        (SleepKind::AdcNoiseReduction, &["INT0", "PCINT0", "USI_START", "EE_RDY", "ADC", "WDT"]),
+        (SleepKind::PowerDown, &["INT0", "PCINT0", "USI_START", "WDT"]),
+    ]);
 }

@@ -177,12 +177,23 @@ fn spec(v: &Variant) -> AvrDeviceSpec {
         nvm_map: Some(NvmMap { lock: 0x3f00, config: 0x3f40, calibration: 0x3f80, signature: 0x3fc0 }),
         signature: v.signature,
         calibration: 0x9c,
-        fuse_bits: vec![
-            FuseBitSpec { name: "RSTDISBL".into(), mask: 0x01, desc: "External Reset disabled (PB3 becomes I/O) when programmed (0)".into() },
-            FuseBitSpec { name: "WDTON".into(), mask: 0x02, desc: "Watchdog Timer always on when programmed (0)".into() },
-            FuseBitSpec { name: "CKOUT".into(), mask: 0x04, desc: "System clock output on PB2 when programmed (0)".into() },
-        ],
-        fuse_default: 0xff,
+        fuses: vec![FuseByteSpec {
+            name: "Configuration".into(),
+            default: 0xff,
+            bits: vec![
+                FuseBitSpec { name: "RSTDISBL".into(), mask: 0x01, desc: "External Reset disabled (PB3 becomes I/O) when programmed (0)".into() },
+                FuseBitSpec { name: "WDTON".into(), mask: 0x02, desc: "Watchdog Timer always on when programmed (0)".into() },
+                FuseBitSpec { name: "CKOUT".into(), mask: 0x04, desc: "System clock output on PB2 when programmed (0)".into() },
+            ],
+        }],
+        // Section 7.1 / SMCR: SM2:0 = 000 idle, 001 ADC NR, 010 power-down, 100 standby.
+        sleep: SleepControl {
+            register: "SMCR".into(),
+            se_mask: 0x01,
+            sm_mask: 0x0e,
+            modes: vec![(0, SleepKind::Idle), (1, SleepKind::AdcNoiseReduction), (2, SleepKind::PowerDown), (4, SleepKind::Standby)],
+        },
+        boot: None,
         vectors: vectors(v.has_adc),
         registers: registers(v.has_adc),
         groups: groups.into_iter().map(|(n, d)| PeripheralGroupSpec { name: n.into(), desc: d.into() }).collect(),
@@ -196,7 +207,6 @@ fn spec(v: &Variant) -> AvrDeviceSpec {
             pin(6, "PB3", Some(3), PinKind::Io, [s(&["RESET"]), adc(3), s(&["PCINT3"])].concat()),
         ],
         gpio_count: 4,
-        gpio_port_name: "B".into(),
         has_adc: v.has_adc,
         clock: ClockSpec { internal_hz: 8_000_000.0, slow_hz: 128_000.0, default_prescale_log2: 3 },
         vcc: 5.0,

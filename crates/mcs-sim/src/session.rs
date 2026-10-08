@@ -41,6 +41,7 @@ pub struct Session {
     trace_sent: u64,
     flash_version: u64,
     flash_sent: u64,
+    eeprom_sent: u64,
     /// (file << 20 | line) per word address at statement starts, -1 elsewhere.
     line_key: Vec<i32>,
     breakpoints: Vec<u32>,
@@ -74,6 +75,7 @@ impl Session {
             trace_sent: 0,
             flash_version: 0,
             flash_sent: u64::MAX,
+            eeprom_sent: u64::MAX,
             line_key: Vec::new(),
             breakpoints: Vec::new(),
             pending_stop: None,
@@ -165,6 +167,19 @@ impl Session {
                 self.publish_if_idle();
             }
             Command::SetProfiling { enabled } => self.m().set_profiling(enabled),
+            Command::SetSerial { config } => {
+                self.m().set_serial(config);
+                self.publish_if_idle();
+            }
+            Command::SerialSend { bytes } => self.m().serial_send(&bytes),
+            Command::WriteEeprom { addr, value } => {
+                let m = self.m();
+                if let Some(c) = m.cpu.eeprom.get_mut(addr as usize) {
+                    *c = value;
+                    m.cpu.eeprom_version += 1;
+                }
+                self.publish_if_idle();
+            }
             Command::WriteData { addr, value } => {
                 self.m().poke_data(addr, value);
                 self.publish_if_idle();
@@ -187,8 +202,11 @@ impl Session {
                 }
                 self.publish_if_idle();
             }
-            Command::WriteFuse { value } => {
-                self.m().cpu.fuse = value;
+            Command::WriteFuse { index, value } => {
+                let m = self.m();
+                if let Some(f) = m.cpu.fuses.get_mut(index) {
+                    *f = value;
+                }
                 self.m().power_on();
                 self.stop(StopInfo { reason: StopKind::Reset, pc: 0, message: None });
             }
@@ -216,6 +234,7 @@ impl Session {
         self.program = program;
         self.trace_sent = 0;
         self.flash_version += 1;
+        self.eeprom_sent = u64::MAX;
         self.build_line_map();
         self.apply_breakpoints();
         self.stop(StopInfo { reason: StopKind::Load, pc: 0, message: None });
@@ -466,7 +485,7 @@ impl Session {
 
     pub fn publish(&mut self) {
         let running = self.running;
-        let (trace_sent, flash_version, flash_sent) = (self.trace_sent, self.flash_version, self.flash_sent);
+        let (trace_sent, flash_version, flash_sent, eeprom_sent) = (self.trace_sent, self.flash_version, self.flash_sent, self.eeprom_sent);
         let now = now_ms();
         let (sample_t, sample_c, sample_hz) = self.speed_sample;
         let Some(m) = self.machine.as_mut() else { return };
@@ -481,11 +500,27 @@ impl Session {
             None
         };
         let flash = (flash_sent != flash_version).then(|| m.cpu.flash.clone());
+        let eeprom_version = m.cpu.eeprom_version;
+        let eeprom = (eeprom_sent != eeprom_version).then(|| m.cpu.eeprom.clone());
+        let serial = std::mem::take(&mut m.sys.serial_out);
+        let serial_config = m.serial_config();
         let pins = m
             .sys
             .pins
             .iter()
-            .map(|p| PinState { level: p.level, dir: p.dir, out: p.out, pullup: p.pullup, ov_enable: p.ov_enable, ext: p.ext, ext_volts: p.ext_volts, volts: p.volts, reserved: p.reserved, gen: p.gen })
+            .map(|p| PinState {
+                level: p.level,
+                dir: p.effective_dir(),
+                out: p.out,
+                pullup: p.pullup,
+                ov_enable: p.ov_enable,
+                ext: p.ext,
+                ext_volts: p.ext_volts,
+                volts: p.volts,
+                reserved: p.reserved,
+                reserved_by: p.reserved_by,
+                gen: p.gen,
+            })
             .collect();
         let peripherals = m.inspect_peripherals().into_iter().map(|(name, values)| PeripheralInfo { name, values }).collect();
         let stack = &m.cpu.shadow_stack;
@@ -506,7 +541,10 @@ impl Session {
             data,
             flash,
             flash_version,
-            fuse: m.cpu.fuse,
+            fuses: m.cpu.fuses.clone(),
+            eeprom,
+            serial,
+            serial_config,
             lock: m.cpu.lock_bits,
             pins,
             vcc: m.sys.vcc,
@@ -524,6 +562,7 @@ impl Session {
             self.speed_sample = s;
         }
         self.published_cycles = state.cycles;
+        self.eeprom_sent = eeprom_version;
         self.trace_sent = new_trace_sent;
         self.flash_sent = flash_version;
         self.last_publish = now;

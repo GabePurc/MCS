@@ -1,24 +1,47 @@
-//! External interrupt INTn (edge/level) and pin-change interrupt (PCINT) controller.
+//! External interrupts INTn (level / edge) and pin-change interrupt groups (PCINTn).
+//! Register layouts differ per family (EICRA/EIMSK/EIFR + PCICR/PCIFR/PCMSKn on the ATtiny10 and
+//! the ATmegas; MCUCR.ISC0 + GIMSK/GIFR + PCMSK on the ATtiny85), so every bit is configured.
+//! Sources: Atmel-8127H section 9, DS40002061B section 13, Atmel-2586Q section 9.
 
 use crate::avr::machine::{Cx, Peripheral, Trigger};
 
+/// One INTn input.
+#[derive(Clone)]
+pub struct IntSpec {
+    pub gpio: u8,
+    pub vector: u8,
+    /// Interrupt sense control field: register and the field's lowest bit position.
+    pub isc_reg: u16,
+    pub isc_shift: u8,
+    pub mask_reg: u16,
+    pub mask_bit: u8,
+    pub flag_reg: u16,
+    pub flag_bit: u8,
+}
+
+/// One pin-change group (PCINTn vector).
+#[derive(Clone)]
+pub struct PcGroupSpec {
+    /// GPIO index per PCMSK bit.
+    pub gpios: Vec<u8>,
+    pub msk_reg: u16,
+    pub vector: u8,
+    pub enable_reg: u16,
+    pub enable_bit: u8,
+    pub flag_reg: u16,
+    pub flag_bit: u8,
+}
+
 pub struct ExtIntConfig {
-    pub eicra: u16,
-    pub eimsk: u16,
-    pub eifr: u16,
-    pub pcicr: u16,
-    pub pcifr: u16,
-    pub pcmsk: u16,
-    pub int0_gpio: u8,
-    pub int0_vector: u8,
-    pub pc_vector: u8,
-    /// GPIO index for PCMSK bit 0..n.
-    pub pc_gpios: Vec<u8>,
+    pub ints: Vec<IntSpec>,
+    pub groups: Vec<PcGroupSpec>,
+    /// Registers this peripheral owns: (address, writable mask, write-one-to-clear flag register).
+    pub owned: Vec<(u16, u8, bool)>,
 }
 
 pub struct ExtInt {
     c: ExtIntConfig,
-    /// clk_IO halted (power-down/standby/ADC-NR): INT0 edges are not detected.
+    /// clk_IO halted (power-down/standby/ADC-NR): INTn edges are not detected.
     io_clock_stopped: bool,
 }
 
@@ -28,17 +51,29 @@ impl ExtInt {
     }
 
     pub fn registers(&self) -> Vec<(u16, u8)> {
-        vec![(self.c.eicra, 0), (self.c.eimsk, 0), (self.c.eifr, 0xff), (self.c.pcicr, 0), (self.c.pcifr, 0xff)]
+        self.c.owned.iter().map(|&(a, _, w1c)| (a, if w1c { 0xff } else { 0 })).collect()
+    }
+
+    pub fn vectors(&self) -> Vec<Option<u8>> {
+        self.c.ints.iter().map(|i| Some(i.vector)).chain(self.c.groups.iter().map(|g| Some(g.vector))).collect()
+    }
+
+    fn isc(&self, i: &IntSpec, cx: &Cx) -> u8 {
+        (cx.cpu.data[i.isc_reg as usize] >> i.isc_shift) & 3
     }
 
     fn update(&self, cx: &mut Cx) {
-        let d = &cx.cpu.data;
-        let isc = d[self.c.eicra as usize] & 3;
-        let int0 = d[self.c.eimsk as usize] & 1 != 0
-            && if isc == 0 { cx.sys.pins[self.c.int0_gpio as usize].level == 0 } else { d[self.c.eifr as usize] & 1 != 0 };
-        let pc = d[self.c.pcicr as usize] & 1 != 0 && d[self.c.pcifr as usize] & 1 != 0;
-        cx.cpu.set_irq(self.c.int0_vector, int0);
-        cx.cpu.set_irq(self.c.pc_vector, pc);
+        for i in &self.c.ints {
+            let d = &cx.cpu.data;
+            let enabled = d[i.mask_reg as usize] & i.mask_bit != 0;
+            let pending = if self.isc(i, cx) == 0 { cx.sys.pins[i.gpio as usize].level == 0 } else { d[i.flag_reg as usize] & i.flag_bit != 0 };
+            cx.cpu.set_irq(i.vector, enabled && pending);
+        }
+        for g in &self.c.groups {
+            let d = &cx.cpu.data;
+            let p = d[g.enable_reg as usize] & g.enable_bit != 0 && d[g.flag_reg as usize] & g.flag_bit != 0;
+            cx.cpu.set_irq(g.vector, p);
+        }
     }
 }
 
@@ -48,48 +83,63 @@ impl Peripheral for ExtInt {
     }
 
     fn write(&mut self, addr: u16, v: u8, cx: &mut Cx) {
-        let d = &mut cx.cpu.data;
-        let a = addr as usize;
-        if addr == self.c.eifr || addr == self.c.pcifr {
-            d[a] &= !v; // write one to clear
-        } else if addr == self.c.eicra {
-            d[a] = v & 3;
+        let Some(&(_, mask, w1c)) = self.c.owned.iter().find(|o| o.0 == addr) else { return };
+        let d = &mut cx.cpu.data[addr as usize];
+        if w1c {
+            *d &= !v;
         } else {
-            d[a] = v & 1;
+            *d = v & mask;
         }
         self.update(cx);
     }
 
     fn ack(&mut self, vector: u8, cx: &mut Cx) {
-        let d = &mut cx.cpu.data;
-        if vector == self.c.int0_vector {
-            if d[self.c.eicra as usize] & 3 != 0 {
-                d[self.c.eifr as usize] &= !1;
+        if let Some(i) = self.c.ints.iter().find(|i| i.vector == vector) {
+            // Level interrupts have no flag; edge flags clear when the vector executes.
+            if self.isc(i, cx) != 0 {
+                cx.cpu.data[i.flag_reg as usize] &= !i.flag_bit;
             }
-        } else {
-            d[self.c.pcifr as usize] &= !1;
+        } else if let Some(g) = self.c.groups.iter().find(|g| g.vector == vector) {
+            cx.cpu.data[g.flag_reg as usize] &= !g.flag_bit;
         }
         self.update(cx);
     }
 
     fn on_pin(&mut self, pin: u8, level: u8, cycle: u64, cx: &mut Cx) {
-        let a = |r: u16| r as usize;
-        if pin == self.c.int0_gpio {
-            let isc = cx.cpu.data[a(self.c.eicra)] & 3;
+        let mut changed = false;
+        for (k, i) in self.c.ints.iter().enumerate() {
+            if pin != i.gpio {
+                continue;
+            }
+            let isc = self.isc(i, cx);
             if isc == 0 {
-                self.update(cx);
+                changed = true;
             } else if !self.io_clock_stopped && (isc == 1 || (isc == 2 && level == 0) || (isc == 3 && level == 1)) {
-                cx.cpu.data[a(self.c.eifr)] |= 1;
-                cx.sys.trigger(Trigger::Int0, 1, cycle);
-                self.update(cx);
+                cx.cpu.data[i.flag_reg as usize] |= i.flag_bit;
+                if k == 0 {
+                    cx.sys.trigger(Trigger::Int0, 1, cycle);
+                }
+                changed = true;
             }
         }
-        if let Some(bit) = self.c.pc_gpios.iter().position(|&g| g == pin) {
-            if cx.cpu.data[a(self.c.pcmsk)] & (1 << bit) != 0 {
-                cx.cpu.data[a(self.c.pcifr)] |= 1;
-                cx.sys.trigger(Trigger::PcInt, 1, cycle);
-                self.update(cx);
+        for g in &self.c.groups {
+            if let Some(bit) = g.gpios.iter().position(|&x| x == pin) {
+                if cx.cpu.data[g.msk_reg as usize] & (1 << bit) != 0 {
+                    cx.cpu.data[g.flag_reg as usize] |= g.flag_bit;
+                    cx.sys.trigger(Trigger::PcInt, 1, cycle);
+                    changed = true;
+                }
             }
+        }
+        if changed {
+            self.update(cx);
+        }
+    }
+
+    fn on_reg_written(&mut self, addr: u16, cx: &mut Cx) {
+        // ISC bits living in a register owned elsewhere (ATtiny85 MCUCR).
+        if self.c.ints.iter().any(|i| i.isc_reg == addr) {
+            self.update(cx);
         }
     }
 

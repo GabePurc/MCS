@@ -175,8 +175,11 @@ impl Peripheral for System {
 
 pub struct WatchdogConfig {
     pub wdtcsr: u16,
+    /// Reset flag register (RSTFLR / MCUSR).
     pub rstflr: u16,
     pub vector: u8,
+    /// Classic AVRs protect WDE/WDP with the WDCE timed sequence instead of CCP.
+    pub wdce: bool,
 }
 
 const WDIF: u8 = 0x80;
@@ -185,14 +188,18 @@ const WDE: u8 = 0x08;
 const WDT_OSC_HZ: f64 = 128_000.0;
 const EV_TIMEOUT: u8 = 0;
 
+const WDCE: u8 = 0x10;
+
 pub struct Watchdog {
     c: WatchdogConfig,
     start_time: f64,
+    /// End of the WDCE change-enable window (inclusive cycle).
+    wdce_until: u64,
 }
 
 impl Watchdog {
     pub fn new(c: WatchdogConfig) -> Self {
-        Self { c, start_time: 0.0 }
+        Self { c, start_time: 0.0, wdce_until: 0 }
     }
 
     pub fn registers(&self) -> Vec<(u16, u8)> {
@@ -251,16 +258,28 @@ impl Peripheral for Watchdog {
         let old = cx.cpu.data[a];
         let mut nv = (old & WDIF & !v) | (v & WDIE);
         const PROTECTED: u8 = 0x2f; // WDP3, WDE, WDP2:0
-        if cx.now() <= cx.sys.ccp_until {
+        let now = cx.now();
+        let unlocked = if self.c.wdce { now <= self.wdce_until && v & WDCE == 0 } else { now <= cx.sys.ccp_until };
+        if unlocked {
             nv |= v & PROTECTED;
+            self.wdce_until = 0;
         } else {
             nv |= old & PROTECTED;
             if v & WDE != 0 {
                 nv |= WDE; // enabling is always allowed
             }
-            let blocked = (v ^ old) & 0x27 != 0 || (old & WDE != 0 && v & WDE == 0);
-            if blocked {
-                cx.warn("ccp-wdt", "WDTCSR: clearing WDE or changing WDP requires the CCP unlock sequence (0xD8 to CCP)");
+            if self.c.wdce && v & (WDCE | WDE) == WDCE | WDE {
+                // Timed sequence step 1: changes are allowed for the next four cycles.
+                self.wdce_until = now + 4;
+            } else {
+                let blocked = (v ^ old) & 0x27 != 0 || (old & WDE != 0 && v & WDE == 0);
+                if blocked {
+                    if self.c.wdce {
+                        cx.warn("wdce-wdt", "WDTCSR: clearing WDE or changing WDP needs the timed sequence (write WDCE|WDE, then the new value within 4 cycles)");
+                    } else {
+                        cx.warn("ccp-wdt", "WDTCSR: clearing WDE or changing WDP requires the CCP unlock sequence (0xD8 to CCP)");
+                    }
+                }
             }
         }
         cx.cpu.data[a] = nv;
@@ -302,6 +321,7 @@ impl Peripheral for Watchdog {
 
     fn reset(&mut self, cx: &mut Cx) {
         self.start_time = cx.time_seconds();
+        self.wdce_until = 0;
         self.refresh_wde(cx);
         self.schedule(cx);
         self.update_irq(cx);

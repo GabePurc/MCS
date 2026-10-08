@@ -48,6 +48,8 @@ pub enum PinKind {
     Io,
     Vcc,
     Gnd,
+    /// Analog reference / analog supply (AREF, AVCC).
+    Ref,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -62,11 +64,67 @@ pub struct PinSpec {
     pub functions: Vec<String>,
 }
 
+/// A fuse bit or multi-bit field (contiguous mask). Programmed = 0, like the datasheets.
 #[derive(Clone, Debug, Serialize)]
 pub struct FuseBitSpec {
     pub name: String,
     pub mask: u8,
     pub desc: String,
+}
+
+/// One fuse byte (tiny10: the single configuration byte; classic AVRs: low/high/extended).
+#[derive(Clone, Debug, Serialize)]
+pub struct FuseByteSpec {
+    pub name: String,
+    /// Factory (erased-chip) value.
+    pub default: u8,
+    pub bits: Vec<FuseBitSpec>,
+}
+
+/// Canonical sleep modes. `Machine` passes `kind as u8` to the peripherals.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum SleepKind {
+    Idle = 0,
+    AdcNoiseReduction = 1,
+    PowerDown = 2,
+    PowerSave = 3,
+    Standby = 4,
+    ExtendedStandby = 5,
+}
+
+impl SleepKind {
+    pub const COUNT: usize = 6;
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Idle => "Idle",
+            Self::AdcNoiseReduction => "ADC Noise Reduction",
+            Self::PowerDown => "Power-down",
+            Self::PowerSave => "Power-save",
+            Self::Standby => "Standby",
+            Self::ExtendedStandby => "Extended Standby",
+        }
+    }
+}
+
+/// Where SLEEP finds the enable bit and the mode bits.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SleepControl {
+    pub register: String,
+    pub se_mask: u8,
+    /// Mode field (contiguous mask).
+    pub sm_mask: u8,
+    /// Mode field value -> canonical mode (values not listed are reserved).
+    pub modes: Vec<(u8, SleepKind)>,
+}
+
+/// Boot loader section (classic ATmega): size in words per BOOTSZ field value.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BootSpec {
+    pub sizes_words: [u32; 4],
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -109,6 +167,10 @@ pub struct DieSpec {
 pub enum PeripheralSet {
     /// ATtiny4/5/9/10.
     TinyRc,
+    /// ATmega48/88/168/328 (P/PA).
+    MegaX8,
+    /// ATtiny25/45/85.
+    TinyX5,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -137,17 +199,17 @@ pub struct AvrDeviceSpec {
     pub signature: [u8; 3],
     /// Factory oscillator calibration byte.
     pub calibration: u8,
-    pub fuse_bits: Vec<FuseBitSpec>,
-    /// Erased/default fuse value (unprogrammed = 1 bits).
-    pub fuse_default: u8,
+    /// Fuse bytes in programming order (low, high, extended for classic AVRs).
+    pub fuses: Vec<FuseByteSpec>,
+    pub sleep: SleepControl,
+    pub boot: Option<BootSpec>,
     pub vectors: Vec<VectorSpec>,
     pub registers: Vec<IoRegisterSpec>,
     pub groups: Vec<PeripheralGroupSpec>,
     pub package: String,
     pub pins: Vec<PinSpec>,
-    /// Number of GPIO pins (PB0..PBn).
+    /// Number of GPIO pins (indices 0..n of `PinSpec::gpio`).
     pub gpio_count: u8,
-    pub gpio_port_name: String,
     pub has_adc: bool,
     pub clock: ClockSpec,
     /// Default supply voltage.
@@ -189,6 +251,29 @@ impl AvrDeviceSpec {
         self.vectors.iter().map(|v| v.index as usize + 1).max().unwrap_or(1)
     }
 
+    /// Fuse field (by name) and its fuse byte index.
+    pub fn fuse_field(&self, name: &str) -> Option<(usize, &FuseBitSpec)> {
+        self.fuses.iter().enumerate().find_map(|(i, b)| b.bits.iter().find(|f| f.name == name).map(|f| (i, f)))
+    }
+
+    /// Default fuse bytes.
+    pub fn fuse_defaults(&self) -> Vec<u8> {
+        self.fuses.iter().map(|f| f.default).collect()
+    }
+
+    /// GPIO names indexed by GPIO number ("PB0", "PC6"...).
+    pub fn gpio_names(&self) -> Vec<String> {
+        let mut names = vec![String::new(); self.gpio_count as usize];
+        for p in &self.pins {
+            if let Some(g) = p.gpio {
+                if let Some(n) = names.get_mut(g as usize) {
+                    *n = p.name.clone();
+                }
+            }
+        }
+        names
+    }
+
     /// Highest clock frequency allowed at `vcc` by the speed grades (0 when below all of them).
     pub fn max_hz_at(&self, vcc: f64) -> f64 {
         self.speed_grades.iter().filter(|g| vcc + 1e-9 >= g.1).map(|g| g.0).fold(0.0, f64::max)
@@ -217,4 +302,9 @@ pub fn bits_msb_first(names: &[Option<&str>], descs: &[(&str, &str)]) -> Vec<Bit
 
 pub fn field(name: &str, mask: u8, desc: &str) -> BitFieldSpec {
     BitFieldSpec { name: name.into(), mask, desc: desc.into() }
+}
+
+/// Value of a (possibly multi-bit) fuse field from fuse bytes.
+pub fn fuse_field_value(fuses: &[u8], byte: usize, f: &FuseBitSpec) -> u8 {
+    (fuses.get(byte).copied().unwrap_or(0xff) & f.mask) >> f.mask.trailing_zeros()
 }

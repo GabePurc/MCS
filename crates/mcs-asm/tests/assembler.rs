@@ -441,7 +441,9 @@ fn selects_the_device_from_include_or_device() {
     assert!(errors(&asm(".device ATmega9999\n"))[0].contains("unknown device"));
     assert!(errors(&asm("nop\n.device ATtiny4\n"))[0].contains("before any code"));
     assert!(errors(&asm(".device ATtiny4\n.device ATtiny5\n"))[0].contains("device already set to ATtiny4"));
-    assert!(errors(&asm(".include \"m328Pdef.inc\"\n"))[0].contains("is for an unsupported device"));
+    assert!(errors(&asm(".include \"m2560def.inc\"\n"))[0].contains("is for an unsupported device"));
+    // Supported classic parts select themselves.
+    assert_eq!(assemble(".include \"m328Pdef.inc\"\nnop\n", &opts).device_id, "atmega328p");
     // Re-selecting the default device is fine.
     assert!(asm(".device attiny10\n.include \"tn10def.inc\"\nnop\n").ok);
 }

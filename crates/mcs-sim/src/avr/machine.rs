@@ -15,7 +15,7 @@
 
 use std::collections::{HashSet, VecDeque};
 
-use mcs_core::avr::device::AvrDeviceSpec;
+use mcs_core::avr::device::{AvrDeviceSpec, SleepKind};
 use mcs_core::avr::isa::op;
 use mcs_core::program::LoadedProgram;
 use serde::Serialize;
@@ -50,15 +50,25 @@ impl ResetSource {
 /// Peripheral-to-peripheral trigger signals (ADC auto trigger, comparator capture...).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Trigger {
+    /// Analog comparator interrupt flag set.
     Ac,
     Int0,
-    Tc0CompA,
-    Tc0Ovf,
-    Tc0CompB,
     PcInt,
-    Tc0Capt,
+    /// Timer `n` events (flag set).
+    TimerCompA(u8),
+    TimerCompB(u8),
+    TimerOvf(u8),
+    TimerCapt(u8),
     /// Analog comparator output changed (value in the event).
     AcOutput,
+    /// ACIC changed: value 1 routes the comparator output to the input capture unit.
+    AcCapture,
+    /// Prescaler reset (GTCCR PSRx): value = prescaler group mask.
+    PrescalerReset,
+    /// Timer synchronization mode (GTCCR.TSM): value 1 halts the timers.
+    TimerSync,
+    /// GTCCR force-compare strobes (ATtiny85 FOC1A/FOC1B): value = written bits.
+    GtccrStrobe,
 }
 
 /// Broadcast events, processed after the peripheral call that produced them.
@@ -69,6 +79,8 @@ pub enum Event {
     Trigger { trigger: Trigger, value: u8, cycle: u64 },
     /// New PRR value.
     PowerReduction(u8),
+    /// A register shared between peripherals was written by its owner (data address).
+    RegWritten(u16),
     ClockChanged,
     VccChanged,
 }
@@ -95,12 +107,19 @@ pub struct Sys {
     pub reset_request: Option<ResetSource>,
     /// GPIO acting as RESET (or None).
     pub reset_pin: Option<usize>,
+    /// The MCU is held in reset (RESET pin low or brown-out); see `refresh_reset_held`.
     pub reset_held: bool,
+    /// RESET pin is low.
+    pub reset_pin_low: bool,
+    /// Brown-out detector holds the MCU in reset.
+    pub brown_out: bool,
     pub last_reset: ResetSource,
     /// Configuration Change Protection window end (inclusive cycle).
     pub ccp_until: u64,
-    /// External clock frequency (CLKMSR = external).
+    /// External clock / crystal frequency (used when the clock source selects it).
     pub ext_clock_hz: f64,
+    /// Bytes decoded by the Serial Monitor since the last state snapshot.
+    pub serial_out: Vec<u8>,
 }
 
 impl Sys {
@@ -155,14 +174,20 @@ impl Sys {
             self.events.push_back(Event::Analog { pin: i as u8 });
         }
         if Some(i) == self.reset_pin {
-            if level == 0 && !self.reset_held {
-                self.reset_held = true;
+            if level == 0 && !self.reset_pin_low {
+                self.reset_pin_low = true;
                 self.reset_request = Some(ResetSource::External);
-            } else if level != 0 && self.reset_held {
-                self.reset_held = false;
+            } else if level != 0 && self.reset_pin_low {
+                self.reset_pin_low = false;
                 self.message(cycle, "info", "External RESET released");
             }
+            self.refresh_reset_held();
         }
+    }
+
+    /// Recomputes `reset_held` from its sources (RESET pin, brown-out detector).
+    pub fn refresh_reset_held(&mut self) {
+        self.reset_held = self.reset_pin_low || self.brown_out;
     }
 
     pub fn trigger(&mut self, trigger: Trigger, value: u8, cycle: u64) {
@@ -203,7 +228,17 @@ impl Cx<'_> {
 
     /// Fuse bit (by name) is programmed (= 0).
     pub fn fuse_programmed(&self, name: &str) -> bool {
-        self.cpu.spec.fuse_bits.iter().find(|f| f.name == name).is_some_and(|f| self.cpu.fuse & f.mask == 0)
+        self.cpu.fuse_programmed(name)
+    }
+
+    /// Value of a multi-bit fuse field (e.g. CKSEL, BODLEVEL); None when the device has none.
+    pub fn fuse_value(&self, name: &str) -> Option<u8> {
+        self.cpu.fuse_value(name)
+    }
+
+    /// Broadcasts that a register other peripherals depend on was written.
+    pub fn reg_written(&mut self, addr: u16) {
+        self.sys.events.push_back(Event::RegWritten(addr));
     }
 }
 
@@ -231,6 +266,8 @@ pub trait Peripheral: Send {
     fn on_analog(&mut self, pin: u8, cx: &mut Cx) {}
     fn on_trigger(&mut self, trigger: Trigger, value: u8, cycle: u64, cx: &mut Cx) {}
     fn on_power_reduction(&mut self, prr: u8, cx: &mut Cx) {}
+    /// A shared register owned by another peripheral was written (see `Event::RegWritten`).
+    fn on_reg_written(&mut self, addr: u16, cx: &mut Cx) {}
     fn on_clock_change(&mut self, cx: &mut Cx) {}
     /// The frequency of the external clock source (CLKI) changed.
     fn on_ext_clock(&mut self, cx: &mut Cx) {}
@@ -253,9 +290,12 @@ pub struct Machine {
     pub cpu: Cpu,
     pub sys: Sys,
     pub periphs: Vec<Box<dyn Peripheral>>,
-    smcr: Option<u16>,
+    /// Sleep control register (data address), SE mask, SM mask and mode table.
+    sleep_reg: Option<u16>,
     /// Index of the test-bench signal generator peripheral (see `peripherals::stimulus`).
     pub(crate) stimulus: Option<u8>,
+    /// Index of the Serial Monitor's serial port (see `peripherals::serial`).
+    pub(crate) serial: Option<u8>,
     /// Optional per-instruction predicate used for stepping; returns true to stop before executing.
     pub step_predicate: Option<StepPredicate>,
 }
@@ -263,7 +303,7 @@ pub struct Machine {
 impl Machine {
     pub fn new(spec: &'static AvrDeviceSpec) -> Self {
         let hz = spec.clock.internal_hz / (1u32 << spec.clock.default_prescale_log2) as f64;
-        let pins = (0..spec.gpio_count).map(|i| Pin::new(format!("P{}{}", spec.gpio_port_name, i))).collect();
+        let pins = spec.gpio_names().into_iter().map(Pin::new).collect();
         let mut m = Self {
             spec,
             cpu: Cpu::new(spec),
@@ -279,13 +319,17 @@ impl Machine {
                 reset_request: None,
                 reset_pin: None,
                 reset_held: false,
+                reset_pin_low: false,
+                brown_out: false,
                 last_reset: ResetSource::PowerOn,
                 ccp_until: 0,
                 ext_clock_hz: 8_000_000.0,
+                serial_out: Vec::new(),
             },
             periphs: Vec::new(),
-            smcr: spec.register("SMCR").map(|r| r.addr),
+            sleep_reg: spec.register(&spec.sleep.register).map(|r| r.addr),
             stimulus: None,
+            serial: None,
             step_predicate: None,
         };
         let sreg = spec.reg("SREG");
@@ -357,6 +401,7 @@ impl Machine {
                     Event::Analog { pin } => p.on_analog(pin, cx),
                     Event::Trigger { trigger, value, cycle } => p.on_trigger(trigger, value, cycle, cx),
                     Event::PowerReduction(v) => p.on_power_reduction(v, cx),
+                    Event::RegWritten(a) => p.on_reg_written(a, cx),
                     Event::ClockChanged => p.on_clock_change(cx),
                     Event::VccChanged => p.on_vcc_change(cx),
                 }
@@ -484,7 +529,7 @@ impl Machine {
                 return self.cpu.lock_bits;
             }
             if addr == n.config {
-                return self.cpu.fuse;
+                return self.cpu.fuses.first().copied().unwrap_or(0xff);
             }
             if addr == n.calibration {
                 return s.calibration;
@@ -546,6 +591,32 @@ impl Machine {
                 }
             });
         }
+    }
+
+    fn with_serial(&mut self, f: impl FnOnce(&mut peripherals::serial::SerialBridge, &mut Cx)) {
+        if let Some(idx) = self.serial {
+            self.call(idx, |p, cx| {
+                if let Some(s) = p.as_any_mut().downcast_mut::<peripherals::serial::SerialBridge>() {
+                    f(s, cx);
+                }
+            });
+        }
+    }
+
+    /// Serial Monitor line settings (monitored and driven pins, baud rate, frame format).
+    pub fn set_serial(&mut self, cfg: peripherals::serial::SerialConfig) {
+        self.with_serial(|s, cx| s.configure(cfg, cx));
+    }
+
+    pub fn serial_config(&mut self) -> peripherals::serial::SerialConfig {
+        let mut out = peripherals::serial::SerialConfig::default();
+        self.with_serial(|s, _| out = s.config());
+        out
+    }
+
+    /// Sends bytes from the Serial Monitor into the injection pin.
+    pub fn serial_send(&mut self, bytes: &[u8]) {
+        self.with_serial(|s, cx| s.send(bytes, cx));
     }
 
     /// Frequency of the external clock input (used when the clock source selects it).
@@ -613,13 +684,40 @@ impl Machine {
 
     pub fn load(&mut self, program: &LoadedProgram) {
         self.cpu.load_flash(&program.flash);
-        if let Some(f) = program.fuses.as_ref().and_then(|f| f.first()) {
-            self.cpu.fuse = *f;
+        if let Some(f) = program.fuses.as_ref() {
+            for (i, &b) in f.iter().enumerate().take(self.cpu.fuses.len()) {
+                self.cpu.fuses[i] = b;
+            }
         }
         if let Some(l) = program.lock.as_ref().and_then(|l| l.first()) {
             self.cpu.lock_bits = *l;
         }
+        // Programming erases the EEPROM unless EESAVE is programmed; .eseg data is written.
+        let keep = self.fuse_programmed("EESAVE");
+        match program.eeprom.as_ref() {
+            Some(e) => {
+                if !keep {
+                    self.cpu.eeprom.fill(0xff);
+                }
+                let n = e.len().min(self.cpu.eeprom.len());
+                self.cpu.eeprom[..n].copy_from_slice(&e[..n]);
+            }
+            None if !keep => self.cpu.eeprom.fill(0xff),
+            None => {}
+        }
+        self.cpu.eeprom_version += 1;
         self.power_on();
+    }
+
+    pub fn fuse_programmed(&self, name: &str) -> bool {
+        self.cpu.fuse_programmed(name)
+    }
+
+    /// Word address the CPU starts at: the boot loader section when BOOTRST is programmed.
+    pub fn boot_start(&self) -> Option<u32> {
+        let boot = self.spec.boot.as_ref()?;
+        let sz = self.cpu.fuse_value("BOOTSZ")? as usize;
+        Some(self.cpu.flash_words - boot.sizes_words[sz.min(3)])
     }
 
     pub fn power_on(&mut self) {
@@ -628,6 +726,8 @@ impl Machine {
         self.sys.trace.clear();
         self.sys.sched.clear();
         self.sys.reset_held = false;
+        self.sys.reset_pin_low = false;
+        self.sys.brown_out = false;
         self.reset(ResetSource::PowerOn);
         let m = self.sys.levels_mask();
         self.sys.trace.record(0, m);
@@ -636,6 +736,7 @@ impl Machine {
     pub fn reset(&mut self, source: ResetSource) {
         let power_on = source == ResetSource::PowerOn;
         self.sys.last_reset = source;
+        self.cpu.reset_vector = if self.fuse_programmed("BOOTRST") { self.boot_start().unwrap_or(0) } else { 0 };
         self.cpu.reset(power_on);
         for r in &self.spec.registers {
             self.cpu.data[r.addr as usize] = r.reset;
@@ -826,7 +927,7 @@ impl Machine {
         let ret = self.cpu.pc;
         self.push_pc(ret);
         self.cpu.sreg &= !SREG_I;
-        self.cpu.pc = v as u32 * self.cpu.vector_words;
+        self.cpu.pc = (self.cpu.vector_base + v as u32 * self.cpu.vector_words) & self.cpu.pc_mask;
         self.cpu.cycles += 4;
         let target = self.cpu.pc;
         self.cpu.push_frame(ret, target, v as i16);
@@ -1163,9 +1264,19 @@ impl Machine {
             }
             op::SLEEP => {
                 self.cpu.pc = next;
-                let smcr = self.smcr.map(|a| self.cpu.data[a as usize]).unwrap_or(0);
-                if smcr & 1 != 0 {
-                    let mode = (smcr >> 1) & 7;
+                let reg = self.sleep_reg.map(|a| self.cpu.data[a as usize]).unwrap_or(0);
+                let sc = &self.spec.sleep;
+                if reg & sc.se_mask != 0 {
+                    let raw = (reg & sc.sm_mask) >> sc.sm_mask.trailing_zeros();
+                    let kind = match sc.modes.iter().find(|m| m.0 == raw) {
+                        Some(m) => m.1,
+                        None => {
+                            let (c, pc) = (self.cpu.cycles, self.cpu.pc * 2);
+                            self.sys.warn_key(c, "sleep-reserved", format!("SLEEP with a reserved sleep mode ({raw}) at PC 0x{pc:04X}: treated as Idle"));
+                            SleepKind::Idle
+                        }
+                    };
+                    let mode = kind as u8;
                     self.cpu.sleeping = true;
                     self.cpu.sleep_mode = mode;
                     self.broadcast(|p, cx| p.on_sleep(mode, cx));

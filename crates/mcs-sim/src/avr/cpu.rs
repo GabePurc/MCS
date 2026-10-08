@@ -4,7 +4,7 @@
 
 use std::sync::Arc;
 
-use mcs_core::avr::device::AvrDeviceSpec;
+use mcs_core::avr::device::{fuse_field_value, AvrDeviceSpec};
 use mcs_core::avr::isa::{self, feature, DecodeTable, OP_COUNT};
 use serde::Serialize;
 
@@ -72,8 +72,17 @@ pub struct Cpu {
     pub sram_start: u16,
     pub data_end: u16,
     pub io_base: u16,
-    pub fuse: u8,
+    /// Fuse bytes (see `AvrDeviceSpec::fuses`).
+    pub fuses: Vec<u8>,
     pub lock_bits: u8,
+    /// EEPROM contents (non-volatile: kept across resets and power cycles).
+    pub eeprom: Vec<u8>,
+    /// Bumped on every EEPROM change (the UI refreshes its copy).
+    pub eeprom_version: u64,
+    /// Word address of the reset vector (boot loader start when BOOTRST is programmed).
+    pub reset_vector: u32,
+    /// Word address of the interrupt vector table (moved to the boot section by IVSEL).
+    pub vector_base: u32,
 
     // Pre-decoded program (parallel arrays indexed by word address).
     pub(crate) ops: Vec<u8>,
@@ -141,8 +150,12 @@ impl Cpu {
             sram_start: spec.sram_start,
             data_end,
             io_base: spec.io_base,
-            fuse: spec.fuse_default,
+            fuses: spec.fuse_defaults(),
             lock_bits: 0xff,
+            eeprom: vec![0xff; spec.eeprom_size as usize],
+            eeprom_version: 0,
+            reset_vector: 0,
+            vector_base: 0,
             ops: vec![0; flash_words as usize],
             oa: vec![0; flash_words as usize],
             ob: vec![0; flash_words as usize],
@@ -226,6 +239,16 @@ impl Cpu {
         self.len[self.op_at(word_addr) as usize] as u32
     }
 
+    /// Fuse bit (by name) is programmed (= 0).
+    pub fn fuse_programmed(&self, name: &str) -> bool {
+        self.spec.fuse_field(name).is_some_and(|(i, f)| self.fuses.get(i).is_some_and(|b| b & f.mask == 0))
+    }
+
+    /// Value of a (multi-bit) fuse field, e.g. CKSEL or BODLEVEL.
+    pub fn fuse_value(&self, name: &str) -> Option<u8> {
+        self.spec.fuse_field(name).map(|(i, f)| fuse_field_value(&self.fuses, i, f))
+    }
+
     // ---------------------------------------------------------------------------------
     // Interrupts
     // ---------------------------------------------------------------------------------
@@ -270,7 +293,8 @@ impl Cpu {
 
     /// CPU part of a reset. I/O register reset values are applied by the machine.
     pub fn reset(&mut self, power_on: bool) {
-        self.pc = 0;
+        self.pc = self.reset_vector;
+        self.vector_base = 0;
         self.sreg = 0;
         self.sp = self.data_end - 1;
         self.irq_pending.fill(false);

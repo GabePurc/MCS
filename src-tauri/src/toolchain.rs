@@ -235,14 +235,49 @@ mod c_tests {
     use mcs_sim::session::Session;
 
     fn build(example: &str) -> Option<LoadedProgram> {
+        build_for(example, "attiny10")
+    }
+
+    fn build_for(example: &str, mcu: &str) -> Option<LoadedProgram> {
         detect(None)?;
         let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../examples");
         let source = std::fs::read_to_string(dir.join(example)).unwrap();
-        let r = compile(&CompileRequest { source: &source, file_name: example, dir: Some(dir), mcu: "attiny10", optimize: "Os", extra_flags: &[], gcc_path: None });
+        let r = compile(&CompileRequest { source: &source, file_name: example, dir: Some(dir), mcu, optimize: "Os", extra_flags: &[], gcc_path: None });
         let elf = r.elf.unwrap_or_else(|| panic!("{example} failed to compile:\n{}", r.output));
-        let out = mcs_api::program_from_elf(&elf, example, "attiny10", r.diagnostics, r.output);
+        let out = mcs_api::program_from_elf(&elf, example, mcu, r.diagnostics, r.output);
         assert!(out.ok, "{example}: {:#?}", out.diagnostics);
         out.program
+    }
+
+    #[test]
+    fn atmega328p_serial_c_talks_through_the_usart() {
+        let Some(p) = build_for("m328p_serial.c", "atmega328p") else { return eprintln!("avr-gcc not found: skipping") };
+        let mut m = Machine::new(devices::get("atmega328p").unwrap());
+        m.load(&p);
+        // TXD = PD1 (GPIO 16), RXD = PD0 (GPIO 15).
+        m.set_serial(mcs_sim::avr::peripherals::serial::SerialConfig { monitor: Some(16), inject: Some(15), baud: 9600.0, data_bits: 8, parity: 0, stop_bits: 1 });
+        m.run(100_000);
+        let text = String::from_utf8_lossy(&m.sys.serial_out).into_owned();
+        assert!(text.starts_with("Hello from the ATmega328P!"), "{text:?}");
+        m.sys.serial_out.clear();
+        m.serial_send(b"abc");
+        let c = m.cpu.cycles;
+        m.run(c + 50_000);
+        assert_eq!(m.sys.serial_out, b"abc");
+        assert_eq!(m.sys.pins[5].level, 1, "three key presses toggled the LED an odd number of times");
+    }
+
+    #[test]
+    fn attiny85_blink_c_uses_timer0_overflow() {
+        let Some(p) = build_for("t85_blink.c", "attiny85") else { return eprintln!("avr-gcc not found: skipping") };
+        let mut m = Machine::new(devices::get("attiny85").unwrap());
+        m.load(&p);
+        m.run(2_000_000);
+        let (_, c, l) = m.sys.trace.read_since(0, usize::MAX);
+        let e: Vec<u64> = (1..c.len()).filter(|&i| (l[i] ^ l[i - 1]) >> 3 & 1 == 1).map(|i| c[i]).collect();
+        assert!(e.len() >= 3, "{e:?}");
+        // 2 overflows of 256 x 1024 cycles per toggle.
+        assert_eq!(e[2] - e[1], 2 * 256 * 1024);
     }
 
     fn edges(m: &Machine) -> Vec<u64> {

@@ -1,48 +1,85 @@
-//! 16-bit Timer/Counter with all 16 waveform generation modes (normal, CTC, fast PWM, phase
-//! correct and phase & frequency correct PWM), two output compare units with pin outputs,
-//! input capture, external clock input and the shared TEMP register for 16-bit access.
+//! AVR Timer/Counter: the 16-bit timers (ATtiny10 Timer0, ATmega Timer1: 16 waveform generation
+//! modes, input capture, TEMP register) and the 8-bit ones (ATmega Timer0/Timer2, ATtiny85
+//! Timer0: 8 modes). Normal, CTC, fast PWM, phase correct and phase & frequency correct PWM,
+//! two output compare units with pin outputs, external clock input.
+//!
+//! Sources: Atmel-8127H ATtiny4/5/9/10 section 12, Atmel ATmega48A/PA/88A/PA/168A/PA/328/P
+//! (DS40002061B) sections 15-18, Atmel-2586Q ATtiny25/45/85 section 11.
 //!
 //! Event driven: the counter is advanced lazily ("synced") to the current cycle whenever
 //! software touches a register, and one scheduler event is armed for the next timer tick where
 //! something observable happens (compare match, TOP, BOTTOM, MAX). Between those ticks the count
 //! is linear, so syncing costs O(1) per event regardless of how many ticks elapsed.
+//! Interrupt flags live in the (possibly shared) TIFR register owned by `IrqFlags`.
 
 use crate::avr::machine::{Cx, Peripheral, Trigger};
+use crate::avr::peripherals::irqflags::update_irqs;
+
+/// Clock select divisors for CS2:0 = 0..7 (0 = stopped).
+pub type ClockSelect = [Clk; 8];
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Clk {
+    Stop,
+    Div(u32),
+    /// External pin, falling edge.
+    ExtFall,
+    /// External pin, rising edge.
+    ExtRise,
+}
+
+/// Timer0/Timer1 of the classic AVRs and the ATtiny10 Timer0.
+pub const CS_SYNC: ClockSelect = [Clk::Stop, Clk::Div(1), Clk::Div(8), Clk::Div(64), Clk::Div(256), Clk::Div(1024), Clk::ExtFall, Clk::ExtRise];
+/// ATmega Timer2 (no external clock pin, extra /32 and /128 taps).
+pub const CS_TIMER2: ClockSelect = [Clk::Stop, Clk::Div(1), Clk::Div(8), Clk::Div(32), Clk::Div(64), Clk::Div(128), Clk::Div(256), Clk::Div(1024)];
+
+/// Flag / enable bit masks in TIFRn / TIMSKn.
+#[derive(Clone, Copy)]
+pub struct TimerBits {
+    pub tov: u8,
+    pub ocfa: u8,
+    pub ocfb: u8,
+    /// 0 when the timer has no input capture unit.
+    pub icf: u8,
+}
 
 #[derive(Clone)]
-pub struct Timer16Config {
+pub struct TimerConfig {
     pub name: &'static str,
+    /// Timer number (registers names and trigger ids).
+    pub id: u8,
+    /// 16-bit timer (TEMP register, 16 modes, input capture).
+    pub wide: bool,
     pub tccr_a: u16,
     pub tccr_b: u16,
-    pub tccr_c: u16,
-    pub tcnt_l: u16,
-    pub tcnt_h: u16,
-    pub ocr_a_l: u16,
-    pub ocr_a_h: u16,
-    pub ocr_b_l: u16,
-    pub ocr_b_h: u16,
-    pub icr_l: u16,
-    pub icr_h: u16,
-    pub timsk: u16,
+    /// Register holding FOCnA / FOCnB (TCCRnC on 16-bit timers, TCCRnB on 8-bit ones).
+    pub foc_reg: u16,
+    pub tcnt: u16,
+    pub ocr_a: u16,
+    pub ocr_b: u16,
+    /// Input capture register (low byte address), 16-bit timers only.
+    pub icr: Option<u16>,
     pub tifr: u16,
-    pub gtccr: u16,
-    pub v_capt: u8,
+    pub timsk: u16,
+    pub bits: TimerBits,
     pub v_ovf: u8,
     pub v_comp_a: u8,
     pub v_comp_b: u8,
-    pub oc_a_gpio: usize,
-    pub oc_b_gpio: usize,
-    pub icp_gpio: u8,
-    pub t_gpio: u8,
+    pub v_capt: Option<u8>,
+    pub oc_a_gpio: Option<usize>,
+    pub oc_b_gpio: Option<usize>,
+    pub icp_gpio: Option<u8>,
+    pub t_gpio: Option<u8>,
+    pub clock: ClockSelect,
+    /// Prescaler group reset by GTCCR (Trigger::PrescalerReset mask).
+    pub prescaler_group: u8,
     /// PRR bit that stops this timer.
     pub prr_mask: u8,
+    /// Canonical sleep modes (bit per `SleepKind`) in which the timer keeps counting. Idle is
+    /// always included.
+    pub sleep_run: u8,
 }
 
-const TOV: u8 = 0x01;
-const OCFA: u8 = 0x02;
-const OCFB: u8 = 0x04;
-const ICF: u8 = 0x20;
-const PRESCALE: [i64; 8] = [0, 1, 8, 64, 256, 1024, -1, -1];
 const EV_TICK: u8 = 0;
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -54,21 +91,44 @@ enum Kind {
     Pfc,
 }
 
-const MODE_KIND: [Kind; 16] = [
-    Kind::Normal, Kind::Pc, Kind::Pc, Kind::Pc, Kind::Ctc, Kind::Fast, Kind::Fast, Kind::Fast,
-    Kind::Pfc, Kind::Pfc, Kind::Pc, Kind::Pc, Kind::Ctc, Kind::Normal, Kind::Fast, Kind::Fast,
-];
-/// TOP source per mode: 0 fixed, 1 OCRA, 2 ICR.
-const MODE_TOPSRC: [u8; 16] = [0, 0, 0, 0, 1, 0, 0, 0, 2, 1, 2, 1, 2, 0, 2, 1];
-const MODE_FIXTOP: [u32; 16] = [0xffff, 0xff, 0x1ff, 0x3ff, 0, 0xff, 0x1ff, 0x3ff, 0, 0, 0, 0, 0, 0xffff, 0, 0];
-const MODE_NAMES: [&str; 16] = [
-    "Normal", "PWM, Phase Correct, 8-bit", "PWM, Phase Correct, 9-bit", "PWM, Phase Correct, 10-bit", "CTC (TOP=OCR0A)",
-    "Fast PWM, 8-bit", "Fast PWM, 9-bit", "Fast PWM, 10-bit", "PWM, Phase & Freq Correct (TOP=ICR0)", "PWM, Phase & Freq Correct (TOP=OCR0A)",
-    "PWM, Phase Correct (TOP=ICR0)", "PWM, Phase Correct (TOP=OCR0A)", "CTC (TOP=ICR0)", "Reserved", "Fast PWM (TOP=ICR0)", "Fast PWM (TOP=OCR0A)",
-];
+struct Modes {
+    kind: &'static [Kind],
+    /// TOP source per mode: 0 fixed, 1 OCRA, 2 ICR.
+    topsrc: &'static [u8],
+    fixtop: &'static [u32],
+    names: &'static [&'static str],
+    /// Modes in which COMnA = 01 toggles OCnA on compare match.
+    toggle_a: &'static [usize],
+}
 
-pub struct Timer16 {
-    c: Timer16Config,
+const MODES16: Modes = Modes {
+    kind: &[
+        Kind::Normal, Kind::Pc, Kind::Pc, Kind::Pc, Kind::Ctc, Kind::Fast, Kind::Fast, Kind::Fast,
+        Kind::Pfc, Kind::Pfc, Kind::Pc, Kind::Pc, Kind::Ctc, Kind::Normal, Kind::Fast, Kind::Fast,
+    ],
+    topsrc: &[0, 0, 0, 0, 1, 0, 0, 0, 2, 1, 2, 1, 2, 0, 2, 1],
+    fixtop: &[0xffff, 0xff, 0x1ff, 0x3ff, 0, 0xff, 0x1ff, 0x3ff, 0, 0, 0, 0, 0, 0xffff, 0, 0],
+    names: &[
+        "Normal", "PWM, Phase Correct, 8-bit", "PWM, Phase Correct, 9-bit", "PWM, Phase Correct, 10-bit", "CTC (TOP=OCRnA)",
+        "Fast PWM, 8-bit", "Fast PWM, 9-bit", "Fast PWM, 10-bit", "PWM, Phase & Freq Correct (TOP=ICRn)", "PWM, Phase & Freq Correct (TOP=OCRnA)",
+        "PWM, Phase Correct (TOP=ICRn)", "PWM, Phase Correct (TOP=OCRnA)", "CTC (TOP=ICRn)", "Reserved", "Fast PWM (TOP=ICRn)", "Fast PWM (TOP=OCRnA)",
+    ],
+    toggle_a: &[9, 11, 15],
+};
+
+const MODES8: Modes = Modes {
+    kind: &[Kind::Normal, Kind::Pc, Kind::Ctc, Kind::Fast, Kind::Normal, Kind::Pc, Kind::Normal, Kind::Fast],
+    topsrc: &[0, 0, 1, 0, 0, 1, 0, 1],
+    fixtop: &[0xff, 0xff, 0, 0xff, 0xff, 0, 0xff, 0],
+    names: &["Normal", "PWM, Phase Correct", "CTC (TOP=OCRnA)", "Fast PWM", "Reserved", "PWM, Phase Correct (TOP=OCRnA)", "Reserved", "Fast PWM (TOP=OCRnA)"],
+    toggle_a: &[5, 7],
+};
+
+pub struct Timer {
+    c: TimerConfig,
+    m: &'static Modes,
+    max: u32,
+    irq_map: [(u8, u8); 4],
     tcnt: u32,
     dir: i32,
     ocr_a: u32,
@@ -79,8 +139,6 @@ pub struct Timer16 {
     temp: u8,
     tccr_a: u8,
     tccr_b: u8,
-    tifr: u8,
-    timsk: u8,
     tsm: bool,
     oc_a: u8,
     oc_b: u8,
@@ -89,18 +147,23 @@ pub struct Timer16 {
     last_sync: u64,
     /// Prescaler origin cycle (ticks happen at ps_base + k*N).
     ps_base: u64,
-    /// Clock divisor; 0 = stopped, -1 = external T0 pin.
-    n: i64,
+    clk: Clk,
     sleep_halted: bool,
     power_reduced: bool,
     halt_start: u64,
-    /// Set when the analog comparator output is routed to input capture (ACIC).
-    pub ac_capture: bool,
+    /// The analog comparator output is routed to input capture (ACIC).
+    ac_capture: bool,
 }
 
-impl Timer16 {
-    pub fn new(c: Timer16Config) -> Self {
+impl Timer {
+    pub fn new(c: TimerConfig) -> Self {
+        let m = if c.wide { &MODES16 } else { &MODES8 };
+        let b = c.bits;
+        let irq_map = [(b.tov, c.v_ovf), (b.ocfa, c.v_comp_a), (b.ocfb, c.v_comp_b), (b.icf, c.v_capt.unwrap_or(0))];
         Self {
+            max: if c.wide { 0xffff } else { 0xff },
+            m,
+            irq_map,
             c,
             tcnt: 0,
             dir: 1,
@@ -112,15 +175,13 @@ impl Timer16 {
             temp: 0,
             tccr_a: 0,
             tccr_b: 0,
-            tifr: 0,
-            timsk: 0,
             tsm: false,
             oc_a: 0,
             oc_b: 0,
             block_match: false,
             last_sync: 0,
             ps_base: 0,
-            n: 0,
+            clk: Clk::Stop,
             sleep_halted: false,
             power_reduced: false,
             halt_start: 0,
@@ -128,13 +189,25 @@ impl Timer16 {
         }
     }
 
-    /// Owned registers with their SBI/CBI read-clear masks.
+    /// Owned registers (TIFR/TIMSK belong to the flag register owner).
     pub fn registers(&self) -> Vec<(u16, u8)> {
         let c = &self.c;
-        vec![
-            (c.tccr_a, 0), (c.tccr_b, 0), (c.tccr_c, 0), (c.tcnt_l, 0), (c.tcnt_h, 0), (c.ocr_a_l, 0), (c.ocr_a_h, 0),
-            (c.ocr_b_l, 0), (c.ocr_b_h, 0), (c.icr_l, 0), (c.icr_h, 0), (c.timsk, 0), (c.tifr, 0xff), (c.gtccr, 0),
-        ]
+        let mut v = vec![(c.tccr_a, 0), (c.tccr_b, 0), (c.tcnt, 0), (c.ocr_a, 0), (c.ocr_b, 0)];
+        if c.wide {
+            v.extend([(c.tcnt + 1, 0), (c.ocr_a + 1, 0), (c.ocr_b + 1, 0)]);
+            if let Some(i) = c.icr {
+                v.extend([(i, 0), (i + 1, 0)]);
+            }
+        }
+        if c.foc_reg != c.tccr_b {
+            v.push((c.foc_reg, 0));
+        }
+        v
+    }
+
+    /// The (flag bit, vector) pairs of this timer, for its `IrqFlags` owner.
+    pub fn irq_map(&self) -> Vec<(u8, u8)> {
+        self.irq_map.iter().copied().filter(|e| e.0 != 0).collect()
     }
 
     // ------------------------------------------------------------------------------
@@ -142,17 +215,18 @@ impl Timer16 {
     // ------------------------------------------------------------------------------
 
     fn wgm(&self) -> usize {
-        (((self.tccr_b >> 1) & 0x0c) | (self.tccr_a & 0x03)) as usize
+        let hi = if self.c.wide { (self.tccr_b >> 1) & 0x0c } else { (self.tccr_b >> 1) & 0x04 };
+        (hi | (self.tccr_a & 0x03)) as usize
     }
 
     fn kind(&self) -> Kind {
-        MODE_KIND[self.wgm()]
+        self.m.kind[self.wgm()]
     }
 
     fn top(&self) -> u32 {
         let w = self.wgm();
-        match MODE_TOPSRC[w] {
-            0 => MODE_FIXTOP[w],
+        match self.m.topsrc[w] {
+            0 => self.m.fixtop[w],
             1 => self.ocr_a,
             _ => self.icr,
         }
@@ -162,8 +236,37 @@ impl Timer16 {
         matches!(self.kind(), Kind::Fast | Kind::Pc | Kind::Pfc)
     }
 
+    fn div(&self) -> u64 {
+        match self.clk {
+            Clk::Div(n) => n as u64,
+            _ => 0,
+        }
+    }
+
     fn running(&self) -> bool {
-        self.n > 0 && !self.sleep_halted && !self.power_reduced && !self.tsm
+        self.div() > 0 && !self.sleep_halted && !self.power_reduced && !self.tsm
+    }
+
+    fn external(&self) -> bool {
+        matches!(self.clk, Clk::ExtFall | Clk::ExtRise)
+    }
+
+    fn set_flags(&mut self, flags: u8, cycle: u64, cx: &mut Cx) {
+        let b = self.c.bits;
+        let mut data = 0u8;
+        for (bit, mine) in [(TOV, b.tov), (OCFA, b.ocfa), (OCFB, b.ocfb), (ICF, b.icf)] {
+            if flags & bit != 0 {
+                data |= mine;
+            }
+        }
+        cx.cpu.data[self.c.tifr as usize] |= data;
+        update_irqs(cx, self.c.tifr, self.c.timsk, &self.irq_map);
+        let id = self.c.id;
+        for (bit, t) in [(OCFA, Trigger::TimerCompA(id)), (OCFB, Trigger::TimerCompB(id)), (TOV, Trigger::TimerOvf(id)), (ICF, Trigger::TimerCapt(id))] {
+            if flags & bit != 0 {
+                cx.sys.trigger(t, 1, cycle);
+            }
+        }
     }
 
     // ------------------------------------------------------------------------------
@@ -176,7 +279,7 @@ impl Timer16 {
         let top = self.top();
         let (a, b) = (self.ocr_a, self.ocr_b);
         if self.dir > 0 || self.kind() < Kind::Pc {
-            let lim = if c <= top { top } else { 0xffff };
+            let lim = if c <= top { top } else { self.max };
             let mut d = lim - c + 1;
             if a >= c && a <= lim {
                 d = d.min(a - c + 1);
@@ -200,8 +303,9 @@ impl Timer16 {
         if n == 0 {
             return;
         }
-        let delta = (n as i64 * self.dir as i64).rem_euclid(0x10000);
-        self.tcnt = ((self.tcnt as i64 + delta) & 0xffff) as u32;
+        let span = self.max as i64 + 1;
+        let delta = (n as i64 * self.dir as i64).rem_euclid(span);
+        self.tcnt = ((self.tcnt as i64 + delta) & self.max as i64) as u32;
         self.block_match = false;
     }
 
@@ -209,8 +313,8 @@ impl Timer16 {
     fn tick_once(&mut self, cycle: u64, cx: &mut Cx) {
         let old = self.tcnt;
         let kind = self.kind();
-        let w = self.wgm();
         let top = self.top();
+        let max = self.max;
         let mut flags = 0u8;
         if !self.block_match {
             if old == self.ocr_a {
@@ -223,16 +327,16 @@ impl Timer16 {
             }
         }
         self.block_match = false;
-        let icr_top = MODE_TOPSRC[w] == 2;
+        let icr_top = self.m.topsrc[self.wgm()] == 2;
         match kind {
             Kind::Normal => {
-                if old == 0xffff {
+                if old == max {
                     flags |= TOV;
                 }
-                self.tcnt = (old + 1) & 0xffff;
+                self.tcnt = (old + 1) & max;
             }
             Kind::Ctc => {
-                if old == 0xffff {
+                if old == max {
                     flags |= TOV;
                 }
                 if old == top {
@@ -241,7 +345,7 @@ impl Timer16 {
                         flags |= ICF;
                     }
                 } else {
-                    self.tcnt = (old + 1) & 0xffff;
+                    self.tcnt = (old + 1) & max;
                 }
             }
             Kind::Fast => {
@@ -255,7 +359,7 @@ impl Timer16 {
                     self.ocr_b = self.ocr_b_buf;
                     self.bottom_output(cycle, cx);
                 } else {
-                    self.tcnt = (old + 1) & 0xffff;
+                    self.tcnt = (old + 1) & max;
                 }
             }
             Kind::Pc | Kind::Pfc => {
@@ -271,7 +375,7 @@ impl Timer16 {
                             self.ocr_b = self.ocr_b_buf;
                         }
                     } else {
-                        self.tcnt = (old + 1) & 0xffff;
+                        self.tcnt = (old + 1) & max;
                     }
                 } else if old == 0 {
                     self.dir = 1;
@@ -286,18 +390,11 @@ impl Timer16 {
                 }
             }
         }
+        if flags & ICF != 0 && self.c.bits.icf == 0 {
+            flags &= !ICF;
+        }
         if flags != 0 {
             self.set_flags(flags, cycle, cx);
-        }
-    }
-
-    fn set_flags(&mut self, flags: u8, cycle: u64, cx: &mut Cx) {
-        self.tifr |= flags;
-        self.update_irq(cx);
-        for (bit, t) in [(OCFA, Trigger::Tc0CompA), (OCFB, Trigger::Tc0CompB), (TOV, Trigger::Tc0Ovf), (ICF, Trigger::Tc0Capt)] {
-            if flags & bit != 0 {
-                cx.sys.trigger(t, 1, cycle);
-            }
         }
     }
 
@@ -309,7 +406,7 @@ impl Timer16 {
             self.last_sync = now;
             return;
         }
-        let n = self.n as u64;
+        let n = self.div();
         let mut k = (self.last_sync - self.ps_base) / n;
         let mut ticks = (now - self.ps_base) / n - k;
         while ticks > 0 {
@@ -331,7 +428,7 @@ impl Timer16 {
             cx.cancel(EV_TICK);
             return;
         }
-        let n = self.n as u64;
+        let n = self.div();
         let k = (self.last_sync - self.ps_base) / n;
         let at = self.ps_base + (k + self.distance()) * n;
         cx.schedule(EV_TICK, at);
@@ -349,9 +446,7 @@ impl Timer16 {
     fn output_enabled(&self, ch: usize) -> bool {
         match self.com(ch) {
             0 => false,
-            1 => {
-                matches!(self.kind(), Kind::Normal | Kind::Ctc) || (ch == 0 && matches!(self.wgm(), 9 | 11 | 15))
-            }
+            1 => matches!(self.kind(), Kind::Normal | Kind::Ctc) || (ch == 0 && self.m.toggle_a.contains(&self.wgm())),
             _ => true,
         }
     }
@@ -393,7 +488,7 @@ impl Timer16 {
     }
 
     fn apply_output(&mut self, ch: usize, cycle: u64, cx: &mut Cx) {
-        let gpio = if ch == 0 { self.c.oc_a_gpio } else { self.c.oc_b_gpio };
+        let Some(gpio) = (if ch == 0 { self.c.oc_a_gpio } else { self.c.oc_b_gpio }) else { return };
         let en = self.output_enabled(ch) as u8;
         let val = if ch == 0 { self.oc_a } else { self.oc_b };
         let p = &mut cx.sys.pins[gpio];
@@ -425,10 +520,10 @@ impl Timer16 {
     // ------------------------------------------------------------------------------
 
     fn reconfigure(&mut self, cx: &mut Cx) {
-        let new_n = PRESCALE[(self.tccr_b & 7) as usize];
-        if new_n != self.n {
+        let new_clk = self.c.clock[(self.tccr_b & 7) as usize];
+        if new_clk != self.clk {
             let was_running = self.running();
-            self.n = new_n;
+            self.clk = new_clk;
             if !was_running {
                 self.last_sync = cx.now();
             }
@@ -443,22 +538,19 @@ impl Timer16 {
         self.schedule(cx);
     }
 
-    fn write_gtccr(&mut self, v: u8, cx: &mut Cx) {
+    fn set_tsm(&mut self, tsm: bool, cx: &mut Cx) {
+        if tsm == self.tsm {
+            return;
+        }
         let now = cx.now();
         self.sync(now, cx);
-        let tsm = v & 0x80 != 0;
-        if v & 0x01 != 0 {
+        if tsm {
+            self.halt_start = now;
+        } else {
+            self.last_sync = now;
             self.ps_base = now;
         }
-        if tsm != self.tsm {
-            if tsm {
-                self.halt_start = now;
-            } else {
-                self.last_sync = now;
-                self.ps_base = now;
-            }
-            self.tsm = tsm;
-        }
+        self.tsm = tsm;
         self.schedule(cx);
     }
 
@@ -466,9 +558,9 @@ impl Timer16 {
     // Input capture
     // ------------------------------------------------------------------------------
 
-    pub fn capture_edge(&mut self, level: u8, cycle: u64, cx: &mut Cx) {
-        if MODE_TOPSRC[self.wgm()] == 2 {
-            return; // ICR used as TOP
+    fn capture_edge(&mut self, level: u8, cycle: u64, cx: &mut Cx) {
+        if self.c.icr.is_none() || self.m.topsrc[self.wgm()] == 2 {
+            return; // no capture unit / ICR used as TOP
         }
         let rising = self.tccr_b & 0x40 != 0;
         if (level == 1) != rising {
@@ -479,49 +571,44 @@ impl Timer16 {
         self.set_flags(ICF, cycle, cx);
     }
 
-    fn update_irq(&self, cx: &mut Cx) {
-        let f = self.tifr & self.timsk;
-        cx.cpu.set_irq(self.c.v_ovf, f & TOV != 0);
-        cx.cpu.set_irq(self.c.v_comp_a, f & OCFA != 0);
-        cx.cpu.set_irq(self.c.v_comp_b, f & OCFB != 0);
-        cx.cpu.set_irq(self.c.v_capt, f & ICF != 0);
-    }
-
-    fn read16(&self, addr: u16) -> Option<u32> {
+    /// 16-bit value behind a register address and whether it is the high byte.
+    fn reg16(&self, addr: u16) -> Option<(u32, bool)> {
         let c = &self.c;
-        if addr == c.tcnt_l || addr == c.tcnt_h {
-            Some(self.tcnt)
-        } else if addr == c.ocr_a_l || addr == c.ocr_a_h {
-            Some(self.ocr_a_buf)
-        } else if addr == c.ocr_b_l || addr == c.ocr_b_h {
-            Some(self.ocr_b_buf)
-        } else if addr == c.icr_l || addr == c.icr_h {
-            Some(self.icr)
+        let pair = |lo: u16| if addr == lo { Some(false) } else if c.wide && addr == lo + 1 { Some(true) } else { None };
+        if let Some(h) = pair(c.tcnt) {
+            Some((self.tcnt, h))
+        } else if let Some(h) = pair(c.ocr_a) {
+            Some((self.ocr_a_buf, h))
+        } else if let Some(h) = pair(c.ocr_b) {
+            Some((self.ocr_b_buf, h))
         } else {
-            None
+            c.icr.and_then(pair).map(|h| (self.icr, h))
         }
-    }
-
-    fn is_high(&self, addr: u16) -> bool {
-        let c = &self.c;
-        addr == c.tcnt_h || addr == c.ocr_a_h || addr == c.ocr_b_h || addr == c.icr_h
     }
 }
 
-impl Peripheral for Timer16 {
+// Internal flag bits (mapped to the device's TIFR layout in `set_flags`).
+const TOV: u8 = 0x01;
+const OCFA: u8 = 0x02;
+const OCFB: u8 = 0x04;
+const ICF: u8 = 0x20;
+
+impl Peripheral for Timer {
     fn name(&self) -> &str {
         self.c.name
     }
 
     fn read(&mut self, addr: u16, cx: &mut Cx) -> u8 {
         let now = cx.now();
-        if self.is_high(addr) {
-            return self.temp;
-        }
-        if let Some(v) = self.read16(addr) {
+        if let Some((_, high)) = self.reg16(addr) {
+            if high {
+                return self.temp;
+            }
             self.sync(now, cx);
-            let v = self.read16(addr).unwrap_or(v);
-            self.temp = (v >> 8) as u8;
+            let (v, _) = self.reg16(addr).unwrap_or((0, false));
+            if self.c.wide {
+                self.temp = (v >> 8) as u8;
+            }
             return v as u8;
         }
         self.peek(addr, cx)
@@ -530,45 +617,37 @@ impl Peripheral for Timer16 {
     fn peek(&mut self, addr: u16, cx: &mut Cx) -> u8 {
         let now = cx.now();
         self.sync(now, cx);
-        let c = &self.c;
-        if let Some(v) = self.read16(addr) {
-            return if self.is_high(addr) { (v >> 8) as u8 } else { v as u8 };
+        if let Some((v, high)) = self.reg16(addr) {
+            return if high { (v >> 8) as u8 } else { v as u8 };
         }
-        if addr == c.tifr {
-            self.tifr
-        } else if addr == c.timsk {
-            self.timsk
-        } else if addr == c.tccr_a {
+        if addr == self.c.tccr_a {
             self.tccr_a
-        } else if addr == c.tccr_b {
+        } else if addr == self.c.tccr_b {
             self.tccr_b
-        } else if addr == c.gtccr {
-            if self.tsm { 0x81 } else { 0 }
         } else {
-            0
+            0 // FOC strobes read as zero
         }
     }
 
     fn write(&mut self, addr: u16, v: u8, cx: &mut Cx) {
         let now = cx.now();
-        let c = &self.c;
-        if self.is_high(addr) {
-            self.temp = v;
-            return;
-        }
-        if self.read16(addr).is_some() {
+        if let Some((_, high)) = self.reg16(addr) {
+            if high {
+                self.temp = v;
+                return;
+            }
             self.sync(now, cx);
-            let val = ((self.temp as u32) << 8) | v as u32;
+            let val = if self.c.wide { ((self.temp as u32) << 8) | v as u32 } else { v as u32 };
             let c = &self.c;
-            if addr == c.tcnt_l {
+            if addr == c.tcnt {
                 self.tcnt = val;
                 self.block_match = true;
-            } else if addr == c.ocr_a_l {
+            } else if addr == c.ocr_a {
                 self.ocr_a_buf = val;
                 if !self.buffered() {
                     self.ocr_a = val;
                 }
-            } else if addr == c.ocr_b_l {
+            } else if addr == c.ocr_b {
                 self.ocr_b_buf = val;
                 if !self.buffered() {
                     self.ocr_b = val;
@@ -579,25 +658,19 @@ impl Peripheral for Timer16 {
             self.schedule(cx);
             return;
         }
-        if addr == c.tifr {
-            self.sync(now, cx);
-            self.tifr &= !v;
-            self.update_irq(cx);
-        } else if addr == c.timsk {
-            self.timsk = v & 0x27;
-            self.update_irq(cx);
-        } else if addr == c.tccr_a {
+        if addr == self.c.tccr_a {
             self.sync(now, cx);
             self.tccr_a = v & 0xf3;
             self.reconfigure(cx);
-        } else if addr == c.tccr_b {
+            return;
+        }
+        if addr == self.c.tccr_b {
             self.sync(now, cx);
-            self.tccr_b = v & 0xdf;
+            self.tccr_b = v & if self.c.wide { 0xdf } else { 0x0f };
             self.reconfigure(cx);
-        } else if addr == c.tccr_c {
+        }
+        if addr == self.c.foc_reg {
             self.force_compare(v, cx);
-        } else if addr == c.gtccr {
-            self.write_gtccr(v, cx);
         }
     }
 
@@ -606,39 +679,29 @@ impl Peripheral for Timer16 {
         self.schedule(cx);
     }
 
-    fn ack(&mut self, vector: u8, cx: &mut Cx) {
-        let now = cx.now();
-        self.sync(now, cx);
-        let c = &self.c;
-        let flag = if vector == c.v_ovf {
-            TOV
-        } else if vector == c.v_comp_a {
-            OCFA
-        } else if vector == c.v_comp_b {
-            OCFB
-        } else {
-            ICF
-        };
-        self.tifr &= !flag;
-        self.update_irq(cx);
-    }
-
     fn on_pin(&mut self, pin: u8, level: u8, cycle: u64, cx: &mut Cx) {
-        if pin == self.c.icp_gpio && !self.ac_capture {
+        if Some(pin) == self.c.icp_gpio && !self.ac_capture {
             self.capture_edge(level, cycle, cx);
         }
-        if pin == self.c.t_gpio && self.n == -1 && !self.sleep_halted && !self.power_reduced {
-            let cs = self.tccr_b & 7;
-            if (cs == 6 && level == 0) || (cs == 7 && level == 1) {
-                self.tick_once(cycle, cx);
-                self.last_sync = cycle.max(self.last_sync);
-            }
+        let edge = (self.clk == Clk::ExtFall && level == 0) || (self.clk == Clk::ExtRise && level == 1);
+        if Some(pin) == self.c.t_gpio && edge && !self.sleep_halted && !self.power_reduced && !self.tsm {
+            self.tick_once(cycle, cx);
+            self.last_sync = cycle.max(self.last_sync);
         }
     }
 
     fn on_trigger(&mut self, trigger: Trigger, value: u8, cycle: u64, cx: &mut Cx) {
-        if trigger == Trigger::AcOutput && self.ac_capture {
-            self.capture_edge(value, cycle, cx);
+        match trigger {
+            Trigger::AcOutput if self.ac_capture => self.capture_edge(value, cycle, cx),
+            Trigger::AcCapture if self.c.icr.is_some() => self.ac_capture = value != 0,
+            Trigger::TimerSync => self.set_tsm(value != 0, cx),
+            Trigger::PrescalerReset if value & self.c.prescaler_group != 0 => {
+                let now = cx.now();
+                self.sync(now, cx);
+                self.ps_base = now;
+                self.schedule(cx);
+            }
+            _ => {}
         }
     }
 
@@ -655,8 +718,8 @@ impl Peripheral for Timer16 {
     }
 
     fn on_sleep(&mut self, mode: u8, cx: &mut Cx) {
-        if mode == 0 {
-            return; // idle: clk_IO keeps running
+        if mode == 0 || self.c.sleep_run & (1 << mode) != 0 {
+            return; // clk_IO (or the asynchronous clock) keeps running
         }
         let now = cx.now();
         self.sync(now, cx);
@@ -679,24 +742,24 @@ impl Peripheral for Timer16 {
 
     fn reset(&mut self, cx: &mut Cx) {
         cx.cancel(EV_TICK);
-        *self = Timer16::new(self.c.clone());
+        *self = Timer::new(self.c.clone());
         self.last_sync = cx.now();
         self.ps_base = cx.now();
         let now = cx.now();
         self.apply_output(0, now, cx);
         self.apply_output(1, now, cx);
-        self.update_irq(cx);
+        update_irqs(cx, self.c.tifr, self.c.timsk, &self.irq_map);
     }
 
     fn inspect(&mut self, cx: &mut Cx) -> Vec<(String, String)> {
         let now = cx.now();
         self.sync(now, cx);
-        let cs = self.tccr_b & 7;
-        let clock = match cs {
-            0 => "Stopped".to_string(),
-            6 => "T0 pin (falling)".into(),
-            7 => "T0 pin (rising)".into(),
-            _ => format!("clk/{}", PRESCALE[cs as usize]),
+        let n = self.c.id;
+        let clock = match self.clk {
+            Clk::Stop => "Stopped".to_string(),
+            Clk::ExtFall => format!("T{n} pin (falling)"),
+            Clk::ExtRise => format!("T{n} pin (rising)"),
+            Clk::Div(d) => format!("clk/{d}"),
         };
         let state = if self.power_reduced {
             "Power reduced"
@@ -704,24 +767,27 @@ impl Peripheral for Timer16 {
             "Halted (sleep)"
         } else if self.tsm {
             "Halted (TSM)"
-        } else if self.running() || self.n == -1 {
+        } else if self.running() || self.external() {
             "Running"
         } else {
             "Stopped"
         };
-        vec![
-            ("Mode".into(), format!("{}: {}", self.wgm(), MODE_NAMES[self.wgm()])),
+        let mut v = vec![
+            ("Mode".into(), format!("{}: {}", self.wgm(), self.m.names[self.wgm()].replace("OCRnA", &format!("OCR{n}A")).replace("ICRn", &format!("ICR{n}")))),
             ("Clock".into(), clock),
             ("State".into(), state.into()),
-            ("TCNT0".into(), self.tcnt.to_string()),
+            (format!("TCNT{n}"), self.tcnt.to_string()),
             ("TOP".into(), self.top().to_string()),
             ("Direction".into(), if self.dir > 0 { "Up" } else { "Down" }.into()),
-            ("OCR0A (active)".into(), self.ocr_a.to_string()),
-            ("OCR0B (active)".into(), self.ocr_b.to_string()),
-            ("OC0A".into(), self.oc_a.to_string()),
-            ("OC0B".into(), self.oc_b.to_string()),
-            ("TEMP".into(), format!("0x{:02X}", self.temp)),
-        ]
+            (format!("OCR{n}A (active)"), self.ocr_a.to_string()),
+            (format!("OCR{n}B (active)"), self.ocr_b.to_string()),
+            (format!("OC{n}A"), self.oc_a.to_string()),
+            (format!("OC{n}B"), self.oc_b.to_string()),
+        ];
+        if self.c.wide {
+            v.push(("TEMP".into(), format!("0x{:02X}", self.temp)));
+        }
+        v
     }
 
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any {

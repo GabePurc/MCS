@@ -5,6 +5,7 @@ use mcs_core::program::LoadedProgram;
 use serde::{Deserialize, Serialize};
 
 use crate::avr::{CallFrame, Message};
+use crate::avr::peripherals::serial::SerialConfig;
 use crate::pins::{ExtDrive, PinGenerator};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -58,11 +59,22 @@ pub enum Command {
     SetPinGenerator { pin: usize, gen: Option<PinGenerator> },
     /// Per-word execution counting for the chip view's heat map.
     SetProfiling { enabled: bool },
+    /// Serial Monitor line settings.
+    SetSerial { config: SerialConfig },
+    /// Bytes typed in the Serial Monitor (sent into the injection pin).
+    SerialSend { bytes: Vec<u8> },
+    /// Debugger edit of the EEPROM.
+    WriteEeprom { addr: u32, value: u8 },
     WriteData { addr: u16, value: u8 },
     WriteFlash { addr: u32, value: u8 },
     WriteReg { reg: usize, value: u8 },
     WriteCpu { field: CpuField, value: u32 },
-    WriteFuse { value: u8 },
+    /// Writes fuse byte `index` (0 = low / the configuration byte) and power-cycles.
+    WriteFuse {
+        #[serde(default)]
+        index: usize,
+        value: u8,
+    },
     RequestState,
     Shutdown,
 }
@@ -79,6 +91,9 @@ pub struct PinState {
     pub ext_volts: f64,
     pub volts: f64,
     pub reserved: bool,
+    /// Function holding the pin ("RESET", "XTAL1"...), empty when not reserved.
+    #[serde(skip_serializing_if = "str::is_empty")]
+    pub reserved_by: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub gen: Option<PinGenerator>,
 }
@@ -136,8 +151,15 @@ pub struct MachineState {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub flash: Option<Vec<u8>>,
     pub flash_version: u64,
-    pub fuse: u8,
+    pub fuses: Vec<u8>,
     pub lock: u8,
+    /// EEPROM contents, present only when they changed since the last state.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub eeprom: Option<Vec<u8>>,
+    /// Bytes received by the Serial Monitor since the last state.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub serial: Vec<u8>,
+    pub serial_config: SerialConfig,
     pub pins: Vec<PinState>,
     pub vcc: f64,
     pub call_stack: Vec<CallFrame>,

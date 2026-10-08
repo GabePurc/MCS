@@ -63,8 +63,14 @@ pub struct Pin {
     /// A peripheral (e.g. timer OCx) overrides the output value.
     pub ov_enable: u8,
     pub ov_value: u8,
-    /// Reserved by an alternate function that disables the GPIO driver (e.g. RESET).
+    /// Reserved by an alternate function that disables the GPIO driver (e.g. RESET, XTAL1).
     pub reserved: bool,
+    /// Name of the reserving function ("RESET", "XTAL1"...).
+    pub reserved_by: &'static str,
+    /// A peripheral overrides the data direction (e.g. USART TXD/RXD, SPI MISO).
+    pub ddoe: u8,
+    /// Overriding direction (1 = output) while `ddoe` is set.
+    pub ddov: u8,
     // Outside world
     pub ext: ExtDrive,
     pub ext_volts: f64,
@@ -85,11 +91,17 @@ impl Pin {
         if self.ov_enable != 0 { self.ov_value } else { self.out }
     }
 
+    /// Direction after peripheral overrides (1 = output).
+    #[inline]
+    pub fn effective_dir(&self) -> u8 {
+        if self.ddoe != 0 { self.ddov } else { self.dir }
+    }
+
     /// Resolves logic level and voltage. Returns true when the level changed.
     /// Analog inputs use Schmitt-trigger thresholds (VIL = 0.3 Vcc, VIH = 0.6 Vcc) with hysteresis.
     pub fn resolve(&mut self, vcc: f64) -> bool {
         let prev = self.level;
-        if self.dir != 0 && !self.reserved {
+        if self.effective_dir() != 0 && !self.reserved {
             let v = self.driven();
             self.level = v;
             self.volts = if v != 0 { vcc } else { 0.0 };
@@ -128,7 +140,7 @@ impl Pin {
 
     /// The MCU drives the pin while something external drives the opposite level.
     pub fn contention(&self) -> bool {
-        if self.dir == 0 || self.reserved {
+        if self.effective_dir() == 0 || self.reserved {
             return false;
         }
         let v = self.driven();

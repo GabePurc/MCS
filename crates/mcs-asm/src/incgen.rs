@@ -41,8 +41,11 @@ fn digits_between<'a>(s: &'a str, prefix: &str, suffix: &str) -> Option<&'a str>
     (!d.is_empty() && d.bytes().all(|c| c.is_ascii_digit())).then_some(d)
 }
 
-/// Atmel's legacy vector names (OVF0addr ...) for the datasheet names (TIM0_OVF ...).
+/// Atmel's legacy vector names (OVF0addr ...) for the datasheet names (TIM0_OVF, TIMER0_OVF...).
 fn legacy_vector_name(name: &str) -> Option<String> {
+    if let Some(rest) = name.strip_prefix("TIMER") {
+        return legacy_vector_name(&format!("TIM{rest}"));
+    }
     if let Some(n) = digits_between(name, "PCINT", "") {
         return Some(format!("PCI{n}"));
     }
@@ -62,9 +65,14 @@ fn legacy_vector_name(name: &str) -> Option<String> {
         }
     }
     match name {
-        "ANA_COMP" => Some("ACI".into()),
+        "ANA_COMP" | "ANALOG_COMP" => Some("ACI".into()),
         "ADC" => Some("ADCC".into()),
-        "EE_RDY" => Some("ERDY".into()),
+        "EE_RDY" | "EE_READY" => Some("ERDY".into()),
+        "SPI_STC" => Some("SPI".into()),
+        "USART_RX" => Some("URXC".into()),
+        "USART_UDRE" => Some("UDRE".into()),
+        "USART_TX" => Some("UTXC".into()),
+        "SPM_READY" | "SPM_RDY" => Some("SPMR".into()),
         _ => None,
     }
 }
@@ -289,6 +297,10 @@ mod tests {
         assert_eq!(legacy_vector_name("TIM0_COMPb"), None);
         assert_eq!(legacy_vector_name("ADC").as_deref(), Some("ADCC"));
         assert_eq!(legacy_vector_name("INT0"), None);
+        assert_eq!(legacy_vector_name("TIMER1_COMPA").as_deref(), Some("OC1A"));
+        assert_eq!(legacy_vector_name("TIMER2_OVF").as_deref(), Some("OVF2"));
+        assert_eq!(legacy_vector_name("USART_RX").as_deref(), Some("URXC"));
+        assert_eq!(legacy_vector_name("EE_READY").as_deref(), Some("ERDY"));
     }
 
     #[test]
