@@ -4,6 +4,15 @@ A cycle-accurate microcontroller simulator and source-level debugger with a Wind
 
 ![MCS stopped at a breakpoint in blink.asm](docs/screenshot.jpg)
 
+## Download
+
+Get the latest installers from the **[Releases page](https://github.com/GabePurc/MCS/releases/latest)**:
+
+- **Windows 10/11:** `MCS.Microcontroller.Simulator_<version>_x64-setup.exe`. Run it; no administrator rights are needed. The installer isn't signed yet, so if SmartScreen says *"Windows protected your PC"*, click **More info → Run anyway**.
+- **macOS 10.15+ (Apple Silicon and Intel):** `MCS.Microcontroller.Simulator_<version>_universal.dmg`. Drag the app to Applications. The first time, right-click it and choose **Open** (it isn't notarized yet).
+
+Assembly programs work out of the box. To build C programs, also install avr-gcc (see [C support](#c-support)).
+
 ## Features
 
 - **Simulation engine in Rust** (`crates/mcs-sim`)
