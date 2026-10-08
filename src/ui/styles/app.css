@@ -369,3 +369,43 @@
 .start-link { display: flex; align-items: center; gap: 8px; padding: 4px 6px; color: var(--link); }
 .start-link:hover { text-decoration: underline; }
 .start-link .desc { color: var(--text-dim); text-decoration: none; display: block; font-size: 11px; }
+
+/* ---------------------------------------------------------------- floating tool windows */
+.float-win {
+  position: fixed;
+  display: flex;
+  flex-direction: column;
+  min-width: 240px;
+  min-height: 140px;
+  padding: 0 5px 5px;
+  border: 1px solid #5d7ea6;
+  border-radius: 6px 6px 3px 3px;
+  background:
+    repeating-linear-gradient(115deg, rgba(255, 255, 255, 0) 0 70px, rgba(255, 255, 255, 0.16) 70px 110px, rgba(255, 255, 255, 0) 110px 200px),
+    linear-gradient(to bottom, #dcebfa 0%, #c3d8ef 26px, #b3cbe8 100%);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.5) inset, 0 6px 22px rgba(0, 0, 0, 0.35);
+}
+.float-win:not(.active) { background: linear-gradient(to bottom, #e9eff6, #dce5ef); box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.5) inset, 0 3px 12px rgba(0, 0, 0, 0.22); }
+.float-title { display: flex; align-items: center; gap: 6px; height: 25px; flex: none; padding-left: 3px; cursor: default; user-select: none; text-shadow: 0 0 6px #fff, 0 0 3px #fff; }
+.float-title .grow { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.float-btn { width: 22px; height: 18px; display: flex; align-items: center; justify-content: center; padding: 0; border: 1px solid transparent; border-radius: 3px; background: transparent; }
+.float-btn:hover { border-color: #7aa5d6; background: linear-gradient(#f4f9ff, #cfe4fb); }
+.float-btn.close:hover { border-color: #b2564a; background: linear-gradient(#ffb5a3, #e3401c); }
+.float-body { border: 1px solid #7f9db9; background: var(--panel); }
+.float-edge { position: absolute; z-index: 2; }
+.float-edge.n, .float-edge.s { left: 6px; right: 6px; height: 6px; cursor: ns-resize; }
+.float-edge.e, .float-edge.w { top: 6px; bottom: 6px; width: 6px; cursor: ew-resize; }
+.float-edge.n { top: -3px; } .float-edge.s { bottom: -3px; } .float-edge.e { right: -3px; } .float-edge.w { left: -3px; }
+.float-edge.ne, .float-edge.nw, .float-edge.se, .float-edge.sw { width: 12px; height: 12px; }
+.float-edge.ne { top: -3px; right: -3px; cursor: nesw-resize; } .float-edge.sw { bottom: -3px; left: -3px; cursor: nesw-resize; }
+.float-edge.nw { top: -3px; left: -3px; cursor: nwse-resize; } .float-edge.se { bottom: -3px; right: -3px; cursor: nwse-resize; }
+.dock-tab .tab-popout { opacity: 0; }
+.dock-tab.active:hover .tab-popout { opacity: 0.75; }
+.dock-tab .tab-popout:hover { background: #cfe4fb; }
+
+/* ---------------------------------------------------------------- pop-out windows */
+.app.popout .popout-body { flex: 1; margin: 4px; }
+.popout-titlebar .titlebar-title { flex: 1; }
+.popout-dock { margin-right: 8px; height: 21px; gap: 4px; }
+.status-cell.clickable { cursor: pointer; }
+.status-cell.clickable:hover { text-decoration: underline; }

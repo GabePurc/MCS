@@ -9,6 +9,6 @@ export async function loadDevices(): Promise<void> {
     useDevices.setState({ devices: await listDevices() });
   } catch {
     // Browser preview without backend: keep the built-in default only.
-    useDevices.setState({ devices: [{ id: 'attiny10', name: 'ATtiny10', family: 'tinyAVR', flashSize: 1024, sramSize: 32 }] });
+    useDevices.setState({ devices: [{ id: 'attiny10', name: 'ATtiny10', family: 'tinyAVR', flashSize: 1024, sramSize: 32, package: 'SOT-23-6', coreName: 'AVRrc' }] });
   }
 }

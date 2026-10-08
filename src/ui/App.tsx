@@ -9,17 +9,9 @@ import { EditorArea } from './editor/EditorArea';
 import { ContextMenuHost } from './controls/Menu';
 import { TooltipHost } from './controls/Tooltip';
 import { DialogHost } from './dialogs/Dialogs';
-import { ProcessorPanel } from './panels/ProcessorPanel';
-import { IoViewPanel } from './panels/IoViewPanel';
-import { MemoryPanel } from './panels/MemoryPanel';
-import { DisassemblyPanel } from './panels/DisassemblyPanel';
-import { PinsPanel } from './panels/PinsPanel';
-import { WaveformPanel } from './panels/WaveformPanel';
-import { OutputPanel } from './panels/OutputPanel';
-import { SymbolsPanel } from './panels/SymbolsPanel';
-import { CallStackPanel } from './panels/CallStackPanel';
-import { BreakpointsPanel } from './panels/BreakpointsPanel';
-import type { PanelId } from './state/layout';
+import { renderPanel } from './panels/registry';
+import { FloatingWindows } from './dock/FloatingWindows';
+import { initMainWindowBridge } from './services/windows';
 import { handleShortcut } from './services/commands';
 import { connectSim, sim } from './services/simClient';
 import { confirmQuit, openPath, restoreSession } from './services/files';
@@ -32,24 +24,6 @@ import { backendAvailable, inTauri, win } from './backend/api';
 
 let started = false;
 
-const PANELS: Record<PanelId, () => JSX.Element> = {
-  processor: ProcessorPanel,
-  io: IoViewPanel,
-  memory: MemoryPanel,
-  disasm: DisassemblyPanel,
-  pins: PinsPanel,
-  wave: WaveformPanel,
-  output: OutputPanel,
-  symbols: SymbolsPanel,
-  callstack: CallStackPanel,
-  breakpoints: BreakpointsPanel,
-};
-
-const renderPanel = (id: PanelId) => {
-  const P = PANELS[id];
-  return <P />;
-};
-
 export function App(): JSX.Element {
   const [maximized, setMaximized] = useState(false);
   const [focused, setFocused] = useState(true);
@@ -61,6 +35,7 @@ export function App(): JSX.Element {
     const s = useSettings.getState();
     void loadDevices();
     void connectSim();
+    void initMainWindowBridge();
     sim({ type: 'init', deviceId: s.deviceId });
     sim({ type: 'setSpeed', mode: s.speedMode, factor: s.speedFactor });
     if (s.vcc !== 5) sim({ type: 'setVcc', volts: s.vcc });
@@ -124,6 +99,7 @@ export function App(): JSX.Element {
       <Toolbar />
       <DockLayout editor={<EditorArea />} render={renderPanel} />
       <StatusBar />
+      <FloatingWindows render={renderPanel} />
       <DialogHost />
       <ContextMenuHost />
       <TooltipHost />

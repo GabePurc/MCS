@@ -39,7 +39,7 @@ export function EditorArea(): JSX.Element {
               ])
             }
           >
-            {d.language === 'c' ? <span className="lang-badge c">C</span> : <span className="lang-badge asm">ASM</span>}
+            {d.language === 'c' ? <span className="lang-badge c">C</span> : d.language === 'mc' ? <span className="lang-badge mc">MC</span> : <span className="lang-badge asm">ASM</span>}
             {d.name}
             {d.dirty && <span className="dirty">*</span>}
             <span className="tab-close" onMouseDown={(e) => e.stopPropagation()} onClick={() => void closeDocument(d.id)}>
@@ -68,7 +68,8 @@ function StartPage(): JSX.Element {
           <h2>Start</h2>
           <a className="start-link" onClick={() => newFile('asm')}><Icons.NewFile /> <span>New assembly file<span className="desc">Built-in avrasm2-compatible assembler</span></span></a>
           <a className="start-link" onClick={() => newFile('c')}><Icons.NewFile /> <span>New C file<span className="desc">Compiled with avr-gcc</span></span></a>
-          <a className="start-link" onClick={() => void openFileDialog()}><Icons.Open /> <span>Open file...<span className="desc">.asm, .S, .c, .h</span></span></a>
+          <a className="start-link" onClick={() => newFile('mc')}><Icons.MachineCode /> <span>New machine code file<span className="desc">Write raw instruction words (hex or binary)</span></span></a>
+          <a className="start-link" onClick={() => void openFileDialog()}><Icons.Open /> <span>Open file...<span className="desc">.asm, .S, .c, .h, .mc</span></span></a>
           <a className="start-link" onClick={() => void importHexOrElf()}><Icons.Import /> <span>Import HEX / ELF...<span className="desc">Run a program built elsewhere</span></span></a>
         </div>
         <div>
@@ -93,7 +94,8 @@ function StartPage(): JSX.Element {
             <li>Open an example, e.g. <i>Blink (assembly)</i>.</li>
             <li>Press <b>F7</b> to build, <b>F5</b> to run, <b>F10/F11</b> to step.</li>
             <li>Click the left margin (or <b>F9</b>) to set breakpoints.</li>
-            <li>Drive input pins in <i>Pins &amp; Stimulus</i>; watch outputs in <i>Waveform</i>.</li>
+            <li>Drive input pins in <i>Pins &amp; Stimulus</i> (levels, push button, signal generator); watch outputs in <i>Waveform</i>.</li>
+            <li>Open <i>View &gt; Chip View (3D)</i> and set the speed to 1 Hz to watch the program run inside the chip.</li>
           </ol>
         </div>
       </div>

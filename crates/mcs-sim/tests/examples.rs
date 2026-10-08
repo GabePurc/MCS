@@ -88,6 +88,16 @@ fn session_commands_deserialize_from_ui_json() {
     assert!(matches!(c, Command::Step { .. }));
     let c: Command = serde_json::from_str(r#"{"type":"writeCpu","field":"pc","value":4}"#).unwrap();
     assert!(matches!(c, Command::WriteCpu { .. }));
+    let c: Command = serde_json::from_str(r#"{"type":"setSpeed","mode":"clock","factor":1}"#).unwrap();
+    assert!(matches!(c, Command::SetSpeed { mode: mcs_sim::protocol::SpeedMode::Clock, .. }));
+    let c: Command = serde_json::from_str(r#"{"type":"setClockConfig","source":2,"prescaleLog2":0}"#).unwrap();
+    assert!(matches!(c, Command::SetClockConfig { source: 2, prescale_log2: 0 }));
+    let c: Command = serde_json::from_str(r#"{"type":"setPinGenerator","pin":2,"gen":{"hz":1000,"duty":0.5,"invert":false}}"#).unwrap();
+    assert!(matches!(c, Command::SetPinGenerator { pin: 2, gen: Some(_) }));
+    let c: Command = serde_json::from_str(r#"{"type":"setPinGenerator","pin":2,"gen":null}"#).unwrap();
+    assert!(matches!(c, Command::SetPinGenerator { gen: None, .. }));
+    let c: Command = serde_json::from_str(r#"{"type":"setProfiling","enabled":true}"#).unwrap();
+    assert!(matches!(c, Command::SetProfiling { enabled: true }));
 }
 
 #[test]
@@ -114,4 +124,18 @@ fn session_load_run_and_step() {
     assert!(pc < 16, "pc {pc}");
     let json = serde_json::to_string(&s.handle(Command::RequestState)).unwrap();
     assert!(json.contains("\"traceCycles\""));
+}
+
+#[test]
+fn machine_code_blink_matches_assembly() {
+    let path = format!("{}/../../examples/blink.mc", env!("CARGO_MANIFEST_DIR"));
+    let src = std::fs::read_to_string(&path).unwrap();
+    let r = mcs_asm::assemble_machine_code(&src, "blink.mc", "attiny10");
+    assert!(r.ok && r.diagnostics.is_empty(), "{:#?}", r.diagnostics);
+    let asm = load("blink.asm");
+    assert_eq!(r.program.flash, asm.cpu.flash);
+    let mut m = Machine::new(devices::get("attiny10").unwrap());
+    m.load(&r.program);
+    m.run(1_000_000);
+    assert!(edges(&m, 0).len() >= 18);
 }

@@ -132,6 +132,10 @@ impl Peripheral for System {
         self.evaluate_vlm(cx);
     }
 
+    fn on_ext_clock(&mut self, cx: &mut Cx) {
+        self.update_clock(cx);
+    }
+
     fn reset(&mut self, cx: &mut Cx) {
         let flag = match cx.sys.last_reset {
             ResetSource::PowerOn | ResetSource::BrownOut => PORF,
@@ -149,8 +153,15 @@ impl Peripheral for System {
 
     fn inspect(&mut self, cx: &mut Cx) -> Vec<(String, String)> {
         let hz = cx.sys.clock.hz;
+        let source = match cx.cpu.data[self.c.clkmsr as usize] & 3 {
+            0 => "Internal 8 MHz",
+            1 => "Internal 128 kHz",
+            _ => "External (CLKI)",
+        };
         vec![
             ("CPU clock".into(), if hz >= 1e6 { format!("{} MHz", hz / 1e6) } else { format!("{} kHz", hz / 1e3) }),
+            ("Clock source".into(), source.into()),
+            ("Prescaler".into(), format!("/{}", 1u32 << (cx.cpu.data[self.c.clkpsr as usize] & 0x0f).min(8))),
             ("CCP unlocked".into(), if cx.now() <= cx.sys.ccp_until { "Yes" } else { "No" }.into()),
             ("VCC (V)".into(), format!("{:.2}", cx.sys.vcc)),
             ("Last reset".into(), cx.sys.last_reset.label().into()),

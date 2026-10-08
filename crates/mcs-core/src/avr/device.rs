@@ -92,6 +92,17 @@ pub struct ClockSpec {
     pub default_prescale_log2: u8,
 }
 
+/// Physical silicon die (for the Device Info and Chip View windows).
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DieSpec {
+    pub width_um: f64,
+    pub height_um: f64,
+    /// Public die photograph and its credit/license.
+    pub photo_url: String,
+    pub photo_credit: String,
+}
+
 /// Peripheral wiring recipe used by the simulator's machine factory.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -141,6 +152,13 @@ pub struct AvrDeviceSpec {
     pub clock: ClockSpec,
     /// Default supply voltage.
     pub vcc: f64,
+    /// Operating voltage range (V).
+    pub vcc_range: (f64, f64),
+    /// Speed grades: (maximum clock in Hz, minimum VCC for it).
+    pub speed_grades: Vec<(f64, f64)>,
+    /// Data sheet the model follows (document name and revision).
+    pub datasheet: String,
+    pub die: Option<DieSpec>,
     pub peripheral_set: PeripheralSet,
 }
 
@@ -169,6 +187,11 @@ impl AvrDeviceSpec {
 
     pub fn vector_count(&self) -> usize {
         self.vectors.iter().map(|v| v.index as usize + 1).max().unwrap_or(1)
+    }
+
+    /// Highest clock frequency allowed at `vcc` by the speed grades (0 when below all of them).
+    pub fn max_hz_at(&self, vcc: f64) -> f64 {
+        self.speed_grades.iter().filter(|g| vcc + 1e-9 >= g.1).map(|g| g.0).fold(0.0, f64::max)
     }
 
     /// Converts a data-space address to its I/O address when inside the IN/OUT range.

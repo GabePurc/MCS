@@ -3,11 +3,11 @@
  * document, reports diagnostics to the Output window/editor and loads the result into the
  * simulator. Also handles HEX/ELF import.
  */
-import { buildAsm, buildC, importProgram, pickFile } from '../backend/api';
+import { buildAsm, buildC, buildMachineCode, importProgram, pickFile, programToMachineCode } from '../backend/api';
 import type { BuildOutcome, Diagnostic, LoadedProgram } from '../backend/types';
 import { getDocText } from '../editor/docText';
 import { useSettings } from '../state/settings';
-import { activeDoc, appendOutput, enabledBreakpointPcs, setBuild, showOutput, useWorkspace, type Doc } from '../state/workspace';
+import { activeDoc, addDoc, appendOutput, enabledBreakpointPcs, setBuild, showOutput, untitledName, useWorkspace, type Doc } from '../state/workspace';
 import { useSim } from '../state/sim';
 import { sim } from './simClient';
 import { baseName } from './debugInfo';
@@ -56,13 +56,16 @@ export async function buildDoc(doc: Doc): Promise<boolean> {
   const text = getDocText(doc.id);
   const t0 = performance.now();
   useWorkspace.setState({ building: true, diagnostics: [] });
-  appendOutput('cmd', `------ Build started: ${doc.name} (${doc.language === 'asm' ? 'MCS assembler' : 'avr-gcc'}, ${settings.deviceId}) ------`);
+  const tool = { asm: 'MCS assembler', mc: 'machine code', c: 'avr-gcc', gas: 'avr-gcc' }[doc.language];
+  appendOutput('cmd', `------ Build started: ${doc.name} (${tool}, ${settings.deviceId}) ------`);
   let outcome: BuildOutcome;
   try {
     outcome =
       doc.language === 'asm'
         ? await buildAsm(text, doc.name, doc.path, settings.deviceId)
-        : await buildC({
+        : doc.language === 'mc'
+          ? await buildMachineCode(text, doc.name, doc.path, settings.deviceId)
+          : await buildC({
             source: text,
             fileName: doc.path ?? doc.name,
             filePath: doc.path,
@@ -129,6 +132,22 @@ export async function importHexOrElf(): Promise<void> {
     loadProgram(r.program, null, baseName(path), r.deviceId);
   } catch (e) {
     appendOutput('error', `Import failed: ${e instanceof Error ? e.message : String(e)}`);
+    showOutput();
+  }
+}
+
+/** Build > Open Program as Machine Code: the loaded image as an editable .mc document. */
+export async function openProgramAsMachineCode(): Promise<void> {
+  const b = useWorkspace.getState().build;
+  const spec = useSim.getState().spec;
+  if (!b || !spec) return;
+  const labels: Record<number, string> = {};
+  for (const s of b.symbols.code) if (!(s.address in labels)) labels[s.address] = s.name;
+  try {
+    const text = await programToMachineCode(spec.id, b.program.flash, b.program.flashUsed, labels, b.label);
+    addDoc(untitledName('.mc'), null, text, 'mc');
+  } catch (e) {
+    appendOutput('error', `Could not convert the program: ${e instanceof Error ? e.message : String(e)}`);
     showOutput();
   }
 }

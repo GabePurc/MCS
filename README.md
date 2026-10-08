@@ -29,9 +29,14 @@ Assembly programs work out of the box. To build C programs, also install avr-gcc
     - Sleep modes with the datasheet's wake-up sources
     - Power reduction, VCC level monitor, reset flags, NVM, fuse and signature mapping
   - Timing follows the ATtiny4/5/9/10 datasheet: instruction cycle counts, 4-cycle interrupt response, and the extra instruction after `SEI` and `RETI`.
+- **Test bench**
+  - Signal generators on any pin: square waves from 0.01 Hz to 20 MHz, or bursts of N pulses (active high or low). They are event driven and keep their frequency when the firmware changes the CPU clock.
+  - Momentary push buttons, logic levels and analog voltages per pin
+  - Execution profiling (per-instruction counts) for the Chip View heat map; it costs nothing while off.
 - **Assembler** (`crates/mcs-asm`): compatible with Atmel avrasm2.
   - Supports macros, conditionals, includes, expressions, and device definitions (`.include "tn10def.inc"`) generated from the device model.
   - Errors carry exact line and column, and the assembler rejects instructions and registers the device doesn't have.
+- **Machine code files** (`.mc`): write a program directly as 16-bit instruction words, in hex or binary. Live disassembly appears at the end of every line, and you build and step through them like assembly. **Build ▸ Open Program as Machine Code** turns any program into an editable `.mc` file.
 - **C and GNU assembler** through your installed **avr-gcc**, which is detected automatically. Programs are debugged at the source line using DWARF line tables.
 - **Imports** Intel HEX and ELF images built elsewhere, and exports Intel HEX.
 - **Debugger**
@@ -45,9 +50,13 @@ Assembly programs work out of the box. To build C programs, also install avr-gcc
   - Disassembly, plus a symbols and watch list
   - Pin stimulus: logic levels, analog voltages and VCC
   - Logic-analyzer waveform window with measurement cursors
+  - **Chip View**: a 3D model of the chip (package, lead frame, gold bond wires, die) with soft shadows and ambient occlusion, or a flat die view. The die shows the running program live: a flash heat map with the PC, SRAM and stack bytes, the register file, the instruction being decoded, SREG, peripheral activity and pin levels.
+  - **Device Info**: specifications, speed grades, memory map, peripherals, pins, vectors and the die floorplan, with a link to a real die photo
+  - **Instruction Set** reference with descriptions, colour-coded encodings and an assembly ⇄ machine code converter
   - Changed values are highlighted in red, as in Visual Studio and Atmel Studio.
 - **Windows 7 look on every OS**
   - Aero caption, glossy controls, Explorer-style selection, dockable tool windows with drag-and-drop tabs
+  - Any tool window can float above the main window or open in its own OS window, for example on a second monitor. Drop a floating window on a tab strip to dock it again.
   - Bundled Selawik font (a metric-compatible Segoe UI clone) and Cascadia Mono
 - **Web build**: the same Rust core compiles to WebAssembly (`crates/mcs-wasm`), so the UI also runs in a browser.
 
@@ -93,7 +102,9 @@ MCS searches `PATH` and the usual install locations. You can also set the path u
 2. **F7** builds. **F5** runs or continues. **F10**, **F11** and **Shift+F11** step over, into and out. **F9** toggles a breakpoint.
 3. Drive inputs in **Pins & Stimulus**: click a pin to cycle Z → 1 → 0, or choose `~` for an analog voltage. Watch outputs in **Waveform**: scroll to zoom, drag to pan, click and Shift+click to measure.
 4. Double-click any value to edit it. Click SREG flags or I/O bit boxes to toggle them.
-5. Choose the speed in the toolbar: 1/100× slow motion, real time, 10×, or maximum.
+5. Choose the speed in the toolbar. **Speed ▸ Custom...** offers three modes: a fixed CPU clock from 1 Hz (one cycle per second) upward, a multiple of the chip's real speed, or maximum.
+6. **Device ▸ Supply & Clock** sets VCC, the clock source (internal RC, 128 kHz, or external clock on CLKI), the external frequency and the prescaler. Changes apply while the program runs.
+7. **View ▸ Chip View (3D)**, together with a slow speed, lets you watch the program execute inside the chip. Right-click any tool tab and choose **Float** or **Open in New Window** to detach it.
 
 ## Project layout
 

@@ -200,6 +200,17 @@ fn spec(v: &Variant) -> AvrDeviceSpec {
         has_adc: v.has_adc,
         clock: ClockSpec { internal_hz: 8_000_000.0, slow_hz: 128_000.0, default_prescale_log2: 3 },
         vcc: 5.0,
+        // Section 16.3 "Speed": 0-4 MHz @ 1.8-5.5 V, 0-8 MHz @ 2.7-5.5 V, 0-12 MHz @ 4.5-5.5 V.
+        vcc_range: (1.8, 5.5),
+        speed_grades: vec![(4e6, 1.8), (8e6, 2.7), (12e6, 4.5)],
+        datasheet: "Atmel-8127H ATtiny4/5/9/10 datasheet (11/2016)".into(),
+        // Die size measured by Zeptobars on a decapped ATtiny4 (zeptobars.com, 2019-02-01).
+        die: Some(DieSpec {
+            width_um: 1368.0,
+            height_um: 926.0,
+            photo_url: "https://zeptobars.com/en/read/atmel-tiny4-attiny4-microcontroller".into(),
+            photo_credit: "ATtiny4 die photo by Zeptobars, CC BY 3.0".into(),
+        }),
         peripheral_set: PeripheralSet::TinyRc,
     }
 }

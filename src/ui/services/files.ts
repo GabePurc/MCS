@@ -7,15 +7,16 @@ import { baseName } from './debugInfo';
 import { EXAMPLES } from './examples';
 
 const SOURCE_FILTERS = [
-  { name: 'Source files', extensions: ['asm', 's', 'S', 'inc', 'c', 'h', 'cpp'] },
+  { name: 'Source files', extensions: ['asm', 's', 'S', 'inc', 'c', 'h', 'cpp', 'mc'] },
   { name: 'Assembly (avrasm2)', extensions: ['asm', 'inc'] },
   { name: 'C / C++', extensions: ['c', 'h', 'cpp'] },
+  { name: 'Machine code', extensions: ['mc'] },
   { name: 'All files', extensions: ['*'] },
 ];
 
-export function newFile(kind: 'asm' | 'c'): void {
+export function newFile(kind: 'asm' | 'c' | 'mc'): void {
   const ex = EXAMPLES.find((e) => e.template === kind);
-  addDoc(untitledName(kind === 'asm' ? '.asm' : '.c'), null, ex?.text ?? '', kind);
+  addDoc(untitledName(`.${kind}`), null, ex?.text ?? '', kind);
 }
 
 export async function openFileDialog(): Promise<void> {

@@ -27,6 +27,10 @@ enum Request {
     Slice,
     ListDevices,
     BuildAsm { source: String, file_name: String, device_id: String, #[serde(default)] includes: HashMap<String, String> },
+    BuildMachineCode { source: String, file_name: String, device_id: String },
+    MachineCodeHints { source: String, device_id: String },
+    /// Label keys are code byte addresses as strings (JSON object keys).
+    ProgramToMachineCode { device_id: String, flash: Vec<u8>, used: usize, labels: HashMap<String, String>, title: String },
     ImportProgram { bytes: Vec<u8>, file_name: String, device_id: String },
     /// Label keys are code byte addresses as strings (JSON object keys).
     Disassemble { device_id: String, flash: Vec<u8>, labels: HashMap<String, String> },
@@ -45,6 +49,12 @@ fn dispatch(req: Request) -> Value {
         }),
         Request::ListDevices => json!(mcs_api::list_devices()),
         Request::BuildAsm { source, file_name, device_id, includes } => json!(mcs_api::build_asm(&source, &file_name, &device_id, &includes)),
+        Request::BuildMachineCode { source, file_name, device_id } => json!(mcs_api::build_machine_code(&source, &file_name, &device_id)),
+        Request::MachineCodeHints { source, device_id } => json!(mcs_api::machine_code_hints(&source, &device_id)),
+        Request::ProgramToMachineCode { device_id, flash, used, labels, title } => {
+            let labels: HashMap<u32, String> = labels.into_iter().filter_map(|(k, v)| k.parse().ok().map(|k| (k, v))).collect();
+            json!(mcs_api::program_to_machine_code(&device_id, &flash, used, &labels, &title))
+        }
         Request::ImportProgram { bytes, file_name, device_id } => json!(mcs_api::import_program(&bytes, &file_name, &device_id)),
         Request::Disassemble { device_id, flash, labels } => {
             let labels: HashMap<u32, String> = labels.into_iter().filter_map(|(k, v)| k.parse().ok().map(|k| (k, v))).collect();

@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-use mcs_api::{BuildOutcome, DeviceSummary, DisasmLine, InsnInfo};
+use mcs_api::{BuildOutcome, DeviceSummary, DisasmLine, InsnInfo, McAnnotations};
 use mcs_sim::protocol::{Command, Output};
 use mcs_sim::session::{self, SessionThread};
 use tauri::ipc::Channel;
@@ -68,6 +68,21 @@ fn build_asm(source: String, file_name: String, file_path: Option<String>, devic
     load_includes(&source, dir, &mut includes, 0);
     let name = file_path.clone().unwrap_or(file_name);
     mcs_api::build_asm(&source, &name, &device_id, &includes)
+}
+
+#[tauri::command]
+fn build_machine_code(source: String, file_name: String, file_path: Option<String>, device_id: String) -> BuildOutcome {
+    mcs_api::build_machine_code(&source, file_path.as_deref().unwrap_or(&file_name), &device_id)
+}
+
+#[tauri::command]
+fn machine_code_hints(source: String, device_id: String) -> McAnnotations {
+    mcs_api::machine_code_hints(&source, &device_id)
+}
+
+#[tauri::command]
+fn program_to_machine_code(device_id: String, flash: Vec<u8>, used: usize, labels: HashMap<u32, String>, title: String) -> String {
+    mcs_api::program_to_machine_code(&device_id, &flash, used, &labels, &title)
 }
 
 #[tauri::command]
@@ -136,6 +151,7 @@ fn def_include(device_id: String) -> Option<(String, String)> {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_opener::init())
         .manage(AppState::default())
         .setup(|app| {
             if let Some(w) = app.get_webview_window("main") {
@@ -143,11 +159,20 @@ pub fn run() {
             }
             Ok(())
         })
+        // Pop-out tool windows belong to the main window: quit when it goes away.
+        .on_window_event(|window, event| {
+            if window.label() == "main" && matches!(event, tauri::WindowEvent::Destroyed) {
+                window.app_handle().exit(0);
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             sim_attach,
             sim_command,
             list_devices,
             build_asm,
+            build_machine_code,
+            machine_code_hints,
+            program_to_machine_code,
             build_c,
             import_program,
             detect_toolchain,

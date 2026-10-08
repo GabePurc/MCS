@@ -62,6 +62,18 @@ class TraceBuffer {
     return ans;
   }
 
+  /** The newest `max` entries (pop-out window snapshots). */
+  export(max: number): { cycles: number[]; levels: number[]; endCycle: number; hz: number } {
+    const n = Math.min(max, this.count);
+    const cycles: number[] = new Array(n);
+    const levels: number[] = new Array(n);
+    for (let i = 0; i < n; i++) {
+      cycles[i] = this.cycleAt(this.count - n + i);
+      levels[i] = this.levelAt(this.count - n + i);
+    }
+    return { cycles, levels, endCycle: this.endCycle, hz: this.hz };
+  }
+
   subscribe(fn: () => void): () => void {
     this.listeners.add(fn);
     return () => this.listeners.delete(fn);

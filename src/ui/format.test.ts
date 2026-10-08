@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { formatHz, formatTime, hex, parseNumber } from './format';
+import { formatHz, formatTime, hex, parseHz, parseNumber } from './format';
 
 describe('format', () => {
   it('parses numbers in the notations the debugger accepts', () => {
@@ -18,5 +18,16 @@ describe('format', () => {
     expect(formatHz(128_000)).toBe('128 kHz');
     expect(formatTime(0.05)).toBe('50.000 ms');
     expect(formatTime(2e-6)).toBe('2.00 µs');
+  });
+
+  it('parses and formats frequencies', () => {
+    expect(parseHz('8 MHz')).toBe(8e6);
+    expect(parseHz('32.768kHz')).toBe(32768);
+    expect(parseHz('16e6')).toBe(16e6);
+    expect(parseHz('1 Hz')).toBe(1);
+    expect(parseHz('fast')).toBeNaN();
+    expect(formatHz(1)).toBe('1 Hz');
+    expect(formatHz(0.5)).toBe('0.5 Hz');
+    expect(formatHz(2e9)).toBe('2 GHz');
   });
 });

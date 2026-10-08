@@ -6,6 +6,7 @@ use std::collections::HashMap;
 
 use mcs_core::avr::devices;
 use mcs_core::avr::isa::{self, DisasmContext};
+use mcs_core::avr::isa_docs;
 use mcs_core::program::{Diagnostic, LoadedProgram};
 use serde::Serialize;
 
@@ -17,6 +18,8 @@ pub struct DeviceSummary {
     pub family: String,
     pub flash_size: u32,
     pub sram_size: u16,
+    pub package: String,
+    pub core_name: String,
 }
 
 #[derive(Serialize)]
@@ -51,12 +54,24 @@ pub struct InsnInfo {
     pub encoding: String,
     pub cycles: u8,
     pub words: u8,
+    pub summary: String,
+    pub operation: String,
+    pub flags: String,
+    pub aliases: String,
 }
 
 pub fn list_devices() -> Vec<DeviceSummary> {
     devices::all()
         .iter()
-        .map(|d| DeviceSummary { id: d.id.clone(), name: d.name.clone(), family: d.family.clone(), flash_size: d.flash_size, sram_size: d.sram_size })
+        .map(|d| DeviceSummary {
+            id: d.id.clone(),
+            name: d.name.clone(),
+            family: d.family.clone(),
+            flash_size: d.flash_size,
+            sram_size: d.sram_size,
+            package: d.package.clone(),
+            core_name: d.core_name.clone(),
+        })
         .collect()
 }
 
@@ -80,6 +95,56 @@ pub fn program_from_elf(elf: &[u8], file_name: &str, device_id: &str, extra: Vec
     let mut program = mcs_formats::parse_elf(elf, flash, file_name);
     program.diagnostics.extend(extra);
     BuildOutcome { ok: !program.has_errors(), diagnostics: program.diagnostics.clone(), program: Some(program), output, listing: None, device_id: device_id.to_string() }
+}
+
+/// Builds a machine-code (`.mc`) source.
+pub fn build_machine_code(source: &str, file_name: &str, device_id: &str) -> BuildOutcome {
+    let r = mcs_asm::assemble_machine_code(source, file_name, device_id);
+    BuildOutcome { ok: r.ok, program: Some(r.program), diagnostics: r.diagnostics, output: String::new(), listing: Some(r.listing), device_id: r.device_id }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McAnnotations {
+    pub hints: Vec<mcs_asm::McHint>,
+    pub diagnostics: Vec<Diagnostic>,
+}
+
+/// Live editor feedback for machine-code sources: per-line disassembly and problems.
+pub fn machine_code_hints(source: &str, device_id: &str) -> McAnnotations {
+    let r = mcs_asm::assemble_machine_code(source, "", device_id);
+    McAnnotations { hints: r.hints, diagnostics: r.diagnostics }
+}
+
+/// Renders a program image as an editable machine-code source: one instruction per line with
+/// its disassembly as a comment, labels as comment lines.
+pub fn program_to_machine_code(device_id: &str, flash: &[u8], used: usize, labels: &HashMap<u32, String>, title: &str) -> String {
+    let name = devices::get(device_id).map(|d| d.name.as_str()).unwrap_or(device_id);
+    let mut out = format!(
+        "; Machine code for {name}{}\n; One instruction per line as 16-bit words in hex (two words for 32-bit instructions).\n; Edit the words and build (F7) to run them. '@0x0010' moves to a byte address.\n\n@0x0000\n",
+        if title.is_empty() { String::new() } else { format!(" - generated from {title}") },
+    );
+    let used = used.min(flash.len()).div_ceil(2) * 2;
+    let mut skipping = false;
+    for l in disassemble(device_id, &flash[..used], labels) {
+        let addr = l.pc * 2;
+        // Unprogrammed gaps (0xFFFF) are skipped with an address directive.
+        if l.raw.iter().all(|&w| w == 0xffff) {
+            skipping = true;
+            continue;
+        }
+        if skipping {
+            out.push_str(&format!("\n@0x{addr:04X}\n"));
+            skipping = false;
+        }
+        if let Some(label) = labels.get(&addr) {
+            out.push_str(&format!("; {label}:\n"));
+        }
+        let words = l.raw.iter().map(|w| format!("{w:04X}")).collect::<Vec<_>>().join(" ");
+        let asm = if l.operands.is_empty() { l.mnemonic.clone() } else { format!("{} {}", l.mnemonic, l.operands) };
+        out.push_str(&format!("{words:<12}; {addr:04X}  {asm}\n"));
+    }
+    out
 }
 
 /// Disassembles a whole program image. `labels` maps code byte addresses to names.
@@ -111,12 +176,19 @@ pub fn instruction_set(device_id: &str) -> Vec<InsnInfo> {
     isa::insns()
         .iter()
         .filter(|d| d.is_available(spec.features))
-        .map(|d| InsnInfo {
-            mnemonic: d.name.to_uppercase(),
-            operands: d.operands.iter().map(|k| operand_label(*k)).collect::<Vec<_>>().join(", "),
-            encoding: d.pattern.as_bytes().chunks(4).map(|c| String::from_utf8_lossy(c).into_owned()).collect::<Vec<_>>().join(" "),
-            cycles: if rc { d.cycles_rc } else { d.cycles },
-            words: d.words,
+        .map(|d| {
+            let doc = isa_docs::insn_doc(d.name);
+            InsnInfo {
+                mnemonic: d.name.to_uppercase(),
+                operands: d.operands.iter().map(|k| operand_label(*k)).collect::<Vec<_>>().join(", "),
+                encoding: d.pattern.as_bytes().chunks(4).map(|c| String::from_utf8_lossy(c).into_owned()).collect::<Vec<_>>().join(" "),
+                cycles: if rc { d.cycles_rc } else { d.cycles },
+                words: d.words,
+                summary: doc.map(|x| x.summary).unwrap_or_default().into(),
+                operation: doc.map(|x| x.operation).unwrap_or_default().into(),
+                flags: doc.map(|x| x.flags).unwrap_or_default().into(),
+                aliases: doc.map(|x| x.aliases).unwrap_or_default().into(),
+            }
         })
         .collect()
 }
@@ -148,4 +220,26 @@ pub fn user_includes(source: &str) -> Vec<String> {
 /// Intel HEX text for the first `used` bytes of a program image.
 pub fn to_intel_hex(flash: &[u8], used: usize) -> String {
     mcs_formats::to_intel_hex(flash, 0, used.min(flash.len()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn machine_code_round_trip() {
+        let asm = build_asm("ldi r16, 1\nloop: rjmp loop\n.org 0x10\nnop\n", "t.asm", "attiny10", &HashMap::new());
+        let p = asm.program.unwrap();
+        let labels = HashMap::from([(2u32, "loop".to_string())]);
+        let mc = program_to_machine_code("attiny10", &p.flash, p.flash_used as usize, &labels, "t.asm");
+        assert!(mc.contains("E001        ; 0000  ldi r16, 0x01"), "{mc}");
+        assert!(mc.contains("; loop:\nCFFF"), "{mc}");
+        assert!(mc.contains("@0x0020\n0000"), "{mc}");
+        let back = build_machine_code(&mc, "t.mc", "attiny10");
+        assert!(back.ok, "{:?}", back.diagnostics);
+        assert_eq!(back.program.unwrap().flash, p.flash);
+        let h = machine_code_hints("E001\nZZ", "attiny10");
+        assert_eq!(h.hints[0].text, "ldi r16, 0x01");
+        assert_eq!(h.diagnostics.len(), 1);
+    }
 }

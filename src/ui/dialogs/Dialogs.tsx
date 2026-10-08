@@ -3,10 +3,11 @@ import { CaptionGlyph, Icons } from '../icons';
 import { closeDialog, useDialogs } from '../state/dialogs';
 import { useSettings } from '../state/settings';
 import { useSim } from '../state/sim';
-import { defInclude, detectToolchain, instructionSet, pickFile, platform } from '../backend/api';
-import type { InsnInfo, ToolchainInfo } from '../backend/types';
+import { defInclude, detectToolchain, pickFile, platform } from '../backend/api';
+import type { SpeedMode, ToolchainInfo } from '../backend/types';
 import { sim } from '../services/simClient';
-import { hex } from '../format';
+import { setSpeed, speedLabel } from '../services/commands';
+import { formatHz, hex, parseHz } from '../format';
 
 /** Aero-framed modal dialog with a Windows 7 TaskDialog-style button area. */
 export function Dialog({ title, children, buttons, width = 460, gray }: { title: string; children: ReactNode; buttons?: ReactNode; width?: number; gray?: boolean }): JSX.Element {
@@ -50,7 +51,7 @@ export function DialogHost(): JSX.Element | null {
     case 'toolchainHelp': return <ToolchainHelpDialog />;
     case 'fuses': return <FusesDialog />;
     case 'supply': return <SupplyDialog />;
-    case 'isa': return <IsaDialog />;
+    case 'speed': return <SpeedDialog />;
     case 'include': return <IncludeDialog />;
     default: return null;
   }
@@ -196,62 +197,166 @@ function FusesDialog(): JSX.Element {
   );
 }
 
+const PRESCALERS = [0, 1, 2, 3, 4, 5, 6, 7, 8];
+
 function SupplyDialog(): JSX.Element {
   const st = useSim((s) => s.state);
+  const spec = useSim((s) => s.spec);
   const vcc = useSettings((s) => s.vcc);
-  const [ext, setExt] = useState('8000000');
+  const msr = spec?.registers.find((r) => r.name === 'CLKMSR');
+  const psr = spec?.registers.find((r) => r.name === 'CLKPSR');
+  const curSource = msr && st ? st.data[msr.addr] & 3 : 0;
+  const curPs = psr && st ? st.data[psr.addr] & 0x0f : spec?.clock.defaultPrescaleLog2 ?? 0;
+  const [source, setSource] = useState(curSource);
+  const [ps, setPs] = useState(Math.min(curPs, 8));
+  const [ext, setExt] = useState(formatHz(st?.extClockHz ?? 8e6));
+  const extHz = parseHz(ext);
+  const clki = spec?.pins.find((p) => p.functions.includes('CLKI'));
+  const maxHz = spec ? speedGradeMax(spec.speedGrades, vcc) : 0;
+  const resulting = (source === 0 ? spec?.clock.internalHz ?? 0 : source === 1 ? spec?.clock.slowHz ?? 0 : extHz || 0) / 2 ** ps;
+  const sourceNames = [`Internal ${formatHz(spec?.clock.internalHz ?? 8e6)} RC oscillator`, `Internal ${formatHz(spec?.clock.slowHz ?? 128e3)} oscillator`, `External clock on CLKI${clki ? ` (${clki.name}, pin ${clki.number})` : ''}`];
+  const apply = () => {
+    if (extHz > 0) sim({ type: 'setExternalClock', hz: extHz });
+    if (msr && psr) sim({ type: 'setClockConfig', source, prescaleLog2: ps });
+  };
   return (
-    <Dialog title="Supply & Clock" gray>
+    <Dialog
+      title="Supply & Clock"
+      width={520}
+      gray
+      buttons={
+        <>
+          <span className="left dim">Applies immediately, even while running.</span>
+          <button className="w7-btn default" onClick={() => { apply(); closeDialog(); }}><span>OK</span></button>
+          <button className="w7-btn" onClick={apply} disabled={!(extHz > 0)}><span>Apply</span></button>
+          <button className="w7-btn" onClick={closeDialog}><span>Cancel</span></button>
+        </>
+      }
+    >
       <div className="w7-group">
         <span className="w7-group-title">Supply voltage</span>
         <div className="supply-row">
-          <input type="range" className="w7-slider" min={1.8} max={5.5} step={0.05} value={vcc} onChange={(e) => { const v = Number(e.target.value); useSettings.getState().set({ vcc: v }); sim({ type: 'setVcc', volts: v }); }} />
+          <input type="range" className="w7-slider" min={spec?.vccRange[0] ?? 1.8} max={spec?.vccRange[1] ?? 5.5} step={0.05} value={vcc} onChange={(e) => { const v = Number(e.target.value); useSettings.getState().set({ vcc: v }); sim({ type: 'setVcc', volts: v }); }} />
           <span className="mono">{vcc.toFixed(2)} V</span>
         </div>
-        <p className="dim">Affects the ADC reference, the analog comparator and the VCC level monitor (VLM).</p>
+        <p className="dim">Affects the ADC reference, the analog comparator and the VCC level monitor (VLM). {spec && maxHz > 0 && <>Datasheet speed grade at this voltage: up to <b>{formatHz(maxHz)}</b>.</>}</p>
+        {st && maxHz > 0 && st.hz > maxHz * 1.0001 && (
+          <div className="hint warn"><Icons.Warning size={13} /> The CPU runs at {formatHz(st.hz)}, faster than the {formatHz(maxHz)} allowed at {vcc.toFixed(2)} V. A real chip may not run reliably.</div>
+        )}
       </div>
       <div className="w7-group">
-        <span className="w7-group-title">External clock (CLKMSR = external)</span>
-        <div className="supply-row">
-          <input className="w7-input mono" value={ext} onChange={(e) => setExt(e.target.value)} style={{ width: 120 }} /> Hz
-          <button className="w7-btn small" onClick={() => sim({ type: 'setExternalClock', hz: Number(ext) || 8e6 })}><span>Apply</span></button>
-        </div>
-        <p className="dim">Current CPU clock: {st ? `${(st.hz / 1e6).toFixed(3)} MHz` : '-'}</p>
+        <span className="w7-group-title">CPU clock</span>
+        <p style={{ marginTop: 0 }}>Current CPU clock: <b className="mono">{st ? formatHz(st.hz) : '-'}</b>{msr && st && <span className="dim"> ({sourceNames[curSource].replace(/ \(.*\)$/, '')}, /{2 ** curPs})</span>}</p>
+        {msr && psr ? (
+          <div className="form-grid">
+            <span>Source (CLKMSR):</span>
+            <div>
+              {sourceNames.map((n, i) => (
+                <label key={i} className="w7-check" style={{ display: 'flex', margin: '2px 0' }}>
+                  <input type="radio" checked={source === i} onChange={() => setSource(i)} /> {n}
+                </label>
+              ))}
+            </div>
+            <span>External clock:</span>
+            <div className="supply-row">
+              <input className="w7-input mono" value={ext} onChange={(e) => setExt(e.target.value)} style={{ width: 120 }} />
+              <span className={extHz > 0 ? 'dim' : 'error-text'}>{extHz > 0 ? `= ${extHz.toLocaleString()} Hz` : 'e.g. 8 MHz, 32768 Hz, 16e6'}</span>
+            </div>
+            <span>Prescaler (CLKPSR):</span>
+            <select className="w7-select" value={ps} onChange={(e) => setPs(Number(e.target.value))} style={{ width: 120 }}>
+              {PRESCALERS.map((p) => <option key={p} value={p}>/{2 ** p}</option>)}
+            </select>
+            <span>Result:</span>
+            <b className="mono">{formatHz(resulting)}</b>
+          </div>
+        ) : (
+          <div className="supply-row">
+            External clock: <input className="w7-input mono" value={ext} onChange={(e) => setExt(e.target.value)} style={{ width: 120 }} />
+          </div>
+        )}
+        <p className="dim" style={{ marginBottom: 0 }}>
+          On this chip the program selects the clock itself (CLKMSR/CLKPSR, protected by CCP). Apply writes those registers the way the debugger would; firmware that changes them later wins. The external frequency is used whenever the external source is selected.
+        </p>
       </div>
     </Dialog>
   );
 }
 
-function IsaDialog(): JSX.Element {
-  const spec = useSim((s) => s.spec);
-  const [rows, setRows] = useState<InsnInfo[]>([]);
-  const [f, setF] = useState('');
-  useEffect(() => {
-    if (spec) instructionSet(spec.id).then(setRows).catch(() => {});
-  }, [spec]);
-  const shown = rows.filter((r) => !f || r.mnemonic.toLowerCase().includes(f.toLowerCase()));
+function speedGradeMax(grades: [number, number][], vcc: number): number {
+  return grades.filter(([, v]) => vcc + 1e-9 >= v).reduce((m, [hz]) => Math.max(m, hz), 0);
+}
+
+const LOG_MIN = 0; // 1 Hz
+const LOG_MAX = 8; // 100 MHz
+
+function SpeedDialog(): JSX.Element {
+  const s = useSettings();
+  const mcuHz = useSim((x) => x.state?.hz ?? 1e6);
+  const [mode, setMode] = useState<SpeedMode>(s.speedMode);
+  const [hz, setHz] = useState(s.speedMode === 'clock' ? s.speedFactor : Math.min(mcuHz, 1e8));
+  const [hzText, setHzText] = useState(formatHz(hz));
+  const [factor, setFactor] = useState(s.speedMode === 'realtime' ? s.speedFactor : 1);
+  const setHzBoth = (v: number) => {
+    setHz(v);
+    setHzText(formatHz(v));
+  };
+  const apply = () => {
+    if (mode === 'clock') setSpeed('clock', Math.max(0.01, hz));
+    else if (mode === 'realtime') setSpeed('realtime', factor);
+    else setSpeed('max', 1);
+  };
+  const presets = [1, 10, 100, 1e3, 1e4, 1e5, 1e6];
   return (
-    <Dialog title={`Instruction Set - ${spec?.name ?? ''} (${spec?.coreName ?? ''})`} width={640}>
-      <input className="w7-input" placeholder="Filter mnemonics..." value={f} onChange={(e) => setF(e.target.value)} style={{ width: '100%', marginBottom: 8 }} autoFocus />
-      <div style={{ maxHeight: '55vh', overflow: 'auto', border: '1px solid #d5dfe5' }}>
-        <table className="grid-table">
-          <thead>
-            <tr><th>Mnemonic</th><th>Operands</th><th>Encoding</th><th>Cycles</th><th>Words</th></tr>
-          </thead>
-          <tbody>
-            {shown.map((r, i) => (
-              <tr key={i} className="row-hot">
-                <td><b>{r.mnemonic}</b></td>
-                <td className="mono">{r.operands}</td>
-                <td className="mono dim">{r.encoding}</td>
-                <td>{r.cycles}</td>
-                <td>{r.words}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+    <Dialog
+      title="Simulation Speed"
+      width={540}
+      gray
+      buttons={
+        <>
+          <span className="left dim">Now: {speedLabel(s.speedMode, s.speedFactor)}</span>
+          <button className="w7-btn default" onClick={() => { apply(); closeDialog(); }}><span>OK</span></button>
+          <button className="w7-btn" onClick={apply}><span>Apply</span></button>
+          <button className="w7-btn" onClick={closeDialog}><span>Cancel</span></button>
+        </>
+      }
+    >
+      <div className="w7-group">
+        <label className="w7-check speed-choice">
+          <input type="radio" checked={mode === 'clock'} onChange={() => setMode('clock')} />
+          <span><b>Fixed CPU speed</b> - run exactly this many clock cycles per second, whatever the chip's own clock is. Slow it down to 1 Hz to watch every instruction in the Chip View.</span>
+        </label>
+        <div className={`speed-row${mode === 'clock' ? '' : ' disabled'}`}>
+          <input type="range" className="w7-slider grow" min={LOG_MIN} max={LOG_MAX} step={0.01} value={Math.log10(Math.max(1, hz))} onChange={(e) => { setMode('clock'); setHzBoth(Math.round(10 ** Number(e.target.value) * 100) / 100); }} />
+          <input className="w7-input mono" style={{ width: 100 }} value={hzText} onChange={(e) => { setMode('clock'); setHzText(e.target.value); const v = parseHz(e.target.value); if (v > 0) setHz(v); }} />
+        </div>
+        <div className={`speed-presets${mode === 'clock' ? '' : ' disabled'}`}>
+          {presets.map((p) => (
+            <button key={p} className={`seg-btn${mode === 'clock' && hz === p ? ' on' : ''}`} onClick={() => { setMode('clock'); setHzBoth(p); }}>{formatHz(p)}</button>
+          ))}
+          <button className={`seg-btn${mode === 'clock' && hz === mcuHz ? ' on' : ''}`} onClick={() => { setMode('clock'); setHzBoth(mcuHz); }} data-tip="The MCU's current clock">MCU ({formatHz(mcuHz)})</button>
+        </div>
       </div>
-      <p className="dim">Branches take one extra cycle when taken; skips take 1 + the size of the skipped instruction. Aliases (CLR, LSL, TST, SER, BREQ, SEI, ...) are accepted by the assembler.</p>
+      <div className="w7-group">
+        <label className="w7-check speed-choice">
+          <input type="radio" checked={mode === 'realtime'} onChange={() => setMode('realtime')} />
+          <span><b>Relative to real time</b> - 1x runs at the chip's actual clock ({formatHz(mcuHz)} now) and follows it when the program changes the clock.</span>
+        </label>
+        <div className={`speed-row${mode === 'realtime' ? '' : ' disabled'}`}>
+          <input type="range" className="w7-slider grow" min={-3} max={3} step={0.01} value={Math.log10(factor)} onChange={(e) => { setMode('realtime'); setFactor(+(10 ** Number(e.target.value)).toPrecision(3)); }} />
+          <span className="mono" style={{ width: 100, textAlign: 'right' }}>{speedLabel('realtime', factor)}</span>
+        </div>
+        <div className={`speed-presets${mode === 'realtime' ? '' : ' disabled'}`}>
+          {[0.001, 0.01, 0.1, 1, 10, 100].map((f) => (
+            <button key={f} className={`seg-btn${mode === 'realtime' && factor === f ? ' on' : ''}`} onClick={() => { setMode('realtime'); setFactor(f); }}>{speedLabel('realtime', f)}</button>
+          ))}
+        </div>
+      </div>
+      <div className="w7-group">
+        <label className="w7-check speed-choice">
+          <input type="radio" checked={mode === 'max'} onChange={() => setMode('max')} />
+          <span><b>Maximum</b> - as fast as this computer can simulate (typically 100-200 million instructions per second, far beyond any real AVR).</span>
+        </label>
+      </div>
     </Dialog>
   );
 }

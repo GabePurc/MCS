@@ -12,6 +12,8 @@ export interface EditorApi {
   /** 1-based line of the main cursor. */
   cursorLine(): number;
   focus(): void;
+  /** Inserts text at the cursor (replacing the selection). */
+  insertText(text: string): void;
 }
 
 let current: EditorApi | null = null;

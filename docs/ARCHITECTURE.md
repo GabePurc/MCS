@@ -46,7 +46,11 @@ logic is Rust; TypeScript only renders and routes user input.
 * `pins.rs` — electrical model (direction, latch, pull-up, peripheral override, external
   drive incl. analog voltage, Schmitt thresholds, contention detection), the logic-analyzer
   trace ring buffer and the piecewise clock model (cycles <-> seconds across clock changes).
-* `session.rs` — debugger session: real-time pacing / max speed in time slices, breakpoints,
+* `avr/peripherals/stimulus.rs` — test-bench signal generators (square waves / pulse bursts on
+  pins), a peripheral like any other: one scheduled event per edge, timed in seconds.
+* Execution profiling: `Machine::run` is monomorphized over a `PROFILE` const so per-word
+  execution counting (Chip View heat map) costs nothing while disabled.
+* `session.rs` — debugger session: real-time / fixed-rate (cycles per second, down to 1 Hz) / max speed in time slices, breakpoints,
   run-to, source- or instruction-level stepping (via a per-instruction predicate), state
   snapshots (`protocol.rs`). `session::spawn` runs it on a thread for the desktop app.
 
@@ -72,3 +76,16 @@ logic is Rust; TypeScript only renders and routes user input.
   shortcuts share enablement and behavior.
 * `backend/api.ts` is the only module that knows about Tauri; in a plain browser it routes the
   same calls to the WebAssembly core (`backend/wasmHost.ts`, `backend/simWorker.ts`).
+* Window layout (`state/layout.ts`): every tool panel is docked in one of four groups, floating
+  (`dock/FloatingWindows.tsx`) or popped out into its own OS window. Pop-outs
+  (`services/windows.ts`, `PopoutApp.tsx`) load the same page with `?popout=<panel>`; the main
+  window stays the only owner of the simulator and documents and mirrors simulator outputs,
+  workspace and settings to them over a bridge (Tauri events / BroadcastChannel). Pop-outs send
+  simulator commands, UI commands and workspace edits back.
+* Chip View (`src/ui/chip`): `floorplan.ts` derives a die floorplan from the device spec (memory
+  arrays, CPU, one block per peripheral group, pads per package pin); `dieArt.ts` draws the
+  silicon and the live block contents on canvases; `engine.ts` turns machine states into decaying
+  highlights and redraws only blocks whose content fingerprint changed; `scene3d.ts` (three.js,
+  lazily loaded) renders the package/lead frame/bond wires/die on demand with shadows and GTAO.
+* Machine-code sources (`.mc`) are parsed by `mcs_asm::assemble_machine_code` into an ordinary
+  `LoadedProgram` with a line table, so they debug like assembly.

@@ -16,6 +16,7 @@ import { autocompletion, closeBrackets, closeBracketsKeymap, completionKeymap } 
 import { lintGutter, setDiagnostics, type Diagnostic as CmDiagnostic } from '@codemirror/lint';
 import { cpp } from '@codemirror/lang-cpp';
 import { asmCompletions, avrAsm, deviceWords, vsHighlight } from './avrLanguage';
+import { machineCodeSupport } from './mcLanguage';
 import { editorStates, initialTexts } from './docText';
 import { setEditorApi } from './editorApi';
 import { markDirty } from '../services/files';
@@ -181,6 +182,8 @@ const theme = EditorView.theme({
   '.cm-panel input, .cm-panel button': { fontFamily: 'var(--font-ui)', fontSize: '12px' },
   '.cm-button': { backgroundImage: 'linear-gradient(#f2f2f2, #ebebeb 49%, #dddddd 50%, #cfcfcf)', border: '1px solid #707070', borderRadius: '3px' },
   '.cm-textfield': { border: '1px solid #abadb3', borderRadius: '2px' },
+  '.cm-mc-hint': { color: '#5a7f5a', marginLeft: '2.5em', fontStyle: 'italic', pointerEvents: 'none' },
+  '.cm-mc-hint.invalid': { color: '#c0392b' },
 });
 
 // ------------------------------------------------------------------ state factory
@@ -189,6 +192,7 @@ const languageConf = new Compartment();
 const fontConf = new Compartment();
 
 function languageFor(doc: Doc): Extension {
+  if (doc.language === 'mc') return machineCodeSupport();
   return doc.language === 'asm' ? [avrAsm, autocompletion({ override: [asmCompletions] })] : [cpp(), autocompletion()];
 }
 
@@ -281,6 +285,10 @@ export function SourceEditor({ doc }: { doc: Doc }): JSX.Element {
       gotoLine: () => gotoLine(view),
       cursorLine: () => view.state.doc.lineAt(view.state.selection.main.head).number,
       focus: () => view.focus(),
+      insertText: (text) => {
+        view.dispatch(view.state.replaceSelection(text));
+        view.focus();
+      },
     });
     return () => {
       if (currentDocId) editorStates.set(currentDocId, view.state);

@@ -5,6 +5,7 @@
 pub mod analog;
 pub mod exint;
 pub mod port;
+pub mod stimulus;
 pub mod system;
 pub mod timer16;
 
@@ -21,6 +22,9 @@ pub fn wire(m: &mut Machine) {
     match m.spec.peripheral_set {
         PeripheralSet::TinyRc => wire_tiny_rc(m),
     }
+    // Test-bench signal generators (every device).
+    let pins = m.sys.pins.len();
+    m.stimulus = Some(m.add_peripheral(Box::new(stimulus::Stimulus::new(pins))));
 }
 
 fn add(m: &mut Machine, p: Box<dyn super::machine::Peripheral>, regs: Vec<(u16, u8)>, vectors: &[Option<u8>]) -> u8 {

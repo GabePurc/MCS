@@ -37,7 +37,7 @@ export interface LineEntry {
 }
 
 export interface LoadedProgram {
-  format: 'asm' | 'hex' | 'elf';
+  format: 'asm' | 'hex' | 'elf' | 'mc';
   flash: number[];
   flashUsed: number;
   eeprom?: number[];
@@ -112,13 +112,29 @@ export interface AvrDeviceSpec {
   hasAdc: boolean;
   clock: { internalHz: number; slowHz: number; defaultPrescaleLog2: number };
   vcc: number;
+  vccRange: [number, number];
+  /** [max clock Hz, minimum VCC] pairs. */
+  speedGrades: [number, number][];
+  datasheet: string;
+  die: { widthUm: number; heightUm: number; photoUrl: string; photoCredit: string } | null;
   peripheralSet: string;
 }
 
 // ---------------------------------------------------------------- protocol.rs
 export type ExtDrive = 'float' | 'low' | 'high' | 'analog';
 export type StepKind = 'into' | 'over' | 'out';
-export type SpeedMode = 'realtime' | 'max';
+/** realtime: sim time = wall time x factor; clock: factor CPU cycles per second; max: unthrottled. */
+export type SpeedMode = 'realtime' | 'clock' | 'max';
+
+export interface PinGenerator {
+  hz: number;
+  /** Active fraction of each period (0..1). */
+  duty: number;
+  /** Number of pulses (burst), absent = continuous. */
+  count?: number;
+  /** Idle high, active low. */
+  invert: boolean;
+}
 
 export type SimCommand =
   | { type: 'init'; deviceId: string }
@@ -134,6 +150,9 @@ export type SimCommand =
   | { type: 'setPin'; pin: number; ext: ExtDrive; volts: number }
   | { type: 'setVcc'; volts: number }
   | { type: 'setExternalClock'; hz: number }
+  | { type: 'setClockConfig'; source: number; prescaleLog2: number }
+  | { type: 'setPinGenerator'; pin: number; gen: PinGenerator | null }
+  | { type: 'setProfiling'; enabled: boolean }
   | { type: 'writeData'; addr: number; value: number }
   | { type: 'writeFlash'; addr: number; value: number }
   | { type: 'writeReg'; reg: number; value: number }
@@ -151,6 +170,7 @@ export interface PinState {
   extVolts: number;
   volts: number;
   reserved: boolean;
+  gen?: PinGenerator;
 }
 
 export interface CallFrame {
@@ -182,6 +202,7 @@ export interface RawMachineState {
   instructions: number;
   timeSec: number;
   hz: number;
+  extClockHz: number;
   sleeping: boolean;
   sleepMode: number;
   resetHeld: boolean;
@@ -199,17 +220,20 @@ export interface RawMachineState {
   traceFrom: number;
   traceCycles: number[];
   traceLevels: number[];
+  /** Instructions executed per word since the previous state (profiling only). */
+  execHeat?: number[];
   messages: SimMessage[];
   stop?: StopInfo;
 }
 
 /** State as used by the UI (typed arrays). */
-export interface MachineState extends Omit<RawMachineState, 'regs' | 'data' | 'flash' | 'traceCycles' | 'traceLevels'> {
+export interface MachineState extends Omit<RawMachineState, 'regs' | 'data' | 'flash' | 'traceCycles' | 'traceLevels' | 'execHeat'> {
   regs: Uint8Array;
   data: Uint8Array;
   flash?: Uint8Array;
   traceCycles: Float64Array;
   traceLevels: Uint32Array;
+  execHeat?: Uint32Array;
 }
 
 export type SimOutput =
@@ -233,6 +257,21 @@ export interface DeviceSummary {
   family: string;
   flashSize: number;
   sramSize: number;
+  package: string;
+  coreName: string;
+}
+
+export interface McHint {
+  line: number;
+  /** Byte address of the line's first word. */
+  address: number;
+  text: string;
+  valid: boolean;
+}
+
+export interface McAnnotations {
+  hints: McHint[];
+  diagnostics: Diagnostic[];
 }
 
 export interface DisasmLine {
@@ -251,6 +290,10 @@ export interface InsnInfo {
   encoding: string;
   cycles: number;
   words: number;
+  summary: string;
+  operation: string;
+  flags: string;
+  aliases: string;
 }
 
 export interface ToolchainInfo {

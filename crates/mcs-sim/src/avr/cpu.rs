@@ -104,6 +104,8 @@ pub struct Cpu {
     pub wake_mask: Vec<Vec<bool>>,
 
     pub breakpoints: Vec<bool>,
+    /// Per-word execution counters (empty = profiling off). Filled by `Machine::run`.
+    pub exec_counts: Vec<u32>,
     pub shadow_stack: Vec<CallFrame>,
     pub stop_reason: StopReason,
     pub halt: bool,
@@ -158,6 +160,7 @@ impl Cpu {
             sleep_mode: 0,
             wake_mask: Vec::new(),
             breakpoints: vec![false; flash_words as usize],
+            exec_counts: Vec::new(),
             shadow_stack: Vec::with_capacity(64),
             stop_reason: StopReason::None,
             halt: false,

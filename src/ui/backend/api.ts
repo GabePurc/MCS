@@ -5,7 +5,7 @@
 import { Channel, invoke } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { open, save, ask, message } from '@tauri-apps/plugin-dialog';
-import type { BuildOutcome, DeviceSummary, DisasmLine, InsnInfo, SimCommand, SimOutput, ToolchainInfo } from './types';
+import type { BuildOutcome, DeviceSummary, DisasmLine, InsnInfo, McAnnotations, SimCommand, SimOutput, ToolchainInfo } from './types';
 import { core, wasmUrl } from './wasmHost';
 
 /** True when running inside the Tauri shell (false in a plain browser during `npm run dev:web`). */
@@ -55,6 +55,19 @@ export const listDevices = () => (inTauri ? call<DeviceSummary[]>('list_devices'
 
 export const buildAsm = (source: string, fileName: string, filePath: string | null, deviceId: string) =>
   inTauri ? call<BuildOutcome>('build_asm', { source, fileName, filePath, deviceId }) : wasm<BuildOutcome>({ method: 'buildAsm', source, fileName, deviceId });
+
+export const buildMachineCode = (source: string, fileName: string, filePath: string | null, deviceId: string) =>
+  inTauri
+    ? call<BuildOutcome>('build_machine_code', { source, fileName, filePath, deviceId })
+    : wasm<BuildOutcome>({ method: 'buildMachineCode', source, fileName, deviceId });
+
+export const machineCodeHints = (source: string, deviceId: string) =>
+  inTauri ? call<McAnnotations>('machine_code_hints', { source, deviceId }) : wasm<McAnnotations>({ method: 'machineCodeHints', source, deviceId });
+
+export const programToMachineCode = (deviceId: string, flash: number[] | Uint8Array, used: number, labels: Record<number, string>, title: string) =>
+  inTauri
+    ? call<string>('program_to_machine_code', { deviceId, flash: Array.from(flash), used, labels, title })
+    : wasm<string>({ method: 'programToMachineCode', deviceId, flash: Array.from(flash), used, labels, title });
 
 export const buildC = (args: { source: string; fileName: string; filePath: string | null; deviceId: string; optimize: string; extraFlags: string[]; gccPath: string | null }) =>
   call<BuildOutcome>('build_c', args);
@@ -151,6 +164,17 @@ export async function confirmDialog(text: string, title = 'MCS'): Promise<boolea
 export async function infoDialog(text: string, title = 'MCS'): Promise<void> {
   if (!inTauri) return window.alert(text);
   await message(text, { title, kind: 'info' });
+}
+
+/** Opens a web page in the system browser. */
+export async function openExternal(url: string): Promise<void> {
+  if (!/^https?:\/\//.test(url)) return;
+  if (!inTauri) {
+    window.open(url, '_blank', 'noopener');
+    return;
+  }
+  const { openUrl } = await import('@tauri-apps/plugin-opener');
+  await openUrl(url);
 }
 
 // ---------------------------------------------------------------- window

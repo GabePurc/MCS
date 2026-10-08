@@ -10,6 +10,9 @@ pub enum ProgramFormat {
     Asm,
     Hex,
     Elf,
+    /// Hand-written instruction words (`.mc` files).
+    #[serde(rename = "mc")]
+    MachineCode,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

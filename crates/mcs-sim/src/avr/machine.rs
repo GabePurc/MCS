@@ -22,7 +22,7 @@ use serde::Serialize;
 
 use super::cpu::*;
 use super::peripherals;
-use crate::pins::{ClockModel, ExtDrive, Pin, PinTrace};
+use crate::pins::{ClockModel, ExtDrive, Pin, PinGenerator, PinTrace};
 use crate::scheduler::{EventKey, Scheduler};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -232,6 +232,8 @@ pub trait Peripheral: Send {
     fn on_trigger(&mut self, trigger: Trigger, value: u8, cycle: u64, cx: &mut Cx) {}
     fn on_power_reduction(&mut self, prr: u8, cx: &mut Cx) {}
     fn on_clock_change(&mut self, cx: &mut Cx) {}
+    /// The frequency of the external clock source (CLKI) changed.
+    fn on_ext_clock(&mut self, cx: &mut Cx) {}
     fn on_vcc_change(&mut self, cx: &mut Cx) {}
     fn on_sleep(&mut self, mode: u8, cx: &mut Cx) {}
     fn on_wake(&mut self, cx: &mut Cx) {}
@@ -252,6 +254,8 @@ pub struct Machine {
     pub sys: Sys,
     pub periphs: Vec<Box<dyn Peripheral>>,
     smcr: Option<u16>,
+    /// Index of the test-bench signal generator peripheral (see `peripherals::stimulus`).
+    pub(crate) stimulus: Option<u8>,
     /// Optional per-instruction predicate used for stepping; returns true to stop before executing.
     pub step_predicate: Option<StepPredicate>,
 }
@@ -281,6 +285,7 @@ impl Machine {
             },
             periphs: Vec::new(),
             smcr: spec.register("SMCR").map(|r| r.addr),
+            stimulus: None,
             step_predicate: None,
         };
         let sreg = spec.reg("SREG");
@@ -521,11 +526,71 @@ impl Machine {
         if i >= self.sys.pins.len() {
             return;
         }
+        if self.sys.pins[i].gen.is_some() {
+            self.set_pin_generator(i, None);
+        }
         self.sys.pins[i].ext = ext;
         self.sys.pins[i].ext_volts = volts;
         let c = self.cpu.cycles;
         self.sys.update_pin(i, c);
         self.drain_events();
+    }
+
+    /// Attaches (Some) or removes (None) a signal generator on GPIO `i`. Removing it leaves the
+    /// pin at the generator's idle level.
+    pub fn set_pin_generator(&mut self, i: usize, gen: Option<PinGenerator>) {
+        if let Some(idx) = self.stimulus {
+            self.call(idx, |p, cx| {
+                if let Some(s) = p.as_any_mut().downcast_mut::<peripherals::stimulus::Stimulus>() {
+                    s.set(i, gen, cx);
+                }
+            });
+        }
+    }
+
+    /// Frequency of the external clock input (used when the clock source selects it).
+    pub fn set_external_clock(&mut self, hz: f64) {
+        if !(hz.is_finite() && hz > 0.0) {
+            return;
+        }
+        self.sys.ext_clock_hz = hz;
+        self.broadcast(|p, cx| p.on_ext_clock(cx));
+    }
+
+    /// Debugger write of the clock source and prescaler registers. Performs the device's
+    /// protection sequence (CCP unlock / CLKPCE) the way firmware would.
+    pub fn debug_set_clock(&mut self, source: u8, prescale_log2: u8) {
+        let s = self.spec;
+        if let (Some(msr), Some(psr)) = (s.register("CLKMSR"), s.register("CLKPSR")) {
+            let saved = self.sys.ccp_until;
+            self.sys.ccp_until = self.cpu.cycles + 4;
+            self.write_data(msr.addr, source);
+            self.sys.ccp_until = self.cpu.cycles + 4;
+            self.write_data(psr.addr, prescale_log2);
+            self.sys.ccp_until = saved;
+        } else if let Some(clkpr) = s.register("CLKPR") {
+            self.write_data(clkpr.addr, 0x80);
+            self.write_data(clkpr.addr, prescale_log2 & 0x0f);
+        }
+    }
+
+    /// Enables or disables per-word execution counting (see [`Machine::take_exec_counts`]).
+    pub fn set_profiling(&mut self, enabled: bool) {
+        self.cpu.exec_counts = if enabled { vec![0; self.cpu.flash_words as usize] } else { Vec::new() };
+    }
+
+    pub fn profiling(&self) -> bool {
+        !self.cpu.exec_counts.is_empty()
+    }
+
+    /// Execution counts since the previous call (and resets them). Empty when profiling is off.
+    pub fn take_exec_counts(&mut self) -> Vec<u32> {
+        if self.cpu.exec_counts.is_empty() {
+            return Vec::new();
+        }
+        let out = self.cpu.exec_counts.clone();
+        self.cpu.exec_counts.fill(0);
+        out
     }
 
     pub fn set_vcc(&mut self, v: f64) {
@@ -620,6 +685,15 @@ impl Machine {
     /// request. A breakpoint at the starting PC is ignored so execution can resume from it.
     /// While RESET is held only time advances.
     pub fn run(&mut self, limit: u64) -> StopReason {
+        // Two monomorphized loops: profiling costs nothing while it is off.
+        if self.cpu.exec_counts.is_empty() {
+            self.run_loop::<false>(limit)
+        } else {
+            self.run_loop::<true>(limit)
+        }
+    }
+
+    fn run_loop<const PROFILE: bool>(&mut self, limit: u64) -> StopReason {
         self.cpu.stop_reason = StopReason::None;
         self.cpu.halt = false;
         if self.sys.reset_held {
@@ -670,6 +744,10 @@ impl Machine {
                 }
             }
             skip_bp = false;
+            if PROFILE {
+                let c = &mut self.cpu.exec_counts[pc];
+                *c = c.wrapping_add(1);
+            }
             self.exec();
             if self.sys.sched.next <= self.cpu.cycles {
                 self.dispatch_scheduled();
@@ -715,6 +793,9 @@ impl Machine {
                 self.dispatch_scheduled();
             }
             return StopReason::Limit;
+        }
+        if let Some(c) = self.cpu.exec_counts.get_mut(self.cpu.pc as usize) {
+            *c = c.wrapping_add(1);
         }
         self.exec();
         if self.sys.sched.next <= self.cpu.cycles {

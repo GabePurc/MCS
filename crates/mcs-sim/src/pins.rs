@@ -15,6 +15,42 @@ pub enum ExtDrive {
     Analog,
 }
 
+/// Signal generator attached to a pin from outside: a square wave (`count == None`) or a burst of
+/// `count` pulses. The pin idles low (high when `invert`) and each period starts with the active
+/// level for `duty * period`.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PinGenerator {
+    pub hz: f64,
+    /// Active fraction of each period (0..1).
+    pub duty: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub count: Option<u32>,
+    #[serde(default)]
+    pub invert: bool,
+}
+
+impl PinGenerator {
+    /// Lowest/highest accepted frequency (an edge every simulated cycle is the practical limit).
+    pub const MIN_HZ: f64 = 0.01;
+    pub const MAX_HZ: f64 = 20e6;
+
+    /// Clamped copy (frequency range, duty strictly between 0 and 1).
+    pub fn sanitized(mut self) -> Self {
+        self.hz = if self.hz.is_finite() { self.hz.clamp(Self::MIN_HZ, Self::MAX_HZ) } else { 1000.0 };
+        self.duty = if self.duty.is_finite() { self.duty.clamp(0.001, 0.999) } else { 0.5 };
+        self
+    }
+
+    pub fn active_s(&self) -> f64 {
+        self.duty / self.hz
+    }
+
+    pub fn idle_s(&self) -> f64 {
+        (1.0 - self.duty) / self.hz
+    }
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct Pin {
     pub name: String,
@@ -32,6 +68,8 @@ pub struct Pin {
     // Outside world
     pub ext: ExtDrive,
     pub ext_volts: f64,
+    /// Signal generator driving `ext` (see the `stimulus` peripheral).
+    pub gen: Option<PinGenerator>,
     // Resolved
     pub level: u8,
     pub volts: f64,

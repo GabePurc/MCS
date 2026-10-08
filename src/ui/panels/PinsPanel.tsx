@@ -1,8 +1,10 @@
-import type { JSX } from 'react';
+import { Fragment, useState, type JSX } from 'react';
 import { useSim } from '../state/sim';
 import { useSettings } from '../state/settings';
 import { sim } from '../services/simClient';
-import type { ExtDrive, PinSpec, PinState } from '../backend/types';
+import type { ExtDrive, PinGenerator, PinSpec, PinState } from '../backend/types';
+import { formatHz, parseHz } from '../format';
+import { Icons } from '../icons';
 import { EmptyHint, Section } from './common';
 
 const NEXT_DRIVE: Record<ExtDrive, ExtDrive> = { float: 'high', high: 'low', low: 'float', analog: 'float' };
@@ -14,9 +16,50 @@ function setDrive(pin: number, ext: ExtDrive, volts: number): void {
 function driverText(p: PinState): string {
   if (p.reserved) return 'RESET input';
   if (p.dir) return p.ovEnable ? 'Timer output' : 'PORT output';
+  if (p.gen) return 'Signal generator';
   if (p.ext === 'analog') return 'Analog input';
   if (p.ext !== 'float') return 'External';
   return p.pullup ? 'Pull-up' : 'Floating';
+}
+
+function genText(g: PinGenerator): string {
+  return `${formatHz(g.hz)}, ${Math.round(g.duty * 100)}% ${g.invert ? 'low' : 'high'}${g.count ? `, ${g.count} pulse${g.count > 1 ? 's' : ''}` : ''}`;
+}
+
+/** Square wave / pulse burst settings for one pin (event-driven generator in the simulator). */
+function GeneratorRow({ pin, state, name }: { pin: number; state: PinState; name: string }): JSX.Element {
+  const g = state.gen;
+  const [freq, setFreq] = useState(g ? formatHz(g.hz) : '1 kHz');
+  const [duty, setDuty] = useState(g ? Math.round(g.duty * 100) : 50);
+  const [count, setCount] = useState(g?.count ? String(g.count) : '');
+  const [invert, setInvert] = useState(g?.invert ?? false);
+  const hz = parseHz(freq);
+  const n = count.trim() ? Math.max(1, Math.floor(Number(count))) : undefined;
+  const valid = hz > 0 && (n === undefined || Number.isFinite(n));
+  const start = () => valid && sim({ type: 'setPinGenerator', pin, gen: { hz, duty: duty / 100, count: n, invert } });
+  return (
+    <tr className="gen-row">
+      <td colSpan={5}>
+        <div className="gen-editor">
+          <Icons.Generator size={14} />
+          <b>{name}</b>
+          <span>Frequency</span>
+          <input className="w7-input mono" style={{ width: 80 }} value={freq} onChange={(e) => setFreq(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && start()} data-tip="e.g. 1 Hz, 50 kHz, 1e6" />
+          <span>Duty</span>
+          <input type="range" className="w7-slider" min={1} max={99} value={duty} onChange={(e) => setDuty(Number(e.target.value))} style={{ width: 70 }} />
+          <span className="mono">{duty}%</span>
+          <span>Pulses</span>
+          <input className="w7-input mono" style={{ width: 44 }} placeholder="all" value={count} onChange={(e) => setCount(e.target.value.replace(/[^0-9]/g, ''))} data-tip="Empty = continuous square wave; a number = burst of that many pulses" />
+          <label className="w7-check" data-tip="Idle high, pulses go low (e.g. a button on a pull-up line)">
+            <input type="checkbox" checked={invert} onChange={(e) => setInvert(e.target.checked)} /> Active low
+          </label>
+          <button className="w7-btn small default" disabled={!valid} onClick={start}><span>{g ? 'Update' : 'Start'}</span></button>
+          {g && <button className="w7-btn small" onClick={() => sim({ type: 'setPinGenerator', pin, gen: null })}><span>Stop</span></button>}
+          {g && <span className="dim">Running: {genText(g)}</span>}
+        </div>
+      </td>
+    </tr>
+  );
 }
 
 /** Package diagram + per-pin stimulus controls (logic levels, analog voltages, VCC). */
@@ -24,7 +67,14 @@ export function PinsPanel(): JSX.Element {
   const spec = useSim((s) => s.spec);
   const st = useSim((s) => s.state);
   const vcc = useSettings((s) => s.vcc);
+  const [genOpen, setGenOpen] = useState<Set<number>>(new Set());
   if (!spec || !st) return <EmptyHint>No device loaded.</EmptyHint>;
+  const toggleGen = (i: number) => setGenOpen((s) => {
+    const n = new Set(s);
+    if (n.has(i)) n.delete(i);
+    else n.add(i);
+    return n;
+  });
   const gpioPins = spec.pins.filter((p) => p.kind === 'io' && p.gpio !== undefined);
   return (
     <div className="panel">
@@ -48,8 +98,12 @@ export function PinsPanel(): JSX.Element {
                 const i = ps.gpio!;
                 const p = st.pins[i];
                 if (!p) return null;
+                const showGen = genOpen.has(i) || !!p.gen;
+                // Momentary push button: pulls toward the opposite of the idle level.
+                const pressLevel: ExtDrive = p.pullup ? 'low' : 'high';
                 return (
-                  <tr key={ps.name} className="row-hot">
+                  <Fragment key={ps.name}>
+                  <tr className="row-hot">
                     <td data-tip={ps.functions.join(', ')}>
                       <b>{ps.name}</b> <span className="dim">({ps.number})</span>
                     </td>
@@ -70,7 +124,25 @@ export function PinsPanel(): JSX.Element {
                             {{ float: 'Z', low: '0', high: '1', analog: '~' }[d]}
                           </button>
                         ))}
+                        <button
+                          className={`seg-btn${showGen ? ' on' : ''}`}
+                          data-tip={p.gen ? `Signal generator: ${genText(p.gen)}` : 'Signal generator (square wave / pulses)'}
+                          onClick={() => (p.gen ? sim({ type: 'setPinGenerator', pin: i, gen: null }) : toggleGen(i))}
+                        >
+                          <Icons.Generator size={12} />
+                        </button>
                       </span>
+                      <button
+                        className="w7-btn small push-btn"
+                        data-tip={`Push button: hold to drive ${ps.name} ${pressLevel === 'low' ? 'LOW (to GND)' : 'HIGH (to VCC)'}, release to let go`}
+                        onPointerDown={(e) => {
+                          e.currentTarget.setPointerCapture(e.pointerId);
+                          setDrive(i, pressLevel, 0);
+                        }}
+                        onPointerUp={() => setDrive(i, 'float', 0)}
+                      >
+                        <span>Push</span>
+                      </button>
                       {p.ext === 'analog' && (
                         <input
                           type="range"
@@ -85,6 +157,8 @@ export function PinsPanel(): JSX.Element {
                     </td>
                     <td className="mono">{p.volts.toFixed(2)} V</td>
                   </tr>
+                  {showGen && <GeneratorRow pin={i} state={p} name={ps.name} />}
+                  </Fragment>
                 );
               })}
             </tbody>

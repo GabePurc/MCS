@@ -33,6 +33,10 @@ pub struct Session {
     cycles_per_slice: u64,
     wall_start: f64,
     sim_start: f64,
+    /// Cycle count at `wall_start` (fixed-rate speed mode).
+    cycle_start: u64,
+    /// Cycle count of the last published state (skip unchanged publishes at slow speeds).
+    published_cycles: u64,
     last_publish: f64,
     trace_sent: u64,
     flash_version: u64,
@@ -64,6 +68,8 @@ impl Session {
             cycles_per_slice: 200_000,
             wall_start: now,
             sim_start: 0.0,
+            cycle_start: 0,
+            published_cycles: u64::MAX,
             last_publish: now,
             trace_sent: 0,
             flash_version: 0,
@@ -144,7 +150,21 @@ impl Session {
                 self.m().set_vcc(volts);
                 self.publish_if_idle();
             }
-            Command::SetExternalClock { hz } => self.m().sys.ext_clock_hz = hz,
+            Command::SetExternalClock { hz } => {
+                self.m().set_external_clock(hz);
+                self.resync_clock();
+                self.publish_if_idle();
+            }
+            Command::SetClockConfig { source, prescale_log2 } => {
+                self.m().debug_set_clock(source, prescale_log2);
+                self.resync_clock();
+                self.publish_if_idle();
+            }
+            Command::SetPinGenerator { pin, gen } => {
+                self.m().set_pin_generator(pin, gen);
+                self.publish_if_idle();
+            }
+            Command::SetProfiling { enabled } => self.m().set_profiling(enabled),
             Command::WriteData { addr, value } => {
                 self.m().poke_data(addr, value);
                 self.publish_if_idle();
@@ -263,6 +283,7 @@ impl Session {
     fn resync_clock(&mut self) {
         self.wall_start = now_ms();
         self.sim_start = self.machine.as_ref().map(|m| m.time_seconds()).unwrap_or(0.0);
+        self.cycle_start = self.machine.as_ref().map(|m| m.cpu.cycles).unwrap_or(0);
     }
 
     /// Runs one time slice when running. Returns outputs (periodic state / stop events).
@@ -274,9 +295,18 @@ impl Session {
         let (speed, factor, cps) = (self.speed, self.factor, self.cycles_per_slice);
         let wall = (t0 - self.wall_start) / 1000.0;
         let mut sim_start = self.sim_start;
+        let mut cycle_start = self.cycle_start;
         let m = self.m();
         let target = match speed {
             SpeedMode::Max => m.cpu.cycles + cps,
+            SpeedMode::Clock => {
+                let want = cycle_start as f64 + wall * factor;
+                let cap = m.cpu.cycles as f64 + (MAX_CATCHUP_SEC * factor).max(1.0);
+                if want > cap {
+                    cycle_start = (cap - wall * factor).max(0.0) as u64;
+                }
+                want.min(cap) as u64
+            }
             SpeedMode::Realtime => {
                 let sim_target = sim_start + wall * factor;
                 let max_target = m.time_seconds() + MAX_CATCHUP_SEC * factor;
@@ -289,6 +319,7 @@ impl Session {
         };
         let reason = if target > m.cpu.cycles { m.run(target) } else { StopReason::Limit };
         self.sim_start = sim_start;
+        self.cycle_start = cycle_start;
         let elapsed = now_ms() - t0;
         if speed == SpeedMode::Max {
             let e = elapsed.max(0.05);
@@ -298,8 +329,14 @@ impl Session {
         if reason != StopReason::Limit {
             let info = self.stop_info(reason);
             self.stop(info);
-        } else if now_ms() - self.last_publish >= STATE_INTERVAL_MS {
-            self.publish();
+        } else {
+            // Slow fixed-rate modes advance a few cycles per slice: only publish real changes
+            // (plus a periodic refresh for the speed readout).
+            let since = now_ms() - self.last_publish;
+            let changed = self.machine.as_ref().is_some_and(|m| m.cpu.cycles != self.published_cycles);
+            if since >= STATE_INTERVAL_MS && (changed || since >= 500.0) {
+                self.publish();
+            }
         }
         std::mem::take(&mut self.out)
     }
@@ -314,6 +351,8 @@ impl Session {
         match (self.running, self.speed) {
             (true, SpeedMode::Max) => 0.0,
             (true, SpeedMode::Realtime) => SLICE_MS / 2.0,
+            // Below ~250 Hz a cycle is due less often than every slice: sleep until it is.
+            (true, SpeedMode::Clock) => (1000.0 / self.factor).clamp(SLICE_MS / 2.0, STATE_INTERVAL_MS),
             _ => 3_600_000.0,
         }
     }
@@ -446,7 +485,7 @@ impl Session {
             .sys
             .pins
             .iter()
-            .map(|p| PinState { level: p.level, dir: p.dir, out: p.out, pullup: p.pullup, ov_enable: p.ov_enable, ext: p.ext, ext_volts: p.ext_volts, volts: p.volts, reserved: p.reserved })
+            .map(|p| PinState { level: p.level, dir: p.dir, out: p.out, pullup: p.pullup, ov_enable: p.ov_enable, ext: p.ext, ext_volts: p.ext_volts, volts: p.volts, reserved: p.reserved, gen: p.gen })
             .collect();
         let peripherals = m.inspect_peripherals().into_iter().map(|(name, values)| PeripheralInfo { name, values }).collect();
         let stack = &m.cpu.shadow_stack;
@@ -459,6 +498,7 @@ impl Session {
             instructions: m.cpu.instructions,
             time_sec: m.time_seconds(),
             hz: m.sys.clock.hz,
+            ext_clock_hz: m.sys.ext_clock_hz,
             sleeping: m.cpu.sleeping,
             sleep_mode: m.cpu.sleep_mode,
             reset_held: m.sys.reset_held,
@@ -476,12 +516,14 @@ impl Session {
             trace_from,
             trace_cycles,
             trace_levels,
+            exec_heat: m.take_exec_counts(),
             messages: m.messages(),
             stop: self.pending_stop.take(),
         };
         if let Some(s) = speed {
             self.speed_sample = s;
         }
+        self.published_cycles = state.cycles;
         self.trace_sent = new_trace_sent;
         self.flash_sent = flash_version;
         self.last_publish = now;

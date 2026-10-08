@@ -39,5 +39,8 @@ mod tests {
         assert_eq!(t10.vector_count(), 11);
         assert_eq!(id_from_include_name("tn10def.inc"), Some("attiny10"));
         assert_eq!(get("attiny9").unwrap().vector_count(), 10);
+        assert_eq!(t10.max_hz_at(5.0), 12e6);
+        assert_eq!(t10.max_hz_at(3.3), 8e6);
+        assert_eq!(t10.max_hz_at(1.5), 0.0);
     }
 }

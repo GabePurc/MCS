@@ -6,7 +6,7 @@ import type { Diagnostic, LoadedProgram } from '../backend/types';
 import { SymbolIndex, sourceToPc } from '../services/debugInfo';
 import { forgetDoc, initialTexts } from '../editor/docText';
 
-export type DocLanguage = 'asm' | 'c' | 'gas';
+export type DocLanguage = 'asm' | 'c' | 'gas' | 'mc';
 
 export interface Doc {
   id: string;
@@ -82,6 +82,7 @@ export function languageFor(name: string): DocLanguage {
   const ext = name.slice(name.lastIndexOf('.')).toLowerCase();
   if (name.endsWith('.S') || ext === '.sx') return 'gas';
   if (ext === '.c' || ext === '.h' || ext === '.cpp' || ext === '.cc' || ext === '.hpp') return 'c';
+  if (ext === '.mc') return 'mc';
   return 'asm';
 }
 

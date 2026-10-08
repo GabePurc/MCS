@@ -1,6 +1,9 @@
 import type { JSX } from 'react';
 import { Icons } from '../icons';
-import { COMMANDS, runCommand, setSpeed, shortcutLabel } from '../services/commands';
+import { COMMANDS, runCommand, setSpeed, shortcutLabel, speedLabel, SPEEDS } from '../services/commands';
+import type { SpeedMode } from '../backend/types';
+import { openDialog } from '../state/dialogs';
+import { formatHz } from '../format';
 import { useSim } from '../state/sim';
 import { useSettings } from '../state/settings';
 import { useWorkspace } from '../state/workspace';
@@ -21,13 +24,6 @@ export function CmdButton({ id, label }: { id: string; label?: boolean }): JSX.E
   );
 }
 
-const SPEED_OPTIONS: [string, string][] = [
-  ['realtime:0.01', '1/100x'],
-  ['realtime:0.1', '1/10x'],
-  ['realtime:1', 'Real-time'],
-  ['realtime:10', '10x'],
-  ['max:1', 'Maximum'],
-];
 
 export function Toolbar(): JSX.Element {
   // Subscribe to everything command enablement depends on.
@@ -37,7 +33,10 @@ export function Toolbar(): JSX.Element {
   const speedFactor = useSettings((s) => s.speedFactor);
   const deviceId = useSettings((s) => s.deviceId);
   const devices = useDevices((s) => s.devices);
-  const speedValue = speedMode === 'max' ? 'max:1' : `realtime:${speedFactor}`;
+  const mcuHz = useSim((s) => s.state?.hz ?? 0);
+  const speedValue = speedMode === 'max' ? 'max:1' : `${speedMode}:${speedFactor}`;
+  const options: [string, string][] = SPEEDS.map(([, f, m]) => [`${m}:${f}`, m === 'realtime' && f === 1 ? `Real-time${mcuHz ? ` (${formatHz(mcuHz)})` : ''}` : speedLabel(m, f)]);
+  if (!options.some(([v]) => v === speedValue)) options.push([speedValue, speedLabel(speedMode, speedFactor)]);
   return (
     <div className="toolbar">
       <div className="tb-grip" />
@@ -65,15 +64,20 @@ export function Toolbar(): JSX.Element {
       <select
         className="w7-select"
         value={speedValue}
-        data-tip="Simulation speed relative to the MCU's real clock"
+        data-tip={'Simulation speed: a fixed CPU clock from 1 Hz (watch every instruction),\nthe real MCU speed (or a multiple of it), or as fast as possible'}
         onChange={(e) => {
+          if (e.target.value === 'custom') {
+            openDialog('speed');
+            return;
+          }
           const [m, f] = e.target.value.split(':');
-          setSpeed(m as 'realtime' | 'max', Number(f));
+          setSpeed(m as SpeedMode, Number(f));
         }}
       >
-        {SPEED_OPTIONS.map(([v, l]) => (
+        {options.map(([v, l]) => (
           <option key={v} value={v}>{l}</option>
         ))}
+        <option value="custom">Custom...</option>
       </select>
       <span className="tb-label">Device:</span>
       <select className="w7-select" value={deviceId} data-tip="Target microcontroller" onChange={(e) => selectDevice(e.target.value)}>

@@ -10,6 +10,7 @@ import { useLayout, type PanelId, type ZoneId } from '../state/layout';
 import { PANEL_ICONS, PANEL_TITLES } from '../services/commands';
 import { useWorkspace } from '../state/workspace';
 import { openContextMenu } from '../controls/Menu';
+import { useDockHover } from './FloatingWindows';
 
 const useDrag = create<{ panel: PanelId | null }>(() => ({ panel: null }));
 
@@ -60,6 +61,7 @@ interface GroupProps {
 export const DockGroup = memo(function DockGroup({ zone, style, render }: GroupProps): JSX.Element | null {
   const z = useLayout((s) => s.zones[zone]);
   const dragging = useDrag((s) => s.panel);
+  const floatOver = useDockHover((s) => s.zone === zone);
   const [over, setOver] = useState(false);
   const empty = z.panels.length === 0;
   if (empty && !dragging) return null;
@@ -74,7 +76,8 @@ export const DockGroup = memo(function DockGroup({ zone, style, render }: GroupP
 
   return (
     <div
-      className={`dock-group${over ? ' drop-target' : ''}`}
+      className={`dock-group${over || floatOver ? ' drop-target' : ''}`}
+      data-zone={zone}
       style={{ ...style, ...(empty ? { borderStyle: 'dashed', background: 'rgba(255,255,255,0.4)' } : {}) }}
       onDragOver={(e) => {
         if (!useDrag.getState().panel) return;
@@ -97,10 +100,19 @@ export const DockGroup = memo(function DockGroup({ zone, style, render }: GroupP
                 e.dataTransfer.effectAllowed = 'move';
                 useDrag.setState({ panel: p });
               }}
-              onDragEnd={() => useDrag.setState({ panel: null })}
+              onDragEnd={(e) => {
+                useDrag.setState({ panel: null });
+                // Dropped outside every dock group: float it where it was released.
+                if (e.dataTransfer.dropEffect === 'none' && (e.clientX || e.clientY)) {
+                  const inside = document.elementsFromPoint(e.clientX, e.clientY).some((el) => el.closest('[data-zone]'));
+                  if (!inside) useLayout.getState().float(p, { x: e.clientX - 60, y: e.clientY - 12 });
+                }
+              }}
               onMouseDown={() => useLayout.getState().setActive(zone, p)}
               onContextMenu={(e) =>
                 openContextMenu(e, [
+                  { kind: 'action', label: 'Float', icon: 'Float', run: () => useLayout.getState().float(p) },
+                  { kind: 'action', label: 'Open in New Window', icon: 'PopOut', run: () => useLayout.getState().popOut(p) },
                   { kind: 'action', label: 'Close', run: () => useLayout.getState().close(p) },
                   { kind: 'sep' },
                   ...(['rightTop', 'rightBottom', 'bottomLeft', 'bottomRight'] as ZoneId[])
@@ -111,6 +123,11 @@ export const DockGroup = memo(function DockGroup({ zone, style, render }: GroupP
             >
               <Icon size={14} />
               {PANEL_TITLES[p]}
+              {z.active === p && (
+                <span className="tab-close tab-popout" data-tip="Open in a new window" onMouseDown={(e) => e.stopPropagation()} onClick={() => useLayout.getState().popOut(p)}>
+                  <Icons.PopOut size={11} />
+                </span>
+              )}
               <span
                 className="tab-close"
                 data-tip="Close"

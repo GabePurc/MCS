@@ -20,7 +20,7 @@ const MENUS: TopMenu[] = [
     title: 'File',
     mnemonic: 0,
     items: () => [
-      cmd('file.newAsm'), cmd('file.newC'), cmd('file.open'),
+      cmd('file.newAsm'), cmd('file.newC'), cmd('file.newMc'), cmd('file.open'),
       { kind: 'sub', label: 'Open Example', items: () => SHOWCASE.map((e) => ({ kind: 'action', label: e.title, run: () => openExample(e.name) })) },
       sep, cmd('file.save'), cmd('file.saveAs'), cmd('file.saveAll'), cmd('file.close'),
       sep, cmd('file.import'), cmd('file.exportHex'),
@@ -44,7 +44,7 @@ const MENUS: TopMenu[] = [
     mnemonic: 0,
     items: () => [cmd('view.startPage'), sep, ...PANEL_COMMAND_IDS.map((id) => cmd(id)), sep, cmd('view.resetLayout')],
   },
-  { title: 'Build', mnemonic: 0, items: () => [cmd('build.build'), sep, cmd('build.options')] },
+  { title: 'Build', mnemonic: 0, items: () => [cmd('build.build'), sep, cmd('build.toMachineCode'), sep, cmd('build.options')] },
   {
     title: 'Debug',
     mnemonic: 0,
@@ -63,6 +63,7 @@ const MENUS: TopMenu[] = [
       const cur = useSettings.getState().deviceId;
       return [
         ...useDevices.getState().devices.map((d): MenuItem => ({ kind: 'action', label: `${d.name}  (${d.flashSize} B flash, ${d.sramSize} B SRAM)`, checked: d.id === cur, run: () => selectDevice(d.id) })),
+        sep, cmd('device.info'), cmd('device.chip'),
         sep, cmd('device.fuses'), cmd('device.supply'),
       ];
     },

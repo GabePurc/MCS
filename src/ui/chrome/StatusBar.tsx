@@ -3,6 +3,8 @@ import { useSim } from '../state/sim';
 import { useWorkspace } from '../state/workspace';
 import { useSettings } from '../state/settings';
 import { formatHz, formatTime } from '../format';
+import { speedLabel } from '../services/commands';
+import { openDialog } from '../state/dialogs';
 
 export function StatusBar(): JSX.Element {
   const st = useSim((s) => s.state);
@@ -13,6 +15,7 @@ export function StatusBar(): JSX.Element {
   const cursor = useWorkspace((s) => s.cursor);
   const hasDoc = useWorkspace((s) => !!s.activeDocId);
   const speedMode = useSettings((s) => s.speedMode);
+  const speedFactor = useSettings((s) => s.speedFactor);
 
   let led = 'idle';
   let text = 'Ready';
@@ -61,8 +64,8 @@ export function StatusBar(): JSX.Element {
           {formatTime(st.timeSec)}
         </div>
       )}
-      <div className="status-cell" data-tip="Effective simulation speed">
-        {running ? `${formatHz(st?.speedHz ?? 0)} (${ratio >= 10 ? ratio.toFixed(0) : ratio.toFixed(2)}x)` : speedMode === 'max' ? 'Max speed' : 'Real-time'}
+      <div className="status-cell clickable" data-tip="Effective simulation speed (click to change)" onClick={() => openDialog('speed')}>
+        {running ? `${formatHz(st?.speedHz ?? 0)} (${ratio >= 10 ? ratio.toFixed(0) : ratio >= 0.01 ? ratio.toFixed(2) : ratio.toExponential(1)}x)` : `Speed: ${speedLabel(speedMode, speedFactor)}`}
       </div>
       {hasDoc && (
         <div className="status-cell">

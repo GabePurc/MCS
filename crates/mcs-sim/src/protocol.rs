@@ -5,7 +5,7 @@ use mcs_core::program::LoadedProgram;
 use serde::{Deserialize, Serialize};
 
 use crate::avr::{CallFrame, Message};
-use crate::pins::ExtDrive;
+use crate::pins::{ExtDrive, PinGenerator};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -18,7 +18,11 @@ pub enum StepKind {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum SpeedMode {
+    /// Simulated time = wall-clock time x factor.
     Realtime,
+    /// Fixed rate of `factor` CPU cycles per wall-clock second, whatever the MCU clock is.
+    Clock,
+    /// As fast as the host can go.
     Max,
 }
 
@@ -48,6 +52,12 @@ pub enum Command {
     SetPin { pin: usize, ext: ExtDrive, volts: f64 },
     SetVcc { volts: f64 },
     SetExternalClock { hz: f64 },
+    /// Debugger write of the clock source and prescaler (CLKMSR/CLKPSR, CCP handled).
+    SetClockConfig { source: u8, prescale_log2: u8 },
+    /// Attaches or removes a signal generator on a GPIO pin.
+    SetPinGenerator { pin: usize, gen: Option<PinGenerator> },
+    /// Per-word execution counting for the chip view's heat map.
+    SetProfiling { enabled: bool },
     WriteData { addr: u16, value: u8 },
     WriteFlash { addr: u32, value: u8 },
     WriteReg { reg: usize, value: u8 },
@@ -69,6 +79,8 @@ pub struct PinState {
     pub ext_volts: f64,
     pub volts: f64,
     pub reserved: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gen: Option<PinGenerator>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -112,6 +124,8 @@ pub struct MachineState {
     pub instructions: u64,
     pub time_sec: f64,
     pub hz: f64,
+    /// Frequency assumed for the external clock input.
+    pub ext_clock_hz: f64,
     pub sleeping: bool,
     pub sleep_mode: u8,
     pub reset_held: bool,
@@ -133,6 +147,9 @@ pub struct MachineState {
     pub trace_from: u64,
     pub trace_cycles: Vec<u64>,
     pub trace_levels: Vec<u32>,
+    /// Instructions executed per word address since the previous state (profiling only).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub exec_heat: Vec<u32>,
     pub messages: Vec<Message>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stop: Option<StopInfo>,

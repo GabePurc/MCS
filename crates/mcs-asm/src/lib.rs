@@ -17,6 +17,7 @@ mod assembler;
 mod expr;
 mod incgen;
 mod lexer;
+mod machine_code;
 mod util;
 
 use std::collections::{HashMap, HashSet};
@@ -29,6 +30,7 @@ use mcs_core::program::{Diagnostic, LoadedProgram, ProgramFormat};
 use serde::Serialize;
 
 pub use incgen::{def_include_name, generate_def_include};
+pub use machine_code::{assemble_machine_code, MachineCodeResult, McHint};
 
 use assembler::Assembler;
 use lexer::TokKind;

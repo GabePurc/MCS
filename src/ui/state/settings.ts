@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { loadJson, saveJson } from './persist';
+import type { SpeedMode } from '../backend/types';
 
 export interface Settings {
   deviceId: string;
@@ -10,7 +11,7 @@ export interface Settings {
   extraFlags: string;
   recentFiles: string[];
   editorFontSize: number;
-  speedMode: 'realtime' | 'max';
+  speedMode: SpeedMode;
   speedFactor: number;
   /** Re-open these files at start-up. */
   openFiles: string[];

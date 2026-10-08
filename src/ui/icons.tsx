@@ -319,6 +319,54 @@ export const Icons = {
       <path d="M4.5 8c1.5-2 2.5 2 3.5 0s2 2 3.5 0" stroke="#c4561c" strokeWidth="0.9" fill="none" />
     </S>
   ),
+  Chip3D: (p: P) => (
+    <S {...p}>
+      <path d="M8 1.5l6.5 3.6v5.8L8 14.5 1.5 10.9V5.1z" fill="url(#ig-chip)" stroke="#11161c" strokeWidth="0.6" />
+      <path d="M8 3.6l4.3 2.4L8 8.4 3.7 6z" fill="#8fb9e8" stroke="#2a5ea8" strokeWidth="0.5" />
+      <path d="M5.2 6l2.8 1.6L10.8 6" stroke="#ffd23b" strokeWidth="0.7" fill="none" />
+      <path d="M8 8.4v5.9" stroke="#5c6878" strokeWidth="0.6" />
+    </S>
+  ),
+  Book: (p: P) => (
+    <S {...p}>
+      <path d="M2.5 2.5h8.5a2 2 0 0 1 2 2v9.5H4.5a2 2 0 0 1-2-2z" fill="url(#ig-blue)" stroke="#183f7a" strokeWidth="0.8" />
+      <path d="M4.5 11.5h8.5v2.5H4.5a1.25 1.25 0 0 1 0-2.5z" fill="#fff" stroke="#183f7a" strokeWidth="0.6" />
+      <path d="M5 5h5.5M5 7h4" stroke="#fff" strokeWidth="0.9" />
+    </S>
+  ),
+  Float: (p: P) => (
+    <S {...p}>
+      <rect x="1.5" y="2.5" width="10" height="8" fill="#fff" stroke="#5c6878" />
+      <rect x="4.5" y="5.5" width="10" height="8" fill="url(#ig-paper)" stroke="#1c4f9c" />
+      <rect x="4.5" y="5.5" width="10" height="2" fill="url(#ig-blue)" />
+    </S>
+  ),
+  PopOut: (p: P) => (
+    <S {...p}>
+      <rect x="1.5" y="4.5" width="10" height="10" fill="#fff" stroke="#5c6878" />
+      <path d="M8 1.5h6.5V8" fill="none" stroke="#1c4f9c" strokeWidth="1.5" />
+      <path d="M14 2L7 9" stroke="#1c4f9c" strokeWidth="1.5" />
+    </S>
+  ),
+  Dock: (p: P) => (
+    <S {...p}>
+      <path d="M6 1.5h4l-.5 5 2 2v1H4.5v-1l2-2z" fill="url(#ig-steel)" stroke="#5c6878" strokeWidth="0.8" />
+      <path d="M8 9.5v5" stroke="#5c6878" strokeWidth="1.3" />
+    </S>
+  ),
+  Generator: (p: P) => (
+    <S {...p}>
+      <rect x="1" y="2.5" width="14" height="11" rx="1.5" fill="#20303f" stroke="#11161c" strokeWidth="0.6" />
+      <path d="M2.5 10.5h2v-5h3v5h3v-5h3" stroke="#6fe36b" strokeWidth="1.2" fill="none" />
+    </S>
+  ),
+  MachineCode: (p: P) => (
+    <S {...p}>
+      <path d="M3.5 1.5h6l3 3v10h-9z" fill="url(#ig-paper)" stroke="#7a8ea8" />
+      <text x="4.3" y="9" fontSize="4.6" fontFamily="monospace" fill="#1c4f9c" fontWeight="bold">01</text>
+      <text x="4.3" y="13.2" fontSize="4.6" fontFamily="monospace" fill="#9b1d0c" fontWeight="bold">10</text>
+    </S>
+  ),
 };
 
 export type IconName = keyof typeof Icons;

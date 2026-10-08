@@ -3,15 +3,17 @@
  * commands by id, so behaviour and enablement are defined in exactly one place.
  */
 import type { IconName } from '../icons';
+import type { SpeedMode } from '../backend/types';
 import { platform, win } from '../backend/api';
 import { editorApi } from '../editor/editorApi';
-import { useLayout, type PanelId } from '../state/layout';
+import { isPanelOpen, useLayout, type PanelId } from '../state/layout';
 import { useSettings } from '../state/settings';
 import { useSim } from '../state/sim';
 import { activeDoc, clearBreakpoints, docKey, toggleSourceBreakpoint, useWorkspace } from '../state/workspace';
 import { openDialog } from '../state/dialogs';
-import { buildActive, importHexOrElf, isBuildStale } from './build';
+import { buildActive, importHexOrElf, isBuildStale, openProgramAsMachineCode } from './build';
 import { closeDocument, confirmQuit, newFile, openFileDialog, saveAll, saveDoc } from './files';
+import { formatHz } from '../format';
 import { sim } from './simClient';
 import { sourceToPc } from './debugInfo';
 import { exportHexDialog } from './exporting';
@@ -78,20 +80,34 @@ function cursorLocation(): { file: string; line: number } | null {
   return { file: docKey(doc), line: api.cursorLine() };
 }
 
-const SPEEDS: [string, number, 'realtime' | 'max'][] = [
-  ['Slow motion (1/100 real-time)', 0.01, 'realtime'],
+/** Speed presets: fixed CPU rates from 1 Hz (watch every instruction), real-time multiples, maximum. */
+export const SPEEDS: [string, number, SpeedMode][] = [
+  ['1 Hz (1 cycle per second)', 1, 'clock'],
+  ['10 Hz', 10, 'clock'],
+  ['100 Hz', 100, 'clock'],
+  ['1 kHz', 1e3, 'clock'],
+  ['10 kHz', 1e4, 'clock'],
+  ['100 kHz', 1e5, 'clock'],
   ['1/10 real-time', 0.1, 'realtime'],
-  ['Real-time', 1, 'realtime'],
+  ['Real-time (actual MCU clock)', 1, 'realtime'],
   ['10x real-time', 10, 'realtime'],
   ['Maximum speed', 1, 'max'],
 ];
 
-export function setSpeed(mode: 'realtime' | 'max', factor: number): void {
+export function setSpeed(mode: SpeedMode, factor: number): void {
   useSettings.getState().set({ speedMode: mode, speedFactor: factor });
   sim({ type: 'setSpeed', mode, factor });
 }
 
-const PANELS: [PanelId, string, IconName][] = [
+/** Short label for a speed setting ("1 kHz", "10x", "Real-time", "Maximum"). */
+export function speedLabel(mode: SpeedMode, factor: number): string {
+  if (mode === 'max') return 'Maximum';
+  if (mode === 'clock') return formatHz(factor);
+  if (factor === 1) return 'Real-time';
+  return factor < 1 ? `1/${+(1 / factor).toPrecision(3)}x` : `${+factor.toPrecision(3)}x`;
+}
+
+export const PANELS: [PanelId, string, IconName][] = [
   ['processor', 'Processor', 'Cpu'],
   ['io', 'I/O View', 'Io'],
   ['memory', 'Memory', 'Memory'],
@@ -102,6 +118,9 @@ const PANELS: [PanelId, string, IconName][] = [
   ['symbols', 'Symbols', 'Symbols'],
   ['callstack', 'Call Stack', 'CallStack'],
   ['breakpoints', 'Breakpoints', 'List'],
+  ['chip', 'Chip View (3D)', 'Chip3D'],
+  ['info', 'Device Info', 'Info'],
+  ['isa', 'Instruction Set', 'Book'],
 ];
 
 export const PANEL_TITLES: Record<PanelId, string> = Object.fromEntries(PANELS.map(([id, t]) => [id, t])) as Record<PanelId, string>;
@@ -111,6 +130,7 @@ const list: CommandDef[] = [
   // File
   { id: 'file.newAsm', label: 'New Assembly File', icon: 'NewFile', keys: ['Mod+N'], run: () => newFile('asm') },
   { id: 'file.newC', label: 'New C File', run: () => newFile('c') },
+  { id: 'file.newMc', label: 'New Machine Code File', icon: 'MachineCode', run: () => newFile('mc') },
   { id: 'file.open', label: 'Open...', icon: 'Open', keys: ['Mod+O'], run: openFileDialog },
   { id: 'file.save', label: 'Save', icon: 'Save', keys: ['Mod+S'], run: () => saveDoc(), enabled: hasDoc },
   { id: 'file.saveAs', label: 'Save As...', run: () => saveDoc(activeDoc(), true), enabled: hasDoc },
@@ -137,7 +157,7 @@ const list: CommandDef[] = [
     label,
     icon,
     run: () => useLayout.getState().toggle(id),
-    checked: () => Object.values(useLayout.getState().zones).some((z) => z.panels.includes(id)),
+    checked: () => isPanelOpen(id),
   })),
   { id: 'view.resetLayout', label: 'Reset Window Layout', run: () => useLayout.getState().reset() },
   { id: 'view.startPage', label: 'Start Page', run: () => useWorkspace.setState({ activeDocId: null }) },
@@ -145,6 +165,7 @@ const list: CommandDef[] = [
   // Build
   { id: 'build.build', label: 'Build', icon: 'Build', keys: ['F7'], run: buildActive, enabled: canBuild },
   { id: 'build.options', label: 'Toolchain Options...', icon: 'Settings', run: () => openDialog('toolchain') },
+  { id: 'build.toMachineCode', label: 'Open Program as Machine Code', icon: 'MachineCode', run: openProgramAsMachineCode, enabled: hasProgram },
 
   // Debug
   {
@@ -204,24 +225,35 @@ const list: CommandDef[] = [
       return s.speedMode === mode && (mode === 'max' || s.speedFactor === factor);
     },
   })),
+  { id: 'speed.custom', label: 'Custom Speed...', icon: 'Settings', run: () => openDialog('speed') },
 
   // Device / tools / help
   { id: 'device.fuses', label: 'Fuses & Lock Bits...', icon: 'Fuse', run: () => openDialog('fuses') },
   { id: 'device.supply', label: 'Supply & Clock...', icon: 'Settings', run: () => openDialog('supply') },
   { id: 'tools.toolchain', label: 'Toolchain Options...', icon: 'Settings', run: () => openDialog('toolchain') },
-  { id: 'help.isa', label: 'Instruction Set Reference', icon: 'Help', keys: ['F1'], run: () => openDialog('isa') },
+  { id: 'device.info', label: 'Device Info', icon: 'Info', run: () => useLayout.getState().show('info') },
+  { id: 'device.chip', label: 'Chip View (3D)', icon: 'Chip3D', run: () => useLayout.getState().show('chip') },
+  { id: 'help.isa', label: 'Instruction Set Reference', icon: 'Book', keys: ['F1'], run: () => useLayout.getState().show('isa') },
   { id: 'help.include', label: 'Device Definitions (.inc)', run: () => openDialog('include') },
   { id: 'help.toolchain', label: 'C Toolchain Setup', run: () => openDialog('toolchainHelp') },
   { id: 'help.about', label: 'About MCS', icon: 'App', run: () => openDialog('about') },
 ];
 
 export const COMMANDS: Record<string, CommandDef> = Object.fromEntries(list.map((c) => [c.id, c]));
-export const SPEED_COMMAND_IDS = SPEEDS.map(([, f, m]) => `speed.${m}.${f}`);
+export const SPEED_COMMAND_IDS = [...SPEEDS.map(([, f, m]) => `speed.${m}.${f}`), 'speed.custom'];
 export const PANEL_COMMAND_IDS = PANELS.map(([id]) => `view.${id}`);
+
+/** Set in pop-out windows: commands run in the main window (it owns documents and builds). */
+export const commandHooks = { remote: null as ((id: string) => void) | null };
 
 export function runCommand(id: string): void {
   const c = COMMANDS[id];
-  if (!c || (c.enabled && !c.enabled())) return;
+  if (!c) return;
+  if (commandHooks.remote) {
+    commandHooks.remote(id);
+    return;
+  }
+  if (c.enabled && !c.enabled()) return;
   void Promise.resolve(c.run()).catch((e) => console.error(`command ${id} failed`, e));
 }
 
