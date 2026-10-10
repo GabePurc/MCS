@@ -477,8 +477,10 @@ impl Machine {
                         raw
                     };
                     let (neg, mag) = if signed { ((x as i32) < 0, (x as i32).unsigned_abs() as u64) } else { (false, x as u64) };
-                    // Fixed point -> float always rounds to nearest (ARM ARM VCVT, fixed-point form).
-                    let v = from_int(f, neg, mag, i.imm, Round::Nearest, &mut self.cpu.fpscr);
+                    // Fixed point -> float rounds per FPSCR.RMode (DDI 0403E A7.7.229: FixedToFP with
+                    // round_to_nearest = FALSE, fpscr_controlled = TRUE).
+                    let mode = Round::from_fpscr(self.cpu.fpscr);
+                    let v = from_int(f, neg, mag, i.imm, mode, &mut self.cpu.fpscr);
                     self.fset(rd, dp, v);
                 }
             }
