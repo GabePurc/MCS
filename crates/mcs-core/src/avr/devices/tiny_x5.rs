@@ -20,15 +20,15 @@ const VARIANTS: &[Variant] = &[
     Variant { id: "attiny85", name: "ATtiny85", flash: 8192, sram: 512, eeprom: 512, signature: [0x1e, 0x93, 0x0b] },
 ];
 
-fn reg(name: &str, addr: u16, group: &str, desc: &str, bits: Vec<BitFieldSpec>) -> IoRegisterSpec {
+pub(super) fn reg(name: &str, addr: u16, group: &str, desc: &str, bits: Vec<BitFieldSpec>) -> IoRegisterSpec {
     IoRegisterSpec { name: name.into(), addr, reset: 0, group: group.into(), desc: desc.into(), bits, access: RegisterAccess::Rw }
 }
 
-fn b(name: &str, mask: u8, desc: &str) -> BitFieldSpec {
+pub(super) fn b(name: &str, mask: u8, desc: &str) -> BitFieldSpec {
     field(name, mask, desc)
 }
 
-fn nbits(prefix: &str, mask: u8) -> Vec<BitFieldSpec> {
+pub(super) fn nbits(prefix: &str, mask: u8) -> Vec<BitFieldSpec> {
     (0..8).rev().filter(|i| mask & (1 << i) != 0).map(|i| field(&format!("{prefix}{i}"), 1 << i, "")).collect()
 }
 

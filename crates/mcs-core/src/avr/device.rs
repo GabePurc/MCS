@@ -114,9 +114,10 @@ impl SleepKind {
 pub struct SleepControl {
     pub register: String,
     pub se_mask: u8,
-    /// Mode field (contiguous mask).
+    /// Mode field mask. The raw value is `(register & sm_mask) >> sm_mask.trailing_zeros()`, so a
+    /// non-contiguous field (ATtiny2313A: SM1 = bit 6, SM0 = bit 4) yields a sparse raw value.
     pub sm_mask: u8,
-    /// Mode field value -> canonical mode (values not listed are reserved).
+    /// Raw mode field value -> canonical mode (values not listed are reserved).
     pub modes: Vec<(u8, SleepKind)>,
 }
 
@@ -171,6 +172,12 @@ pub enum PeripheralSet {
     MegaX8,
     /// ATtiny25/45/85.
     TinyX5,
+    /// ATtiny13A.
+    Tiny13,
+    /// ATtiny24A/44A/84A.
+    TinyX4,
+    /// ATtiny2313A/4313.
+    TinyX313,
     /// User-defined devices (`devices::custom`): wired by register/pin naming convention.
     Custom,
 }

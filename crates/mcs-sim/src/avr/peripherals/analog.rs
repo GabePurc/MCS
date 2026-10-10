@@ -210,8 +210,9 @@ pub struct AdcConfig {
     pub ref_mask: u8,
     pub ref_extra: u8,
     pub refs: Vec<Option<AdcRef>>,
-    /// ADLAR bit in ADMUX (0 = none).
+    /// ADLAR bit mask (0 = none); in ADMUX, or in ADCSRB when `adlar_srb` (ATtiny24A/44A/84A).
     pub adlar: u8,
+    pub adlar_srb: bool,
     /// Writable ADMUX / ADCSRB bits.
     pub admux_mask: u8,
     pub adcsrb_mask: u8,
@@ -390,11 +391,12 @@ impl Peripheral for Adc {
     fn on_event(&mut self, _tag: u8, _cycle: u64, cx: &mut Cx) {
         let result = self.convert(cx);
         if !self.locked {
-            let admux = cx.cpu.data[self.c.admux as usize];
+            let adlar_reg = if self.c.adlar_srb { self.c.adcsrb } else { self.c.admux };
+            let left = self.c.adlar != 0 && cx.cpu.data[adlar_reg as usize] & self.c.adlar != 0;
             match self.c.adch {
                 None => cx.cpu.data[self.c.adcl as usize] = result as u8,
                 Some(adch) => {
-                    let (h, l) = if self.c.adlar != 0 && admux & self.c.adlar != 0 { ((result >> 2) as u8, ((result & 3) << 6) as u8) } else { ((result >> 8) as u8, result as u8) };
+                    let (h, l) = if left { ((result >> 2) as u8, ((result & 3) << 6) as u8) } else { ((result >> 8) as u8, result as u8) };
                     cx.cpu.data[self.c.adcl as usize] = l;
                     cx.cpu.data[adch as usize] = h;
                 }

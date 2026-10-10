@@ -2,7 +2,10 @@
 
 mod custom;
 mod mega_x8;
+mod tiny_13;
 mod tiny_rc;
+mod tiny_x313;
+mod tiny_x4;
 mod tiny_x5;
 
 use super::device::AvrDeviceSpec;
@@ -13,7 +16,7 @@ pub use custom::{didr_name, port_name, timer_numbers, CustomMcuConfig};
 /// All AVR devices known to the simulator.
 pub fn all() -> &'static [AvrDeviceSpec] {
     static DEVICES: OnceLock<Vec<AvrDeviceSpec>> = OnceLock::new();
-    DEVICES.get_or_init(|| [tiny_rc::devices(), tiny_x5::devices(), mega_x8::devices()].concat())
+    DEVICES.get_or_init(|| [tiny_rc::devices(), tiny_x5::devices(), tiny_13::devices(), tiny_x4::devices(), tiny_x313::devices(), mega_x8::devices()].concat())
 }
 
 static CUSTOM: RwLock<Vec<&'static AvrDeviceSpec>> = RwLock::new(Vec::new());
@@ -92,6 +95,31 @@ mod tests {
         assert_eq!(t.reg("PORTB"), 0x38);
         assert_eq!(t.vector("USI_OVF"), Some(14));
         assert_eq!(id_from_include_name("tn85def.inc"), Some("attiny85"));
+        let t13 = get("ATtiny13A").unwrap();
+        assert_eq!((t13.flash_size, t13.sram_size, t13.eeprom_size, t13.signature), (1024, 64, 64, [0x1e, 0x90, 0x07]));
+        assert_eq!(t13.reg("TIFR0"), 0x58);
+        assert_eq!(t13.vector("TIM0_COMPB"), Some(7));
+        assert_eq!(t13.vector_count(), 10);
+        assert_eq!(t13.fuse_defaults(), [0x6a, 0xff]);
+        assert_eq!(id_from_include_name("tn13Adef.inc"), Some("attiny13a"));
+        let t84 = get("attiny84a").unwrap();
+        assert_eq!((t84.flash_size, t84.sram_size, t84.signature), (8192, 512, [0x1e, 0x93, 0x0c]));
+        assert_eq!(t84.reg("TCNT1L"), 0x4c);
+        assert_eq!(t84.reg("SPH"), 0x5e);
+        assert_eq!(t84.vector("USI_OVF"), Some(16));
+        assert_eq!(t84.vector_count(), 17);
+        assert_eq!(t84.gpio_names()[11], "PB3");
+        assert_eq!(get("ATtiny44A").unwrap().signature, [0x1e, 0x92, 0x07]);
+        assert_eq!(id_from_include_name("tn24Adef.inc"), Some("attiny24a"));
+        let t2313 = get("attiny2313a").unwrap();
+        assert_eq!((t2313.flash_size, t2313.sram_size, t2313.signature), (2048, 128, [0x1e, 0x91, 0x0a]));
+        assert_eq!(t2313.reg("UDR"), 0x2c);
+        assert_eq!(t2313.vector("PCINT2"), Some(20));
+        assert_eq!(t2313.vector_count(), 21);
+        assert_eq!(t2313.gpio_names()[17], "PD6");
+        assert_eq!(get("attiny4313").unwrap().signature, [0x1e, 0x92, 0x0d]);
+        assert_eq!(id_from_include_name("tn2313Adef.inc"), Some("attiny2313a"));
+        assert_eq!(id_from_include_name("tn4313def.inc"), Some("attiny4313"));
         // Every device: unique register addresses and names, pins cover all GPIOs.
         let customs: Vec<_> = [CustomMcuConfig::default(), CustomMcuConfig::tiny(), CustomMcuConfig::huge()]
             .iter()

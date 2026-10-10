@@ -4,14 +4,16 @@
 //! vector select with the IVCE timed sequence, BOD sleep), power reduction and the ATtiny85 PLL.
 //!
 //! Sources: DS40002061B sections 9 (clock), 11 (power), 12 (reset, BOD), 12.9 (MCUSR),
-//! 13.1 (IVSEL); Atmel-2586Q sections 6 (clock, PLL), 7 (power), 8 (reset).
+//! 13.1 (IVSEL); Atmel-2586Q sections 6 (clock, PLL), 7 (power), 8 (reset); Atmel-8126F
+//! (ATtiny13A), Atmel-8183F (ATtiny24A/44A/84A) and Atmel-8246B (ATtiny2313A/4313) clock and
+//! power sections (same structure, other CKSEL tables and clock frequencies).
 
 use crate::avr::machine::{Cx, Event, Peripheral, ResetSource};
 
 /// Clock source chosen by CKSEL3:0.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ClockSource {
-    /// Calibrated internal RC oscillator (8 MHz).
+    /// Calibrated internal RC oscillator (8 MHz; 9.6 MHz on the ATtiny13A).
     Rc8M,
     /// Internal 128 kHz oscillator.
     Rc128k,
@@ -25,18 +27,21 @@ pub enum ClockSource {
     Pll16M,
     /// ATtiny15 compatibility mode (PLL 6.4 MHz).
     Rc6M4,
+    /// Internal RC at half the nominal frequency (ATtiny13A 4.8 MHz, ATtiny2313A/4313 4 MHz).
+    RcHalf,
 }
 
 impl ClockSource {
     fn label(self) -> &'static str {
         match self {
-            Self::Rc8M => "Internal 8 MHz RC",
+            Self::Rc8M => "Internal RC oscillator",
             Self::Rc128k => "Internal 128 kHz",
             Self::External => "External clock",
             Self::Crystal => "Crystal oscillator",
             Self::LowFreqCrystal => "32.768 kHz crystal",
             Self::Pll16M => "PLL (16 MHz)",
             Self::Rc6M4 => "ATtiny15 mode (6.4 MHz)",
+            Self::RcHalf => "Internal RC (half frequency)",
         }
     }
 }
@@ -106,6 +111,7 @@ impl ClassicSystem {
             ClockSource::LowFreqCrystal => 32_768.0,
             ClockSource::Pll16M => 16e6,
             ClockSource::Rc6M4 => 6.4e6,
+            ClockSource::RcHalf => spec.clock.internal_hz / 2.0,
         }
     }
 

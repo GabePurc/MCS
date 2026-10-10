@@ -204,6 +204,9 @@ function fusePresets(spec: AvrDeviceSpec): [string, number[]][] {
   if (spec.id === 'atmega328p') out.push(['Arduino Uno (16 MHz crystal, boot loader, BOD 2.7 V)', [0xff, 0xde, 0xfd]]);
   if (spec.id === 'atmega168pa') out.push(['Arduino Diecimila (16 MHz crystal, boot loader)', [0xff, 0xdd, 0xf8]]);
   if (spec.peripheralSet === 'mega-x8') out.push(['Internal 8 MHz (no clock divider)', [0xe2, ...spec.fuses.slice(1).map((f) => f.default)]]);
+  if (spec.peripheralSet === 'tiny13') out.push(['Internal 9.6 MHz (no clock divider)', [0x7a, ...spec.fuses.slice(1).map((f) => f.default)]]);
+  if (spec.peripheralSet === 'tiny-x4') out.push(['Internal 8 MHz (no clock divider)', [0xe2, ...spec.fuses.slice(1).map((f) => f.default)]]);
+  if (spec.peripheralSet === 'tiny-x313') out.push(['Internal 8 MHz (no clock divider)', [0xe4, ...spec.fuses.slice(1).map((f) => f.default)]]);
   if (spec.peripheralSet === 'tiny-x5') {
     out.push(['Internal 8 MHz (no clock divider)', [0xe2, 0xdf, 0xff]]);
     out.push(['16 MHz PLL clock (Digispark style)', [0xf1, 0xdd, 0xfe]]);

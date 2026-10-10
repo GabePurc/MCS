@@ -38,6 +38,7 @@ Update this file when work is finished (only list items that are done in the rep
 - [x] Machine-code source files (.mc) with live disassembly, line-level debugging, and program -> .mc conversion
 - [x] In-app updates (Tauri updater): signed bundles + latest.json from the release workflow, Help > Check for Updates, start-up check, CHANGELOG-based release notes
 - [x] ATmega48PA/88PA/168PA/328P and ATtiny25/45/85: specs, generalized timers (8/16-bit, shared flag registers, GTCCR), ATtiny85 PLL Timer1, USART, SPI, TWI (empty bus), USI, EEPROM, 10-bit ADC, comparator ACME/bandgap, INT0/INT1/PCINT groups, classic system control (CKSEL fuses, CLKPR, BOD, BOOTRST/IVSEL), multi-byte fuses, canonical sleep modes
+- [x] ATtiny13A, ATtiny24A/44A/84A and ATtiny2313A/4313 (issue #5): specs from the data sheets, wiring recipes on the existing models (ADLAR-in-ADCSRB option and half-frequency RC clock source added; 64-entry differential/gain ADC table on the x4; non-contiguous SM1:0 sleep field on the 2313A), fuse presets, tests in `crates/mcs-sim/tests/tiny_more.rs`
 - [x] Serial Monitor (UART decode/inject on any pin), EEPROM view/edit, fuse dialog with field menus and presets, DIP packages in the Chip View
 
 ### User requests (GitHub issue #3)
