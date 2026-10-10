@@ -57,7 +57,7 @@ export function sim(cmd: SimCommand): void {
 
 let watchedRam = 0;
 
-/** Selects the extra RAM block the memory view watches (ARM; 0 = none). */
+/** Selects the extra RAM block the memory view watches (ARM, RISC-V; 0 = none). */
 export function watchRam(index: number): void {
   watchedRam = index;
   sim({ type: 'watchRam', index });
@@ -100,7 +100,7 @@ function applyState(st: MachineState): void {
   const cur = useSim.getState();
   // Pop-outs get the Output window lines through the workspace mirror instead.
   if (!forward) for (const m of st.messages) appendOutput(m.level === 'warning' ? 'warning' : m.level === 'error' ? 'error' : 'info', `[sim @ ${m.cycle}] ${m.text}`);
-  // ARM sends the SRAM image only when it changed: keep the previous one in between.
+  // ARM / RISC-V send the SRAM image only when it changed: keep the previous one in between.
   if (st.core.arch !== 'avr' && st.data.length === 0 && cur.state?.core.arch === st.core.arch) st.data = cur.state.data;
   // Same for the watched extra RAM block.
   if (!st.ramExtra && watchedRam && cur.state?.ramExtra?.index === watchedRam) st.ramExtra = cur.state.ramExtra;

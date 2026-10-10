@@ -15,6 +15,11 @@ Supported microcontrollers:
 | megaAVR (classic register map) | ATmega16, ATmega32 | PDIP-40 |
 | megaAVR | ATmega164PA, ATmega324PA, ATmega644PA, ATmega1284P | PDIP-40 |
 | megaAVR | ATmega640, ATmega1280, ATmega2560 (Arduino Mega) | TQFP-100 |
+| STM32G4 (Cortex-M4F) | STM32G431KB, STM32G474RE | LQFP32, LQFP64 |
+| STM32H7 (Cortex-M7) | STM32H743IIT6, STM32H743ZIT6 (Nucleo-H743ZI) | LQFP176, LQFP144 |
+| ESP32-C3 (RISC-V RV32IMC) | ESP32-C3, ESP32-C3FH4 | QFN32 |
+
+The AVR parts are programmed from assembly, C or machine code; the STM32 and ESP32-C3 parts run prebuilt images (ELF, Intel HEX, ESP-IDF `.bin`) loaded with **File ▸ Import HEX/ELF**, and the UI shows their registers, peripherals, memory, pins and serial output (see the bundled examples).
 
 ![MCS stopped at a breakpoint in blink.asm](docs/screenshot.jpg)
 

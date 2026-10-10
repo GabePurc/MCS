@@ -58,13 +58,13 @@ export function SerialPanel(): JSX.Element {
   if (!spec) return <EmptyHint>No device loaded.</EmptyHint>;
   const cfg = serialConfigFor(spec);
   const names = gpioNames(spec);
-  // Only GPIOs that exist on the package (ARM indices have gaps).
+  // Only GPIOs that exist on the package (ARM indices have gaps, ESP32-C3 has no GPIO11 pad).
   const pinChoices = waveformRows(spec).map((r) => r.pin);
   const set = (patch: Partial<SerialConfig>) => setSerialConfig(spec, { ...cfg, ...patch });
   const fmt = FORMATS.find(([, f]) => f.dataBits === cfg.dataBits && f.parity === cfg.parity && f.stopBits === cfg.stopBits)?.[0] ?? 'custom';
   const pinLabel = (g: number) => {
     const p = spec.pins.find((x) => x.gpio === g);
-    const fns = p?.functions.filter((f) => f === 'TXD' || f === 'RXD' || /^(?:LP)?U(?:S)?ART\d_[TR]X$/.test(f)) ?? [];
+    const fns = p?.functions.filter((f) => f === 'TXD' || f === 'RXD' || /^(?:LP)?U(?:S)?ART\d_[TR]X$/.test(f) || /^U\dTXD$|^U\dRXD$/.test(f)) ?? [];
     return `${names[g]}${fns.length ? ` (${fns.join(', ')})` : ''}`;
   };
   const send = () => {
@@ -103,7 +103,7 @@ export function SerialPanel(): JSX.Element {
         <button className="tb-btn" data-tip="Clear" onClick={clearSerial}><Icons.Clear /></button>
       </div>
       <pre className="serial-out selectable mono" ref={out}>
-        {text || <span className="dim">{cfg.monitor === null ? 'Choose the pin to listen to (the MCU\'s TX) above.' : `Listening on ${names[cfg.monitor]} at ${cfg.baud} baud...`}</span>}
+        {text || <span className="dim">{cfg.monitor === null ? 'Choose the pin to listen to (the MCU\'s TX) above.' : `Listening on ${names[cfg.monitor]} at ${cfg.baud} baud...${spec.arch === 'riscv' ? ' Output sent through the USB Serial/JTAG controller appears here too.' : ''}`}</span>}
       </pre>
       <div className="serial-input">
         <input

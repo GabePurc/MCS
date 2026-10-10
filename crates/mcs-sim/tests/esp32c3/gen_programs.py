@@ -24,8 +24,9 @@ def build(name, ext):
     with tempfile.TemporaryDirectory() as tmp:
         rs = os.path.join(tmp, name + ".rs")
         if ext == "s":
+            # Bundled examples (ex_*) are self-contained and keep the assembler's default compressed instructions.
             with open(os.path.join(PROGS, "common.inc")) as f:
-                common = f.read()
+                common = "" if name.startswith("ex_") else f.read()
             with open(os.path.join(PROGS, name + ".s")) as f:
                 body = f.read()
             src = HEADER + 'core::arch::global_asm!(r#"\n' + common + "\n" + body + '\n"#);\n'

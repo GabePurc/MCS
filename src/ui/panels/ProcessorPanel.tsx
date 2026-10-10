@@ -1,6 +1,7 @@
 import type { JSX } from 'react';
 import { avrCore } from '../backend/types';
 import { ArmProcessorPanel } from './ArmProcessorPanel';
+import { RiscvProcessorPanel } from './RiscvProcessorPanel';
 import { useSim, resetStopwatch } from '../state/sim';
 import { sim } from '../services/simClient';
 import { useWorkspace } from '../state/workspace';
@@ -17,8 +18,7 @@ const SLEEP_MODES = ['Idle', 'ADC Noise Reduction', 'Power-down', 'Power-save', 
 
 export function ProcessorPanel(): JSX.Element {
   const arch = useSim((s) => s.spec?.arch);
-  if (arch === 'riscv') return <EmptyHint>RISC-V devices (ESP32-C3) are not yet supported by this panel (Stage E3).</EmptyHint>;
-  return arch === 'arm' ? <ArmProcessorPanel /> : <AvrProcessorPanel />;
+  return arch === 'riscv' ? <RiscvProcessorPanel /> : arch === 'arm' ? <ArmProcessorPanel /> : <AvrProcessorPanel />;
 }
 
 function AvrProcessorPanel(): JSX.Element {

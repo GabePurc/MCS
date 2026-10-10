@@ -318,7 +318,7 @@ function SupplyDialog(): JSX.Element {
   const resulting = (source === 0 ? avr?.clock.internalHz ?? 0 : source === 1 ? avr?.clock.slowHz ?? 0 : extHz || 0) / 2 ** ps;
   const sourceNames = [`Internal ${formatHz(avr?.clock.internalHz ?? 8e6)} RC oscillator`, `Internal ${formatHz(avr?.clock.slowHz ?? 128e3)} oscillator`, `External clock on CLKI${clki ? ` (${clki.name}, pin ${clki.number})` : ''}`];
   const apply = () => {
-    if (extHz > 0) sim({ type: 'setExternalClock', hz: extHz });
+    if (extHz > 0 && spec?.arch !== 'riscv') sim({ type: 'setExternalClock', hz: extHz });
     if ((msr && psr) || clkpr) sim({ type: 'setClockConfig', source, prescaleLog2: ps });
   };
   return (
@@ -330,7 +330,7 @@ function SupplyDialog(): JSX.Element {
         <>
           <span className="left dim">Applies immediately, even while running.</span>
           <button className="w7-btn default" onClick={() => { apply(); closeDialog(); }}><span>OK</span></button>
-          <button className="w7-btn" onClick={apply} disabled={!(extHz > 0)}><span>Apply</span></button>
+          <button className="w7-btn" onClick={apply} disabled={!(extHz > 0) && spec?.arch !== 'riscv'}><span>Apply</span></button>
           <button className="w7-btn" onClick={closeDialog}><span>Cancel</span></button>
         </>
       }
@@ -373,13 +373,15 @@ function SupplyDialog(): JSX.Element {
           </div>
         ) : clkpr && avr ? (
           <ClassicClock spec={avr} ext={ext} setExt={setExt} extHz={extHz} ps={ps} setPs={setPs} />
-        ) : (
+        ) : spec?.arch === 'riscv' ? null : (
           <div className="supply-row">
             External clock: <input className="w7-input mono" value={ext} onChange={(e) => setExt(e.target.value)} style={{ width: 120 }} />
           </div>
         )}
         <p className="dim" style={{ marginBottom: 0 }}>
-          {avr === null
+          {spec?.arch === 'riscv'
+            ? 'The crystal is fixed at 40 MHz. The firmware selects the CPU clock (XTAL / 2 at reset, the 80 / 160 MHz PLL or RC_FAST) through the SYSTEM registers.'
+            : avr === null
             ? 'The firmware configures the STM32 clock tree (HSI16 / HSE / PLL and the bus prescalers) through RCC. The external frequency above is the HSE crystal or clock input.'
             : msr
             ? 'On this chip the program selects the clock itself (CLKMSR/CLKPSR, protected by CCP). Apply writes those registers the way the debugger would; firmware that changes them later wins. The external frequency is used whenever the external source is selected.'

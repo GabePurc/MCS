@@ -239,10 +239,10 @@ export type SimCommand =
   | { type: 'setClockConfig'; source: number; prescaleLog2: number }
   | { type: 'setPinGenerator'; pin: number; gen: PinGenerator | null }
   | { type: 'setProfiling'; enabled: boolean }
-  /** ARM: which extra RAM block (`extraRam[index - 1]`) the memory view watches; 0 = none. */
+  /** ARM / RISC-V: which extra RAM block (`extraRam[index - 1]`) the memory view watches; 0 = none. */
   | { type: 'watchRam'; index: number }
   | { type: 'writeData'; addr: number; value: number }
-  /** Wide (1/2/4-byte) write through the bus; needed for ARM peripheral registers. */
+  /** Wide (1/2/4-byte) write through the bus; needed for ARM / RISC-V peripheral registers. */
   | { type: 'writeMem'; addr: number; size: number; value: number }
   | { type: 'writeFlash'; addr: number; value: number }
   | { type: 'writeReg'; reg: number; value: number }
@@ -253,7 +253,7 @@ export type SimCommand =
   | { type: 'serialSend'; bytes: number[] }
   | { type: 'requestState' };
 
-/** `pc` is in the architecture's native unit; `sreg` is AVR-only, the rest ARM-only. */
+/** `pc` is in the architecture's native unit; `sreg` is AVR-only, `mstatus`..`mscratch` RISC-V-only, the rest ARM-only. */
 export type CpuField = 'pc' | 'sp' | 'sreg' | 'xpsr' | 'msp' | 'psp' | 'lr' | 'control' | 'primask' | 'basepri' | 'faultmask' | 'fpscr' | 'mstatus' | 'mie' | 'mtvec' | 'mepc' | 'mcause' | 'mtval' | 'mscratch';
 
 export interface SerialConfig {
@@ -273,6 +273,8 @@ export interface PinState {
   dir: number;
   out: number;
   pullup: number;
+  /** Pull-down enabled (RISC-V devices). */
+  pulldown?: number;
   ovEnable: number;
   ext: ExtDrive;
   extVolts: number;
@@ -396,11 +398,11 @@ export interface RawMachineState {
   sleeping: boolean;
   sleepMode: number;
   resetHeld: boolean;
-  /** AVR: data space. ARM: the SRAM image (main SRAM then CCM), empty while unchanged. */
+  /** AVR: data space. ARM: the SRAM image (main SRAM then CCM). RISC-V: SRAM1 as seen on the data bus. Empty while unchanged (non-AVR). */
   data: number[];
-  /** ARM: values of the memory-mapped registers, aligned to `spec.registers`. */
+  /** ARM / RISC-V: values of the memory-mapped registers, aligned to `spec.registers`. */
   io?: number[];
-  /** ARM: bytes of the extra RAM block selected with `watchRam`; present on the first state after the selection and when they changed. */
+  /** ARM / RISC-V: bytes of the extra RAM block selected with `watchRam`; present on the first state after the selection and when they changed. */
   ramExtra?: { index: number; data: number[] };
   flash?: number[];
   flashVersion: number;

@@ -2,7 +2,8 @@ import { Fragment, useState, type JSX } from 'react';
 import { useSim } from '../state/sim';
 import { useSettings } from '../state/settings';
 import { sim } from '../services/simClient';
-import type { ExtDrive, PinGenerator, PinSpec, PinState } from '../backend/types';
+import { pinLabel } from '../services/device';
+import type { Arch, DeviceSpec, ExtDrive, PinGenerator, PinSpec, PinState } from '../backend/types';
 import { formatHz, parseHz } from '../format';
 import { Icons } from '../icons';
 import { EmptyHint, Section } from './common';
@@ -13,9 +14,10 @@ function setDrive(pin: number, ext: ExtDrive, volts: number): void {
   sim({ type: 'setPin', pin, ext, volts });
 }
 
-function driverText(p: PinState): string {
+function driverText(p: PinState, arch: Arch): string {
   if (p.reserved) return p.reservedBy === 'RESET' || !p.reservedBy ? 'RESET input' : `${p.reservedBy} (clock)`;
-  if (p.dir) return p.ovEnable ? 'Timer output' : 'PORT output';
+  if (p.dir) return arch === 'riscv' ? 'Output (GPIO matrix)' : p.ovEnable ? 'Timer output' : 'PORT output';
+  if (p.pulldown) return 'Pull-down';
   if (p.gen) return 'Signal generator';
   if (p.ext === 'analog') return 'Analog input';
   if (p.ext !== 'float') return 'External';
@@ -80,7 +82,7 @@ export function PinsPanel(): JSX.Element {
     <div className="panel">
       <div className="panel-scroll">
         <Section title={`${spec.name} - ${spec.package}`}>
-          {spec.arch !== 'avr' ? <QuadDiagram pins={spec.pins} states={st.pins} name={spec.name} pkg={spec.package} vcc={st.vcc} /> : <ChipDiagram pins={spec.pins} states={st.pins} name={spec.name} vcc={st.vcc} />}
+          {spec.arch !== 'avr' ? <QuadDiagram spec={spec} states={st.pins} vcc={st.vcc} /> : <ChipDiagram pins={spec.pins} states={st.pins} name={spec.name} vcc={st.vcc} />}
         </Section>
         <Section title="Pin stimulus">
           <table className="grid-table pin-table">
@@ -105,13 +107,13 @@ export function PinsPanel(): JSX.Element {
                   <Fragment key={ps.name}>
                   <tr className="row-hot">
                     <td data-tip={ps.functions.join(', ')}>
-                      <b>{ps.name}</b> <span className="dim">({ps.number})</span>
+                      <b>{pinLabel(spec, ps)}</b> <span className="dim">({ps.number}{pinLabel(spec, ps) !== ps.name && spec.arch === 'riscv' && !ps.name.startsWith('GPIO') ? `, ${ps.name}` : ''})</span>
                     </td>
                     <td>
                       <span className={`led ${p.level ? (p.dir ? 'led-green' : 'led-blue') : 'led-off'}`} /> {p.level}
                       {p.dir ? <span className="dim"> out</span> : <span className="dim"> in</span>}
                     </td>
-                    <td className="dim">{driverText(p)}</td>
+                    <td className="dim">{driverText(p, spec.arch)}</td>
                     <td>
                       <span className="seg">
                         {(['float', 'low', 'high', 'analog'] as ExtDrive[]).map((d) => (
@@ -222,9 +224,12 @@ function pinFill(p: PinSpec, states: PinState[]): string {
  * (left side down, bottom left to right, right side up, top right to left). Labels on the top and
  * bottom sides are rotated.
  */
-function QuadDiagram({ pins, states, name, pkg, vcc }: { pins: PinSpec[]; states: PinState[]; name: string; pkg: string; vcc: number }): JSX.Element {
-  const n = pins.length;
-  const per = Math.ceil(n / 4);
+function QuadDiagram({ spec, states, vcc }: { spec: DeviceSpec; states: PinState[]; vcc: number }): JSX.Element {
+  const { pins, name, package: pkg } = spec;
+  // Packages like the QFN32 have an exposed pad numbered after the perimeter pins: drawn in the middle.
+  const per = Math.floor(pins.length / 4);
+  const perimeter = pins.filter((p) => p.number <= per * 4);
+  const pad = pins.filter((p) => p.number > per * 4);
   const pitch = 17;
   const side = per * pitch + 8;
   const label = 74;
@@ -232,14 +237,20 @@ function QuadDiagram({ pins, states, name, pkg, vcc }: { pins: PinSpec[]; states
   const H = W;
   const x0 = label + 22;
   const y0 = label + 22;
-  const sorted = [...pins].sort((a, b) => a.number - b.number);
+  const sorted = perimeter.sort((a, b) => a.number - b.number);
   return (
     <svg className="chip-svg" viewBox={`0 0 ${W} ${H}`} width="100%" style={{ maxWidth: 560 }}>
       <defs>{PIN_GRADIENTS}</defs>
       <rect x={x0} y={y0} width={side} height={side} rx="6" fill="url(#chip-body)" stroke="#11161c" />
       <circle cx={x0 + 12} cy={y0 + 12} r="4" fill="#5c6878" stroke="#11161c" strokeWidth="0.5" />
-      <text x={W / 2} y={H / 2 - 2} textAnchor="middle" fill="#cfd8e2" fontSize="14" fontFamily="var(--font-ui)">{name}</text>
-      <text x={W / 2} y={H / 2 + 14} textAnchor="middle" fill="#8e9bab" fontSize="11" fontFamily="var(--font-ui)">{pkg}</text>
+      <text x={W / 2} y={pad.length ? y0 + 34 : H / 2 - 2} textAnchor="middle" fill="#cfd8e2" fontSize="14" fontFamily="var(--font-ui)">{name}</text>
+      <text x={W / 2} y={pad.length ? y0 + 50 : H / 2 + 14} textAnchor="middle" fill="#8e9bab" fontSize="11" fontFamily="var(--font-ui)">{pkg}</text>
+      {pad.map((p) => (
+        <g key={p.number} className="chip-pin" data-tip={`${p.name} (pin ${p.number}): ${p.functions.join(', ')}`}>
+          <rect x={W / 2 - 30} y={y0 + side / 2 + 4} width="60" height="60" rx="3" fill={pinFill(p, states)} stroke="#3b4552" strokeWidth="0.8" />
+          <text x={W / 2} y={y0 + side / 2 + 38} textAnchor="middle" fontSize="10" fontWeight="600" fill="#1e395b" fontFamily="var(--font-mono)">{p.name} ({p.number})</text>
+        </g>
+      ))}
       {sorted.map((p, idx) => {
         const edge = Math.floor(idx / per);
         const k = idx % per;
@@ -250,7 +261,7 @@ function QuadDiagram({ pins, states, name, pkg, vcc }: { pins: PinSpec[]; states
         const horizontal = edge === 0 || edge === 2;
         const s = p.gpio !== undefined ? states[p.gpio] : undefined;
         const interactive = p.kind === 'io' && s && !s.reserved;
-        const text = p.kind === 'io' ? p.name.split('-')[0] : p.kind === 'vcc' ? `${p.name} ${vcc.toFixed(1)}V` : p.name;
+        const text = p.kind === 'io' ? pinLabel(spec, p).split('-')[0] : p.kind === 'vcc' ? `${p.name} ${vcc.toFixed(1)}V` : p.name;
         const dir = edge === 0 ? -1 : edge === 2 ? 1 : 0;
         const dirY = edge === 3 ? -1 : edge === 1 ? 1 : 0;
         const w = horizontal ? 14 : 5;
@@ -260,7 +271,7 @@ function QuadDiagram({ pins, states, name, pkg, vcc }: { pins: PinSpec[]; states
             key={p.number}
             className={interactive ? 'chip-pin interactive' : 'chip-pin'}
             onClick={() => interactive && setDrive(p.gpio!, NEXT_DRIVE[s!.ext], s!.extVolts)}
-            data-tip={p.kind === 'io' ? `${p.name} (pin ${p.number}): ${p.functions.slice(0, 12).join(', ')}\nClick to cycle the external source: Z -> 1 -> 0` : `${p.name} (pin ${p.number})`}
+            data-tip={p.kind === 'io' ? `${pinLabel(spec, p)}${pinLabel(spec, p) !== p.name ? ` / ${p.name}` : ''} (pin ${p.number}): ${p.functions.slice(0, 12).join(', ')}\nClick to cycle the external source: Z -> 1 -> 0` : `${p.name} (pin ${p.number}): ${p.functions.join(', ')}`}
           >
             <rect x={horizontal ? cx + (dir < 0 ? -w : 0) : cx - w / 2} y={horizontal ? cy - h / 2 : cy + (dirY < 0 ? -h : 0)} width={w} height={h} rx="1" fill={pinFill(p, states)} stroke="#3b4552" strokeWidth="0.6" />
             {horizontal ? (

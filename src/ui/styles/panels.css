@@ -193,6 +193,8 @@
 .info-hero .grow { flex: 1; }
 .info-table td { white-space: normal; height: auto; padding: 3px 6px; vertical-align: top; }
 .info-table td:first-child { white-space: nowrap; }
+.info-list { margin: 4px 0 8px; padding: 0 12px 0 28px; }
+.info-list li { margin: 3px 0; }
 .die-diagram { position: relative; margin: 4px 8px; }
 .die-diagram canvas { display: block; width: 100%; border-radius: 3px; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35); cursor: pointer; }
 .mem-map { display: flex; flex-direction: column; gap: 2px; margin: 4px 8px; }

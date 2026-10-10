@@ -95,7 +95,7 @@ if wanted.
   * Simplifications: M-mode only (no U-mode/PMP; MPP reads as 3), `time`/`mcountinhibit`/hpm counters absent or
     read-as-zero, misaligned loads/stores trap (like the ESP32-C3 core), `ebreak` can be a host breakpoint
     (`halt_on_ebreak`), `mtval` holds the instruction bits for illegal instructions and the pc for `ebreak`.
-* **E2 (done on the Rust side; UI = E3): ESP32-C3 device + `Target`.**
+* **E2 (done, Rust side; UI in E3): ESP32-C3 device + `Target`.**
   * Devices: `ESP32-C3` (QFN32, external flash assumed 4 MiB) and `ESP32-C3FH4` (4 MiB in-package flash; pins 18-24 are
     connected to it; pinout from datasheet v2.4 tables 2-1 / 2-4) as `DeviceRef::Riscv` (`mcs_core::riscv::{device, devices}`, arch tag `"riscv"`). Peripheral base
     addresses, register offsets/fields/reset values (about 560 registers for the UI register view) and interrupt matrix
@@ -140,9 +140,18 @@ if wanted.
     RTC slow clock/timer, deep/light sleep, EFUSE (reads 0, so no MAC address), RNG, SPI/I2C/LEDC/ADC/TWAI/RMT/DMA/crypto
     (catch-all devices), the USB host-to-device direction, GPIO sleep/hold features, UART flow control/RS485/IrDA/autobaud, the
     fractional `SCLK_DIV_A/B`, PMP enforcement, dedicated GPIO routing, JTAG. TIMG watchdogs and RTC watchdogs are stored only.
-* **E3 (planned): UI + more peripherals.** RISC-V Processor panel (x0-x31 with ABI names, pc, mstatus/mie/mip/
-  mtvec/mcause), ESP32-C3 pin diagram, serial/waveform adapted; then SPI/I2C/LEDC/ADC and the classic ESP32
-  (Xtensa LX6) if wanted.
+* **E3 (UI: done): ESP32-C3 in the UI**, mirroring Stage C2; more peripherals and the classic ESP32 remain (below).
+  * RISC-V Processor panel (`RiscvProcessorPanel`, helpers in `services/riscvState.ts`): x0-x31 with ABI names, pc, cycle / instret,
+    mstatus (MIE / MPIE, MPP), mie / mip bit boxes, mtvec (base + mode), mepc, mcause decoded, mtval, mscratch; edits go through
+    `writeReg` (x1-x31) and `writeCpu` (`pc`, `mstatus`, `mie`, `mtvec`, `mepc`, `mcause`, `mtval`, `mscratch`).
+  * Shared with ARM: the memory-mapped register view (`MmioIoView`, `writeMem`), the memory view (bus addresses, `watchRam` for
+    SRAM0 / RTC FAST; the DRAM view notes the IRAM alias), the quad-package drawing (exposed pad = the pin numbered after the
+    perimeter), pin lists (`existingGpios`), pc helpers (`pcToBytes` = bytes).
+  * ESP32-C3 Device Info (`RiscvDeviceInfo`), pins labelled `GPIOn` (`pinLabel`), serial monitor on UART0 by default
+    (GPIO21 / GPIO20) with the USB Serial/JTAG bytes merged in by the backend.
+  * Examples: `examples/esp32c3_blink.elf` (GPIO2) and `examples/esp32c3_hello.elf` (UART0), generated from
+    `tests/esp32c3/programs/ex_*.s` (self-contained, compressed instructions) and tested in `tests/examples.rs`.
+* **Later: more peripherals** (SPI/I2C/LEDC/ADC) and the classic ESP32 (Xtensa LX6) if wanted.
 
 ## Toolchains
 RISC-V: rustc's `riscv32imc-unknown-none-elf` target assembles test programs (`global_asm!`, `.insn` for raw

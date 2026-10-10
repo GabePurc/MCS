@@ -2,7 +2,7 @@ import { useSettings } from '../state/settings';
 import { useWorkspace, appendOutput } from '../state/workspace';
 import { sim } from './simClient';
 import { loadProgram } from './build';
-import type { AvrDeviceSpec, DeviceSpec } from '../backend/types';
+import type { AvrDeviceSpec, DeviceSpec, PinSpec } from '../backend/types';
 import { archOf } from '../state/devices';
 import { clearBreakpoints } from '../state/workspace';
 
@@ -56,4 +56,9 @@ export function waveformRows(spec: DeviceSpec): { pin: number; name: string }[] 
   const names = gpioNames(spec);
   const pins = spec.arch !== 'avr' ? existingGpios(spec) : names.map((_, i) => i);
   return pins.map((pin) => ({ pin, name: names[pin] }));
+}
+
+/** Label of a package pin in the pin diagram / tables: ESP32 pads are named after their GPIO, the alternate name goes in the tooltip. */
+export function pinLabel(spec: DeviceSpec, p: PinSpec): string {
+  return spec.arch === 'riscv' && p.kind === 'io' && p.gpio !== undefined ? `GPIO${p.gpio}` : p.name;
 }

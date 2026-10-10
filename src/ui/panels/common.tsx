@@ -54,3 +54,13 @@ export function Section({ title, children, right }: { title: string; children?: 
 export function EmptyHint({ children }: { children: ReactNode }): JSX.Element {
   return <div className="empty-hint">{children}</div>;
 }
+
+/** Clickable CPU flag (on/off LED); highlighted when it differs from the previous stop (`was`). */
+export function Flag({ name, on, was, tip, onClick }: { name: string; on: boolean; was?: boolean; tip: string; onClick: () => void }): JSX.Element {
+  return (
+    <button className={`flag-box${on ? ' on' : ''}${was !== undefined && on !== was ? ' changed' : ''}`} data-tip={`${name}: ${tip} (click to toggle)`} onClick={onClick}>
+      <span className="flag-name">{name}</span>
+      <span className="flag-led" />
+    </button>
+  );
+}

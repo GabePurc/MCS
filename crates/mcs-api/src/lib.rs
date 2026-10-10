@@ -312,6 +312,8 @@ fn disassemble_arm(spec: &mcs_core::arm::device::ArmDeviceSpec, flash: &[u8], la
 /// `labels` (code byte addresses).
 fn disassemble_riscv(base: u32, flash: &[u8], labels: &HashMap<u32, String>) -> Vec<DisasmLine> {
     use mcs_core::riscv::{decode, Op};
+    // The erased tail of a multi-megabyte flash would only add a million useless rows.
+    let flash = &flash[..flash.iter().rposition(|&b| b != 0xff).map_or(0, |p| p + 1)];
     let half = |o: usize| -> u32 { flash.get(o..o + 2).map_or(0xffff, |b| u16::from_le_bytes([b[0], b[1]]) as u32) };
     let mut out = Vec::with_capacity(flash.len() / 3);
     let mut off = 0usize;

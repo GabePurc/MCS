@@ -30,6 +30,8 @@ const META: Record<string, { title: string; description: string; device?: string
   't85_pwm.asm': { title: 'Pot to PWM via the PLL (assembly)', description: 'ADC on PB2 sets the 64 MHz-PLL PWM on PB1', device: 'ATtiny85' },
   'stm32g4_blink.elf': { title: 'Blink (prebuilt ELF)', description: 'Cortex-M4F: PA5 toggled by a delay loop; no toolchain needed', device: 'STM32G474RE' },
   'stm32h7_blink.elf': { title: 'Nucleo-H743 blink (prebuilt ELF)', description: 'Cortex-M7: PB0 (LD1, green) toggled by a delay loop; no toolchain needed', device: 'STM32H743ZIT6' },
+  'esp32c3_blink.elf': { title: 'GPIO blink (prebuilt ELF)', description: 'RISC-V: GPIO2 toggled every 250 ms by a delay loop (GPIO8 drives the RGB LED of the ESP32-C3-DevKitM-1, so a plain GPIO is used); no toolchain needed', device: 'ESP32-C3' },
+  'esp32c3_hello.elf': { title: 'UART0 hello + echo (prebuilt ELF)', description: 'RISC-V: greeting on UART0 (GPIO21 TX, 115200 baud) then echoes what you type: open View > Serial Monitor', device: 'ESP32-C3' },
   't85_blink.c': { title: 'Timer blink (C)', description: 'Timer0 overflow interrupt toggles PB3', device: 'ATtiny85' },
 };
 
