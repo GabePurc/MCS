@@ -207,8 +207,8 @@ pub fn program_to_machine_code(device_id: &str, flash: &[u8], used: usize, label
 pub fn disassemble(device_id: &str, flash: &[u8], labels: &HashMap<u32, String>) -> Vec<DisasmLine> {
     let Some(spec) = devices::get(device_id) else { return Vec::new() };
     let table = isa::decode_table(spec.features);
-    let io_names: HashMap<u32, String> = spec.registers.iter().filter_map(|r| spec.data_to_io(r.addr).map(|io| (io as u32, r.name.clone()))).collect();
-    let data_names: HashMap<u32, String> = spec.registers.iter().map(|r| (r.addr as u32, r.name.clone())).collect();
+    let io_names: HashMap<u32, String> = spec.registers.iter().rev().filter_map(|r| spec.data_to_io(r.addr).map(|io| (io as u32, r.name.clone()))).collect();
+    let data_names: HashMap<u32, String> = spec.registers.iter().rev().map(|r| (r.addr as u32, r.name.clone())).collect();
     let code_label = |a: u32| labels.get(&a).cloned();
     let io_name = |a: u32| io_names.get(&a).cloned();
     let data_name = |a: u32| data_names.get(&a).cloned();

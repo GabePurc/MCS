@@ -7,8 +7,12 @@ Supported microcontrollers:
 | Family | Parts | Package |
 |---|---|---|
 | tinyAVR, reduced core | ATtiny4, ATtiny5, ATtiny9, ATtiny10 | SOT-23-6 |
-| tinyAVR, classic core | ATtiny25, ATtiny45, ATtiny85 | PDIP-8 |
+| tinyAVR, classic core | ATtiny13A, ATtiny25, ATtiny45, ATtiny85 | PDIP-8 |
+| tinyAVR, classic core | ATtiny24A, ATtiny44A, ATtiny84A | PDIP-14 |
+| tinyAVR, classic core | ATtiny2313A, ATtiny4313 | PDIP-20 |
 | megaAVR | ATmega48PA, ATmega88PA, ATmega168PA, ATmega328P (Arduino Uno) | PDIP-28 |
+| megaAVR (classic register map) | ATmega8 | PDIP-28 |
+| megaAVR (classic register map) | ATmega16, ATmega32 | PDIP-40 |
 
 ![MCS stopped at a breakpoint in blink.asm](docs/screenshot.jpg)
 

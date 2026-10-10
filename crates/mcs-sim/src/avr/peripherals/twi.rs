@@ -14,7 +14,8 @@ pub struct TwiConfig {
     pub twar: u16,
     pub twdr: u16,
     pub twcr: u16,
-    pub twamr: u16,
+    /// TWI address mask register (absent on the ATmega8/16/32).
+    pub twamr: Option<u16>,
     pub vector: u8,
     pub prr_mask: u8,
 }

@@ -177,9 +177,14 @@ pub struct WatchdogConfig {
     pub wdtcsr: u16,
     /// Reset flag register (RSTFLR / MCUSR).
     pub rstflr: u16,
+    /// Watchdog interrupt vector (unused when `legacy`).
     pub vector: u8,
     /// Classic AVRs protect WDE/WDP with the WDCE timed sequence instead of CCP.
     pub wdce: bool,
+    /// ATmega8/16/32 watchdog (WDTCR): no interrupt mode (WDIF/WDIE) and no WDP3, the prescaler
+    /// can be changed at any time, only clearing WDE needs the WDCE|WDE timed sequence; the
+    /// time-outs are the same as the classic parts' (16.3 ms * 2^WDP at 5 V).
+    pub legacy: bool,
 }
 
 const WDIF: u8 = 0x80;
@@ -203,7 +208,7 @@ impl Watchdog {
     }
 
     pub fn registers(&self) -> Vec<(u16, u8)> {
-        vec![(self.c.wdtcsr, WDIF)]
+        vec![(self.c.wdtcsr, if self.c.legacy { 0 } else { WDIF })]
     }
 
     fn reg(&self, cx: &Cx) -> u8 {
@@ -212,14 +217,14 @@ impl Watchdog {
 
     /// WDE is forced on while WDRF is set or the WDTON fuse is programmed.
     fn refresh_wde(&mut self, cx: &mut Cx) {
-        if cx.cpu.data[self.c.rstflr as usize] & WDRF != 0 || cx.fuse_programmed("WDTON") {
+        if (!self.c.legacy && cx.cpu.data[self.c.rstflr as usize] & WDRF != 0) || cx.fuse_programmed("WDTON") {
             cx.cpu.data[self.c.wdtcsr as usize] |= WDE;
         }
     }
 
     fn period_seconds(&self, cx: &Cx) -> f64 {
         let v = self.reg(cx);
-        let wdp = ((v & 7) | ((v >> 2) & 8)).min(9);
+        let wdp = ((v & 7) | if self.c.legacy { 0 } else { (v >> 2) & 8 }).min(9);
         2048.0 * (1u32 << wdp) as f64 / WDT_OSC_HZ
     }
 
@@ -242,7 +247,36 @@ impl Watchdog {
         cx.schedule(EV_TIMEOUT, at);
     }
 
+    /// WDTCR of the legacy parts (Atmel-2466T "Watchdog Timer Control Register").
+    fn write_legacy(&mut self, v: u8, cx: &mut Cx) {
+        let a = self.c.wdtcsr as usize;
+        let old = cx.cpu.data[a];
+        let now = cx.now();
+        let unlocked = now <= self.wdce_until && v & WDCE == 0;
+        let mut nv = v & 0x07; // WDP2:0 are freely writable
+        if v & WDE != 0 || (old & WDE != 0 && !unlocked) {
+            nv |= WDE; // setting is always allowed; clearing needs the sequence
+            if v & WDE == 0 {
+                cx.warn("wdce-wdt", "WDTCR: clearing WDE needs the timed sequence (write WDCE|WDE, then WDE = 0 within 4 cycles)");
+            }
+        }
+        if unlocked {
+            self.wdce_until = 0;
+        } else if v & (WDCE | WDE) == WDCE | WDE {
+            self.wdce_until = now + 4;
+        }
+        // WDE is forced on while the WDTON fuse is programmed.
+        if cx.fuse_programmed("WDTON") {
+            nv |= WDE;
+        }
+        cx.cpu.data[a] = nv;
+        self.restart(cx);
+    }
+
     fn update_irq(&self, cx: &mut Cx) {
+        if self.c.legacy {
+            return; // no watchdog interrupt (`vector` is unused)
+        }
         let v = self.reg(cx);
         cx.cpu.set_irq(self.c.vector, v & (WDIF | WDIE) == WDIF | WDIE);
     }
@@ -254,6 +288,9 @@ impl Peripheral for Watchdog {
     }
 
     fn write(&mut self, _addr: u16, v: u8, cx: &mut Cx) {
+        if self.c.legacy {
+            return self.write_legacy(v, cx);
+        }
         let a = self.c.wdtcsr as usize;
         let old = cx.cpu.data[a];
         let mut nv = (old & WDIF & !v) | (v & WDIE);

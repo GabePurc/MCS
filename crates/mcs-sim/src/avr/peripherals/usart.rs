@@ -6,7 +6,8 @@
 //! the receiver samples RXD in the middle of each bit after detecting a start bit, so the
 //! waveform shows the frames and the Serial Monitor (or any stimulus) talks to the pins.
 //!
-//! Source: DS40002061B section 20 (USART0). Synchronous and master SPI modes are not modelled.
+//! Source: DS40002061B section 20 (USART0); Atmel-2466T section "Accessing UBRRH/UCSRC" for the
+//! URSEL shared register of the ATmega8/16/32. Synchronous and master SPI modes are not modelled.
 
 use std::collections::VecDeque;
 
@@ -21,6 +22,9 @@ pub struct UsartConfig {
     pub ucsrc: u16,
     pub ubrrl: u16,
     pub ubrrh: u16,
+    /// UBRRH and UCSRC share one I/O address (`ucsrc == ubrrh`) selected by URSEL (bit 7) on
+    /// writes and by a back-to-back read sequence on reads (ATmega8/16/32).
+    pub ursel: bool,
     pub rx_gpio: usize,
     pub tx_gpio: usize,
     pub v_rx: u8,
@@ -80,15 +84,16 @@ pub struct Usart {
     rx_frame: Frame,
     rx_parity_err: bool,
     overrun: bool,
+    /// Cycle of the last read of the shared UBRRH/UCSRC address that returned UBRRH.
+    last_ubrrh_read: Option<u64>,
 }
 
 impl Usart {
     pub fn new(c: UsartConfig) -> Self {
         Self {
-            c,
             ucsra: UDRE,
             ucsrb: 0,
-            ucsrc: 0x06,
+            ucsrc: if c.ursel { 0x86 } else { 0x06 },
             ubrr: 0,
             tx_buf: None,
             tx: None,
@@ -98,12 +103,18 @@ impl Usart {
             rx_frame: Frame::default(),
             rx_parity_err: false,
             overrun: false,
+            last_ubrrh_read: None,
+            c,
         }
     }
 
     pub fn registers(&self) -> Vec<(u16, u8)> {
         let c = &self.c;
-        vec![(c.udr, 0), (c.ucsra, TXC), (c.ucsrb, 0), (c.ucsrc, 0), (c.ubrrl, 0), (c.ubrrh, 0)]
+        let mut v = vec![(c.udr, 0), (c.ucsra, TXC), (c.ucsrb, 0), (c.ucsrc, 0), (c.ubrrl, 0)];
+        if c.ubrrh != c.ucsrc {
+            v.push((c.ubrrh, 0));
+        }
+        v
     }
 
     pub fn vectors(&self) -> [Option<u8>; 3] {
@@ -273,6 +284,15 @@ impl Peripheral for Usart {
             self.update_irq(cx);
             return v;
         }
+        if self.c.ursel && addr == self.c.ucsrc {
+            // First read returns UBRRH; a read in the very next cycle returns UCSRC (URSEL = 1).
+            let now = cx.now();
+            if self.last_ubrrh_read.is_some_and(|c| c + 1 == now) {
+                self.last_ubrrh_read = None;
+                return self.ucsrc | 0x80;
+            }
+            self.last_ubrrh_read = Some(now);
+        }
         self.peek(addr, cx)
     }
 
@@ -284,7 +304,7 @@ impl Peripheral for Usart {
             self.status()
         } else if addr == c.ucsrb {
             self.ctrl_b()
-        } else if addr == c.ucsrc {
+        } else if addr == c.ucsrc && !c.ursel {
             self.ucsrc
         } else if addr == c.ubrrl {
             self.ubrr as u8
@@ -325,8 +345,8 @@ impl Peripheral for Usart {
             if self.tx.is_none() && self.tx_buf.is_some() && v & TXEN != 0 {
                 self.start_tx(cx);
             }
-        } else if addr == c.ucsrc {
-            if v & 0xc0 != 0 {
+        } else if addr == c.ucsrc && (!c.ursel || v & 0x80 != 0) {
+            if v & if c.ursel { 0x40 } else { 0xc0 } != 0 {
                 cx.warn("usart-sync", "USART synchronous / master SPI modes are not simulated (UMSEL != 0)");
             }
             self.ucsrc = v;

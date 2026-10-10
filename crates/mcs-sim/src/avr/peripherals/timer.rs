@@ -4,7 +4,8 @@
 //! two output compare units with pin outputs, external clock input.
 //!
 //! Sources: Atmel-8127H ATtiny4/5/9/10 section 12, Atmel ATmega48A/PA/88A/PA/168A/PA/328/P
-//! (DS40002061B) sections 15-18, Atmel-2586Q ATtiny25/45/85 section 11.
+//! (DS40002061B) sections 15-18, Atmel-2586Q ATtiny25/45/85 section 11, Atmel-2486AA / 2466T /
+//! 2503Q (ATmega8/16/32: single TCCRn register layout, one compare unit, FOC1x in TCCR1A).
 //!
 //! Event driven: the counter is advanced lazily ("synced") to the current cycle whenever
 //! software touches a register, and one scheduler event is armed for the next timer tick where
@@ -33,6 +34,20 @@ pub const CS_SYNC: ClockSelect = [Clk::Stop, Clk::Div(1), Clk::Div(8), Clk::Div(
 /// ATmega Timer2 (no external clock pin, extra /32 and /128 taps).
 pub const CS_TIMER2: ClockSelect = [Clk::Stop, Clk::Div(1), Clk::Div(8), Clk::Div(32), Clk::Div(64), Clk::Div(128), Clk::Div(256), Clk::Div(1024)];
 
+/// Control register layout.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TimerLayout {
+    /// TCCRnA / TCCRnB (+ TCCRnC) as on the ATmega48..328 and the ATtiny parts.
+    Split,
+    /// One TCCRn register at `tccr_a` (ATmega8/16/32 Timer0/2): bit 7 FOCn strobe (reads 0),
+    /// bit 6 WGMn0, bits 5:4 COMn, bit 3 WGMn1, bits 2:0 CS. Without `wgm` (ATmega8 Timer0) only
+    /// the clock select is writable and there is no compare unit.
+    Single { wgm: bool },
+}
+
+/// FOCnA / FOCnB masks of the classic layout (TCCRnB bits 7:6 / TCCRnC).
+pub const FOC_STD: (u8, u8) = (0x80, 0x40);
+
 /// Flag / enable bit masks in TIFRn / TIMSKn.
 #[derive(Clone, Copy)]
 pub struct TimerBits {
@@ -50,21 +65,28 @@ pub struct TimerConfig {
     pub id: u8,
     /// 16-bit timer (TEMP register, 16 modes, input capture).
     pub wide: bool,
+    pub layout: TimerLayout,
     pub tccr_a: u16,
+    /// Same address as `tccr_a` for `TimerLayout::Single`.
     pub tccr_b: u16,
-    /// Register holding FOCnA / FOCnB (TCCRnC on 16-bit timers, TCCRnB on 8-bit ones).
+    /// Register holding FOCnA / FOCnB (TCCRnC on 16-bit timers, TCCRnB on 8-bit ones, TCCRnA on
+    /// the ATmega8/16/32 Timer1 and for `TimerLayout::Single`).
     pub foc_reg: u16,
+    /// FOCnA / FOCnB masks within `foc_reg` (0 = no such channel).
+    pub foc_bits: (u8, u8),
     pub tcnt: u16,
-    pub ocr_a: u16,
-    pub ocr_b: u16,
+    /// Output compare registers (low byte); None when the compare unit does not exist.
+    pub ocr_a: Option<u16>,
+    pub ocr_b: Option<u16>,
     /// Input capture register (low byte address), 16-bit timers only.
     pub icr: Option<u16>,
     pub tifr: u16,
     pub timsk: u16,
+    /// Flag bits of absent compare units must be 0.
     pub bits: TimerBits,
     pub v_ovf: u8,
-    pub v_comp_a: u8,
-    pub v_comp_b: u8,
+    pub v_comp_a: Option<u8>,
+    pub v_comp_b: Option<u8>,
     pub v_capt: Option<u8>,
     pub oc_a_gpio: Option<usize>,
     pub oc_b_gpio: Option<usize>,
@@ -81,6 +103,8 @@ pub struct TimerConfig {
 }
 
 const EV_TICK: u8 = 0;
+/// OCR value of an absent compare unit: never matches.
+const NO_OCR: u32 = u32::MAX;
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum Kind {
@@ -159,7 +183,8 @@ impl Timer {
     pub fn new(c: TimerConfig) -> Self {
         let m = if c.wide { &MODES16 } else { &MODES8 };
         let b = c.bits;
-        let irq_map = [(b.tov, c.v_ovf), (b.ocfa, c.v_comp_a), (b.ocfb, c.v_comp_b), (b.icf, c.v_capt.unwrap_or(0))];
+        let irq_map = [(b.tov, c.v_ovf), (b.ocfa, c.v_comp_a.unwrap_or(0)), (b.ocfb, c.v_comp_b.unwrap_or(0)), (b.icf, c.v_capt.unwrap_or(0))];
+        let (oa, ob) = (if c.ocr_a.is_some() { 0 } else { NO_OCR }, if c.ocr_b.is_some() { 0 } else { NO_OCR });
         Self {
             max: if c.wide { 0xffff } else { 0xff },
             m,
@@ -167,10 +192,10 @@ impl Timer {
             c,
             tcnt: 0,
             dir: 1,
-            ocr_a: 0,
-            ocr_b: 0,
-            ocr_a_buf: 0,
-            ocr_b_buf: 0,
+            ocr_a: oa,
+            ocr_b: ob,
+            ocr_a_buf: oa,
+            ocr_b_buf: ob,
             icr: 0,
             temp: 0,
             tccr_a: 0,
@@ -192,14 +217,23 @@ impl Timer {
     /// Owned registers (TIFR/TIMSK belong to the flag register owner).
     pub fn registers(&self) -> Vec<(u16, u8)> {
         let c = &self.c;
-        let mut v = vec![(c.tccr_a, 0), (c.tccr_b, 0), (c.tcnt, 0), (c.ocr_a, 0), (c.ocr_b, 0)];
+        let mut v = vec![(c.tccr_a, 0), (c.tcnt, 0)];
+        if c.tccr_b != c.tccr_a {
+            v.push((c.tccr_b, 0));
+        }
+        for o in [c.ocr_a, c.ocr_b].into_iter().flatten() {
+            v.push((o, 0));
+            if c.wide {
+                v.push((o + 1, 0));
+            }
+        }
         if c.wide {
-            v.extend([(c.tcnt + 1, 0), (c.ocr_a + 1, 0), (c.ocr_b + 1, 0)]);
+            v.push((c.tcnt + 1, 0));
             if let Some(i) = c.icr {
                 v.extend([(i, 0), (i + 1, 0)]);
             }
         }
-        if c.foc_reg != c.tccr_b {
+        if c.foc_reg != c.tccr_a && c.foc_reg != c.tccr_b {
             v.push((c.foc_reg, 0));
         }
         v
@@ -507,10 +541,11 @@ impl Timer {
         let now = cx.now();
         self.sync(now, cx);
         let top = self.top();
-        if v & 0x80 != 0 {
+        let (fa, fb) = self.c.foc_bits;
+        if v & fa != 0 {
             self.compare_output(0, self.tcnt, top, k, now, cx);
         }
-        if v & 0x40 != 0 {
+        if v & fb != 0 {
             self.compare_output(1, self.tcnt, top, k, now, cx);
         }
     }
@@ -574,15 +609,15 @@ impl Timer {
     /// 16-bit value behind a register address and whether it is the high byte.
     fn reg16(&self, addr: u16) -> Option<(u32, bool)> {
         let c = &self.c;
-        let pair = |lo: u16| if addr == lo { Some(false) } else if c.wide && addr == lo + 1 { Some(true) } else { None };
-        if let Some(h) = pair(c.tcnt) {
+        let pair = |lo: Option<u16>| lo.and_then(|lo| if addr == lo { Some(false) } else if c.wide && addr == lo + 1 { Some(true) } else { None });
+        if let Some(h) = pair(Some(c.tcnt)) {
             Some((self.tcnt, h))
         } else if let Some(h) = pair(c.ocr_a) {
             Some((self.ocr_a_buf, h))
         } else if let Some(h) = pair(c.ocr_b) {
             Some((self.ocr_b_buf, h))
         } else {
-            c.icr.and_then(pair).map(|h| (self.icr, h))
+            pair(c.icr).map(|h| (self.icr, h))
         }
     }
 }
@@ -621,7 +656,13 @@ impl Peripheral for Timer {
             return if high { (v >> 8) as u8 } else { v as u8 };
         }
         if addr == self.c.tccr_a {
-            self.tccr_a
+            match self.c.layout {
+                TimerLayout::Split => self.tccr_a,
+                TimerLayout::Single { .. } => {
+                    // Rebuild the single register: COM (bits 5:4), WGM1 (3), WGM0 (6), CS (2:0).
+                    ((self.tccr_a >> 6) & 3) << 4 | (self.tccr_a & 1) << 6 | ((self.tccr_a >> 1) & 1) << 3 | (self.tccr_b & 7)
+                }
+            }
         } else if addr == self.c.tccr_b {
             self.tccr_b
         } else {
@@ -642,12 +683,12 @@ impl Peripheral for Timer {
             if addr == c.tcnt {
                 self.tcnt = val;
                 self.block_match = true;
-            } else if addr == c.ocr_a {
+            } else if Some(addr) == c.ocr_a {
                 self.ocr_a_buf = val;
                 if !self.buffered() {
                     self.ocr_a = val;
                 }
-            } else if addr == c.ocr_b {
+            } else if Some(addr) == c.ocr_b {
                 self.ocr_b_buf = val;
                 if !self.buffered() {
                     self.ocr_b = val;
@@ -658,10 +699,25 @@ impl Peripheral for Timer {
             self.schedule(cx);
             return;
         }
+        if let TimerLayout::Single { wgm } = self.c.layout {
+            if addr == self.c.tccr_a {
+                self.sync(now, cx);
+                self.tccr_b = v & 7;
+                self.tccr_a = if wgm { ((v >> 4) & 3) << 6 | (v >> 6) & 1 | ((v >> 3) & 1) << 1 } else { 0 };
+                self.reconfigure(cx);
+                if wgm {
+                    self.force_compare(v, cx);
+                }
+                return;
+            }
+        }
         if addr == self.c.tccr_a {
             self.sync(now, cx);
             self.tccr_a = v & 0xf3;
             self.reconfigure(cx);
+            if self.c.foc_reg == addr {
+                self.force_compare(v, cx);
+            }
             return;
         }
         if addr == self.c.tccr_b {
@@ -779,11 +835,17 @@ impl Peripheral for Timer {
             (format!("TCNT{n}"), self.tcnt.to_string()),
             ("TOP".into(), self.top().to_string()),
             ("Direction".into(), if self.dir > 0 { "Up" } else { "Down" }.into()),
-            (format!("OCR{n}A (active)"), self.ocr_a.to_string()),
-            (format!("OCR{n}B (active)"), self.ocr_b.to_string()),
-            (format!("OC{n}A"), self.oc_a.to_string()),
-            (format!("OC{n}B"), self.oc_b.to_string()),
         ];
+        // Single-channel timers show "OCn" instead of "OCnA".
+        let one = self.c.ocr_b.is_none();
+        if self.c.ocr_a.is_some() {
+            v.push((format!("OCR{n}{} (active)", if one { "" } else { "A" }), self.ocr_a.to_string()));
+            v.push((format!("OC{n}{}", if one { "" } else { "A" }), self.oc_a.to_string()));
+        }
+        if self.c.ocr_b.is_some() {
+            v.push((format!("OCR{n}B (active)"), self.ocr_b.to_string()));
+            v.push((format!("OC{n}B"), self.oc_b.to_string()));
+        }
         if self.c.wide {
             v.push(("TEMP".into(), format!("0x{:02X}", self.temp)));
         }

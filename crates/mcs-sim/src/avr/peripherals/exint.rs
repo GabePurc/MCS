@@ -1,7 +1,8 @@
 //! External interrupts INTn (level / edge) and pin-change interrupt groups (PCINTn).
 //! Register layouts differ per family (EICRA/EIMSK/EIFR + PCICR/PCIFR/PCMSKn on the ATtiny10 and
 //! the ATmegas; MCUCR.ISC0 + GIMSK/GIFR + PCMSK on the ATtiny85), so every bit is configured.
-//! Sources: Atmel-8127H section 9, DS40002061B section 13, Atmel-2586Q section 9.
+//! Sources: Atmel-8127H section 9, DS40002061B section 13, Atmel-2586Q section 9, Atmel-2466T /
+//! 2503Q section "External Interrupts" (MCUCR/MCUCSR/GICR/GIFR layout, edge-only asynchronous INT2).
 
 use crate::avr::machine::{Cx, Peripheral, Trigger};
 
@@ -17,6 +18,9 @@ pub struct IntSpec {
     pub mask_bit: u8,
     pub flag_reg: u16,
     pub flag_bit: u8,
+    /// One-bit sense control, edge only (ATmega16/32 INT2: ISC2 = 0 falling, 1 rising). The
+    /// edge is detected asynchronously, so it also works while the I/O clock is stopped.
+    pub one_bit_isc: bool,
 }
 
 /// One pin-change group (PCINTn vector).
@@ -59,7 +63,8 @@ impl ExtInt {
     }
 
     fn isc(&self, i: &IntSpec, cx: &Cx) -> u8 {
-        (cx.cpu.data[i.isc_reg as usize] >> i.isc_shift) & 3
+        let v = cx.cpu.data[i.isc_reg as usize] >> i.isc_shift;
+        if i.one_bit_isc { 2 | (v & 1) } else { v & 3 }
     }
 
     fn update(&self, cx: &mut Cx) {
@@ -114,7 +119,7 @@ impl Peripheral for ExtInt {
             let isc = self.isc(i, cx);
             if isc == 0 {
                 changed = true;
-            } else if !self.io_clock_stopped && (isc == 1 || (isc == 2 && level == 0) || (isc == 3 && level == 1)) {
+            } else if (!self.io_clock_stopped || i.one_bit_isc) && (isc == 1 || (isc == 2 && level == 0) || (isc == 3 && level == 1)) {
                 cx.cpu.data[i.flag_reg as usize] |= i.flag_bit;
                 if k == 0 {
                     cx.sys.trigger(Trigger::Int0, 1, cycle);
@@ -137,8 +142,9 @@ impl Peripheral for ExtInt {
     }
 
     fn on_reg_written(&mut self, addr: u16, cx: &mut Cx) {
-        // ISC bits living in a register owned elsewhere (ATtiny85 MCUCR).
-        if self.c.ints.iter().any(|i| i.isc_reg == addr) {
+        // ISC bits or interrupt enables living in a register owned elsewhere (ATtiny85 MCUCR,
+        // ATmega16/32 MCUCSR.ISC2 and GICR).
+        if self.c.ints.iter().any(|i| i.isc_reg == addr || i.mask_reg == addr) || self.c.groups.iter().any(|g| g.enable_reg == addr || g.msk_reg == addr) {
             self.update(cx);
         }
     }
