@@ -22,6 +22,11 @@
 //! | LDM/STM/PUSH/POP | `rn`, `imm` = register list, `aux` = 1 for write-back |
 //! | branches | `imm` = signed byte offset from `address + 4`; `B_COND` keeps the condition in `aux` |
 //! | bit fields | `rd`, `rn`, `amt` = lsb, `aux` = width (`SSAT`/`USAT`: `imm` = saturation bit position) |
+//! | DSP parallel add/sub (`PAR`) | `rd`, `rn`, `rm`, `aux` = prefix `PP_*`, `shift` = operation `PK_*` |
+//! | DSP multiplies | `rd`, `rn`, `rm`, `ra`; `aux` = `x`/`y` halves (bit 0 = top half of `rn`, bit 1 = top half of `rm`), exchange (`X`) or rounding (`R`) flag; long forms: `rd` = RdLo, `ra` = RdHi |
+//! | FP data processing | `rd`, `rn`, `rm` = S register (0-31) or D register (0-15) index, `aux` bit 0 = double precision |
+//! | FP load/store | `rd` = first register, `rn` = base core register, `imm` = signed byte offset (`VLDR`/`VSTR`) or register count (`VLDM`...), `aux` bit 0 = double, bit 1 = write-back, bit 2 = decrement-before |
+//! | FP moves/conversions | see the per-operation notes in `vfp.rs` |
 
 #![allow(non_camel_case_types, clippy::upper_case_acronyms)]
 
@@ -42,6 +47,14 @@ impl ArmFeatures {
     pub const FPV5_DP: ArmFeatures = ArmFeatures(4);
     /// Cortex-M4F.
     pub const CORTEX_M4F: ArmFeatures = ArmFeatures(1 | 2);
+    /// Cortex-M7 with the double-precision FPU (FPv5-D16 includes the FPv4-SP instructions).
+    pub const CORTEX_M7: ArmFeatures = ArmFeatures(1 | 2 | 4);
+
+    /// Any FPU (single precision at least).
+    #[inline]
+    pub const fn has_fpu(self) -> bool {
+        self.0 & 6 != 0
+    }
 
     #[inline]
     pub const fn has(self, f: ArmFeatures) -> bool {
@@ -111,7 +124,43 @@ ops! {
     MRS = "mrs", MSR = "msr", CPS = "cps", SVC = "svc", BKPT = "bkpt",
     NOP = "nop", YIELD = "yield", WFE = "wfe", WFI = "wfi", SEV = "sev", DBG = "dbg",
     DMB = "dmb", DSB = "dsb", ISB = "isb", IT = "it",
+    // DSP extension (ARMv7E-M): parallel add/subtract, packing, extension, dual / word / halfword
+    // multiplies, sum of absolute differences.
+    PAR = "parallel", SEL = "sel", USAD8 = "usad8", USADA8 = "usada8",
+    SSAT16 = "ssat16", USAT16 = "usat16", PKH = "pkh", SXTB16 = "sxtb16", UXTB16 = "uxtb16",
+    SMUL_XY = "smul", SMLA_XY = "smla", SMULW = "smulw", SMLAW = "smlaw", SMLAL_XY = "smlal",
+    SMUAD = "smuad", SMUSD = "smusd", SMLAD = "smlad", SMLSD = "smlsd",
+    SMLALD = "smlald", SMLSLD = "smlsld",
+    SMMUL = "smmul", SMMLA = "smmla", SMMLS = "smmls", UMAAL = "umaal",
+    // Floating point (FPv4-SP / FPv5-D16): loads, stores, moves.
+    VLDR = "vldr", VSTR = "vstr", VLDM = "vldm", VSTM = "vstm", VPUSH = "vpush", VPOP = "vpop",
+    VMOV_I = "vmov", VMOV_F = "vmov", VMOV_RS = "vmov", VMOV_SR = "vmov", VMOV_2S = "vmov",
+    VMOV_D2 = "vmov", VMOV_SC = "vmov", VMRS = "vmrs", VMSR = "vmsr",
+    // Floating point: arithmetic.
+    VADD = "vadd", VSUB = "vsub", VMUL = "vmul", VNMUL = "vnmul", VDIV = "vdiv",
+    VMLA = "vmla", VMLS = "vmls", VNMLA = "vnmla", VNMLS = "vnmls",
+    VFMA = "vfma", VFMS = "vfms", VFNMA = "vfnma", VFNMS = "vfnms",
+    VABS = "vabs", VNEG = "vneg", VSQRT = "vsqrt", VCMP = "vcmp", VCMPE = "vcmpe",
+    // Floating point: conversions and the FPv5 additions.
+    VCVT_FI = "vcvt", VCVT_IF = "vcvt", VCVT_FX = "vcvt", VCVT_DS = "vcvt", VCVTB = "vcvtb", VCVTT = "vcvtt",
+    VRINT = "vrint", VSEL = "vsel", VMAXNM = "vmaxnm", VMINNM = "vminnm",
 }
+
+/// `PAR` prefixes (`Insn::aux`): signed, saturating, signed halving, unsigned, unsigned saturating,
+/// unsigned halving.
+pub const PP_S: u8 = 0;
+pub const PP_Q: u8 = 1;
+pub const PP_SH: u8 = 2;
+pub const PP_U: u8 = 3;
+pub const PP_UQ: u8 = 4;
+pub const PP_UH: u8 = 5;
+/// `PAR` operations (`Insn::shift`).
+pub const PK_ADD16: u8 = 0;
+pub const PK_ASX: u8 = 1;
+pub const PK_SAX: u8 = 2;
+pub const PK_SUB16: u8 = 3;
+pub const PK_ADD8: u8 = 4;
+pub const PK_SUB8: u8 = 5;
 
 /// Flag-setting mode of `Insn::s`.
 pub const S_NO: u8 = 0;
@@ -579,7 +628,15 @@ fn decode32_01(h1: u32, h2: u32, feat: ArmFeatures, i: &mut Insn) {
             let rm = (h2 & 0xf) as u8;
             let (k, a) = imm_shift((h2 >> 4) & 3, ((h2 >> 12) & 7) << 2 | ((h2 >> 6) & 3));
             if op == 0b0110 {
-                // PKHBT / PKHTB (DSP).
+                // PKHBT (type LSL) / PKHTB (type ASR) (DSP).
+                if feat.has(ArmFeatures::DSP) && s == 0 && (h2 >> 4) & 1 == 0 {
+                    i.op = Op::PKH;
+                    i.rd = rd;
+                    i.rn = rn;
+                    i.rm = rm;
+                    i.shift = k;
+                    i.amt = a;
+                }
                 return;
             }
             let Some((_, rop, cmp)) = dp_ops(op) else { return };
@@ -603,10 +660,8 @@ fn decode32_01(h1: u32, h2: u32, feat: ArmFeatures, i: &mut Insn) {
                 i.op = rop;
             }
         }
-        // Coprocessor / FP: undefined in this stage.
-        _ => {
-            let _ = feat;
-        }
+        // Coprocessor space (0xEC-0xEF): FP loads/stores, moves and data processing.
+        _ => super::vfp::decode_vfp(h1, h2, feat, i),
     }
 }
 
@@ -750,6 +805,10 @@ fn decode32_10(h1: u32, h2: u32, feat: ArmFeatures, i: &mut Insn) {
                     let sh = (h1 >> 5) & 1;
                     if sh == 1 && imm5 == 0 {
                         // SSAT16 / USAT16 (DSP).
+                        if feat.has(ArmFeatures::DSP) && h2 & 0x30 == 0 {
+                            i.op = if op & 8 == 0 { Op::SSAT16 } else { Op::USAT16 };
+                            i.imm = if op & 8 == 0 { (h2 & 0xf) + 1 } else { h2 & 0xf };
+                        }
                         return;
                     }
                     i.op = if op & 8 == 0 { Op::SSAT } else { Op::USAT };
@@ -873,6 +932,8 @@ fn decode32_11(h1: u32, h2: u32, feat: ArmFeatures, i: &mut Insn) {
     match (h1 >> 8) & 0xf {
         // Load/store single data item (1111 100x).
         0b1000 | 0b1001 => decode_ldst_single(h1, h2, i),
+        // FPv5 additions (VSEL, VMAXNM, VRINT*, VCVTA/N/P/M).
+        0b1110 => super::vfp::decode_vfp5(h1, h2, feat, i),
         // Data processing (register): 1111 1010.
         0b1010 => {
             let op1 = (h1 >> 4) & 0xf;
@@ -894,16 +955,36 @@ fn decode32_11(h1: u32, h2: u32, feat: ArmFeatures, i: &mut Insn) {
                     let op = match op1 {
                         0 => Op::SXTH,
                         1 => Op::UXTH,
+                        2 => Op::SXTB16,
+                        3 => Op::UXTB16,
                         4 => Op::SXTB,
                         5 => Op::UXTB,
                         _ => return,
                     };
-                    if rn != 15 && !feat.has(ArmFeatures::DSP) {
+                    if (rn != 15 || matches!(op, Op::SXTB16 | Op::UXTB16)) && !feat.has(ArmFeatures::DSP) {
                         return;
                     }
                     i.op = op;
                     i.amt = (((h2 >> 4) & 3) * 8) as u8;
                 }
+            } else if (h2 >> 7) & 1 == 0 {
+                // Parallel addition and subtraction (DSP): op1 = 1 kind(3), prefix in h2[6:4].
+                let kind = match op1 & 7 {
+                    0 => PK_ADD8,
+                    1 => PK_ADD16,
+                    2 => PK_ASX,
+                    4 => PK_SUB8,
+                    5 => PK_SUB16,
+                    6 => PK_SAX,
+                    _ => return,
+                };
+                let pfx = (h2 >> 4) & 3;
+                if pfx == 3 || !feat.has(ArmFeatures::DSP) {
+                    return;
+                }
+                i.op = Op::PAR;
+                i.shift = kind;
+                i.aux = pfx as u8 + 3 * ((h2 >> 6) & 1) as u8;
             } else if op1 & 0xc == 0x8 && (h2 >> 6) & 3 == 2 {
                 // Miscellaneous operations.
                 let sel = ((h1 >> 4) & 3, (h2 >> 4) & 3);
@@ -912,6 +993,7 @@ fn decode32_11(h1: u32, h2: u32, feat: ArmFeatures, i: &mut Insn) {
                     (0, 1) => (Op::QDADD, true),
                     (0, 2) => (Op::QSUB, true),
                     (0, 3) => (Op::QDSUB, true),
+                    (2, 0) => (Op::SEL, true),
                     (1, 0) => (Op::REV, false),
                     (1, 1) => (Op::REV16, false),
                     (1, 2) => (Op::RBIT, false),
@@ -934,15 +1016,56 @@ fn decode32_11(h1: u32, h2: u32, feat: ArmFeatures, i: &mut Insn) {
             let ra = ((h2 >> 12) & 0xf) as u8;
             let rd = ((h2 >> 8) & 0xf) as u8;
             let rm = (h2 & 0xf) as u8;
+            let dsp = feat.has(ArmFeatures::DSP);
             i.rn = rn;
             i.rm = rm;
             if h1 & 0x80 == 0 {
-                if (h1 >> 4) & 7 == 0 && (h2 >> 6) & 3 == 0 {
-                    i.rd = rd;
-                    i.ra = ra;
-                    match (h2 >> 4) & 3 {
-                        0 => i.op = if ra == 15 { Op::MUL } else { Op::MLA },
-                        _ => i.op = Op::MLS,
+                if (h2 >> 6) & 3 != 0 {
+                    return;
+                }
+                let op1 = (h1 >> 4) & 7;
+                let op2 = (h2 >> 4) & 3;
+                i.rd = rd;
+                i.ra = ra;
+                let mul_only = ra == 15;
+                // Bit 0 of `aux`: top half of Rn (N), bit 1: top half of Rm (M).
+                let nm = ((op2 >> 1) | ((op2 & 1) << 1)) as u8;
+                match op1 {
+                    0 => match op2 {
+                        0 => i.op = if mul_only { Op::MUL } else { Op::MLA },
+                        1 => i.op = Op::MLS,
+                        _ => {}
+                    },
+                    _ if !dsp => {}
+                    1 => {
+                        i.op = if mul_only { Op::SMUL_XY } else { Op::SMLA_XY };
+                        i.aux = nm;
+                    }
+                    2..=6 if op2 > 1 => {}
+                    2 => {
+                        i.op = if mul_only { Op::SMUAD } else { Op::SMLAD };
+                        i.aux = op2 as u8;
+                    }
+                    3 => {
+                        i.op = if mul_only { Op::SMULW } else { Op::SMLAW };
+                        i.aux = (op2 as u8) << 1;
+                    }
+                    4 => {
+                        i.op = if mul_only { Op::SMUSD } else { Op::SMLSD };
+                        i.aux = op2 as u8;
+                    }
+                    5 => {
+                        i.op = if mul_only { Op::SMMUL } else { Op::SMMLA };
+                        i.aux = op2 as u8;
+                    }
+                    6 => {
+                        i.op = Op::SMMLS;
+                        i.aux = op2 as u8;
+                    }
+                    _ => {
+                        if op2 == 0 {
+                            i.op = if mul_only { Op::USAD8 } else { Op::USADA8 };
+                        }
                     }
                 }
             } else {
@@ -963,6 +1086,20 @@ fn decode32_11(h1: u32, h2: u32, feat: ArmFeatures, i: &mut Insn) {
                         i.rd = rd;
                         return;
                     }
+                    _ if !dsp => return,
+                    (4, 8..=0xb) => {
+                        i.op = Op::SMLAL_XY;
+                        i.aux = (((op2 >> 1) & 1) | ((op2 & 1) << 1)) as u8;
+                    }
+                    (4, 0xc | 0xd) => {
+                        i.op = Op::SMLALD;
+                        i.aux = (op2 & 1) as u8;
+                    }
+                    (5, 0xc | 0xd) => {
+                        i.op = Op::SMLSLD;
+                        i.aux = (op2 & 1) as u8;
+                    }
+                    (6, 6) => i.op = Op::UMAAL,
                     _ => return,
                 }
                 // RdLo = Rt field (h2[15:12]), RdHi = h2[11:8].

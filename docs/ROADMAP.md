@@ -56,8 +56,9 @@ Update this file when work is finished (only list items that are done in the rep
 - [x] Symbol View (View > Symbol View, Ctrl+Shift+O): the editor shows one assembly label / C function at a time with a symbol sidebar in file order; one document (real line numbers, one undo history), edits and cursor stay in the shown symbol, jumps (go to line, breakpoints, debugger, search, undo) switch symbols; "+" adds a label / function after the shown one; incremental outline (changed lines only for assembly, top-level syntax tree for C)
 - [x] Device Definitions (.inc) is a tool window (float, dock or pop out) with a line filter
 
-### Multi-architecture (docs/MULTI_ARCH.md, Stage B1)
+### Multi-architecture (docs/MULTI_ARCH.md, Stage B1/B2)
 - [x] Standalone ARMv7-M core, not yet wired into the session: `mcs_core::arm` Thumb/Thumb-2 decoder + UAL disassembler (all base-ISA encodings, DSP saturating/extend-and-add subset; checked against 1900+ `llvm-objdump` reference lines in `crates/mcs-core/tests/arm_thumb`), `mcs_sim::arm` machine (r0-r15/xPSR/MSP/PSP/CONTROL/PRIMASK/FAULTMASK/BASEPRI, pre-decoded flash, memory bus with `Mmio` peripheral trait, NVIC with priority grouping/preemption/tail-chaining, SysTick, SCB incl. fault escalation/lockup, WFI/WFE sleep with fast-forward, ~300 simulated MHz); tests in `crates/mcs-sim/tests/arm_core` (programs assembled by clang, `gen_programs.py`)
+- [x] Stage B2, complete Cortex-M4F / M7 instruction set: ARMv7E-M DSP extension (all parallel add/sub with GE flags, SEL, USAD8/USADA8, SSAT16/USAT16, PKH, SXTB16 family, every signed/dual/most-significant-word multiply, UMAAL, sticky Q, APSR.GE in MRS/MSR; gated on `ArmFeatures::DSP`), FPv4-SP (S0-S31, FPSCR with rounding modes/FZ/DN/AHP and exact exception flags, CPACR NOCP check, VLDR/VSTR/VLDM/VSTM/VPUSH/VPOP, all VMOV forms, VMRS/VMSR, arithmetic incl. fused VFMA family, VCMP, every VCVT incl. fixed point and half precision) and FPv5-D16 (D0-D15 aliasing the S file, double precision, VSEL, VMAXNM/VMINNM, VRINT*, VCVTA/N/P/M, `vmov.32` scalar), exception entry/return with the 26-word extended frame (CONTROL.FPCA, FPCCR.ASPEN, EXC_RETURN bit 4; lazy stacking is performed eagerly). The FP arithmetic is an exact integer soft-float (`mcs_sim::arm::fpu`) with native fast paths, cross-checked against Rust f32/f64 in the unit tests. Disassembler output checked against ~1500 more `llvm-objdump` lines (`gen_ext_vectors.py`); executor tests in `crates/mcs-sim/tests/arm_core/dsp_fp.rs`
 
 ## Next
 - [ ] DWARF variable/type info (`.debug_info`) for a typed Watch window and locals
@@ -68,7 +69,7 @@ Update this file when work is finished (only list items that are done in the rep
 - [ ] More devices (issues #1, #5): ATtiny20/40, then the AVR-0/1 series (new register map)
 - [ ] Virtual I²C/SPI devices on the bus (EEPROM, sensors) so TWI/SPI transfers get answers
 - [ ] SPM self-programming, debugWIRE, timer asynchronous (TOSC) mode, USART synchronous / MSPIM modes
-- [ ] ARM Cortex-M (STM32) targets: Thumb-2 core, NVIC and SysTick exist (Stage B1); still needs the architecture abstraction below, FPU, ELF/HEX loading at 0x0800_0000 and per-family peripherals
+- [ ] ARM Cortex-M (STM32) targets: Thumb-2 core with DSP and FPU, NVIC and SysTick exist (Stage B1/B2); still needs the architecture abstraction below, ELF/HEX loading at 0x0800_0000 and per-family peripherals
 - [ ] Architecture abstraction for non-AVR targets (machine trait, register descriptions in specs)
 - [ ] Project files (multi-file C builds, per-project device/clock/fuses)
 - [ ] Signed release builds (Apple notarization, Windows code signing)

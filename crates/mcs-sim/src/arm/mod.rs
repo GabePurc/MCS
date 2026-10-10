@@ -2,7 +2,9 @@
 //!
 //! * [`cpu`] — registers, xPSR, stack pointer banking.
 //! * [`bus`] — memory map (flash, SRAM, MMIO peripherals via [`bus::Mmio`], System Control Space).
-//! * [`exec`] — instruction executor (dense `match` on the pre-decoded [`mcs_core::arm::thumb::Op`]).
+//! * [`exec`] — instruction executor (dense `match` on the pre-decoded [`mcs_core::arm::thumb::Op`]);
+//!   `exec_ext` runs the DSP extension and the FP instructions out of line.
+//! * [`fpu`] — IEEE-754 arithmetic with the exact FPSCR semantics (FPv4-SP / FPv5-D16).
 //! * [`machine`] — run loop, exception entry/return, fault escalation.
 //! * [`nvic`], [`scb`], [`systick`] — interrupt controller, system control block, SysTick.
 //!
@@ -14,6 +16,8 @@
 pub mod bus;
 pub mod cpu;
 pub mod exec;
+mod exec_ext;
+pub mod fpu;
 pub mod machine;
 pub mod nvic;
 pub mod scb;

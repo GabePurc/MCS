@@ -2,10 +2,12 @@
 //! clang) for every ARMv7-M base encoding; see `vectors.rs` (generated, checked in).
 
 mod vectors;
+mod vectors_ext;
 
 use mcs_core::arm::disasm::Disassembler;
 use mcs_core::arm::thumb::{decode, ArmFeatures, Insn, Op};
-use vectors::{EXTENSION_VECTORS, LONG_BRANCH_VECTORS, VECTORS};
+use vectors::{LONG_BRANCH_VECTORS, VECTORS};
+use vectors_ext::{M4F_VECTORS, M7_VECTORS};
 
 /// Normalizes objdump / our text: drops `<sym>` parts and comments, converts `0x..` literals to
 /// decimal and collapses whitespace.
@@ -61,18 +63,70 @@ fn base_isa_matches_llvm_objdump() {
     }
 }
 
-#[test]
-fn extension_encodings_are_undefined_in_base() {
-    // DSP / FP encodings must not decode to a base instruction (they decode to UNDEF for now).
-    for (_, bytes, text) in EXTENSION_VECTORS {
-        if *text == "nop" {
-            continue; // trailing pad of the generated stream
-        }
-        let hw1 = u16::from_le_bytes([bytes[0], bytes[1]]);
-        let hw2 = if bytes.len() > 2 { u16::from_le_bytes([bytes[2], bytes[3]]) } else { 0 };
-        let i = decode(hw1, hw2, ArmFeatures::BASE);
-        assert_eq!(i.op, Op::UNDEF, "{} decoded as {:?}", text, i.op);
+fn hws(bytes: &[u8]) -> (u16, u16) {
+    let hw1 = u16::from_le_bytes([bytes[0], bytes[1]]);
+    let hw2 = if bytes.len() > 2 { u16::from_le_bytes([bytes[2], bytes[3]]) } else { 0 };
+    (hw1, hw2)
+}
+
+fn report(what: &str, total: usize, bad: Vec<String>) {
+    if !bad.is_empty() {
+        let max: usize = std::env::var("ARM_MAX").ok().and_then(|v| v.parse().ok()).unwrap_or(60);
+        panic!("{what}: {} of {total} mismatches:\n{}", bad.len(), bad.iter().take(max).cloned().collect::<Vec<_>>().join("\n"));
     }
+}
+
+#[test]
+fn dsp_and_fpv4_sp_match_llvm_objdump() {
+    report("M4F", M4F_VECTORS.len(), run(M4F_VECTORS, ArmFeatures::CORTEX_M4F));
+}
+
+#[test]
+fn fpv5_d16_matches_llvm_objdump() {
+    report("M7", M7_VECTORS.len(), run(M7_VECTORS, ArmFeatures::CORTEX_M7));
+    // The M4F encodings are a subset of what the M7 decodes.
+    report("M4F on M7", M4F_VECTORS.len(), run(M4F_VECTORS, ArmFeatures::CORTEX_M7));
+}
+
+#[test]
+fn extension_encodings_are_undefined_without_the_extension() {
+    // DSP / FP encodings must not decode to a base instruction (they decode to UNDEF).
+    for (_, bytes, text) in M4F_VECTORS.iter().chain(M7_VECTORS) {
+        let (hw1, hw2) = hws(bytes);
+        let i = decode(hw1, hw2, ArmFeatures::BASE);
+        if bytes.len() == 4 && i.op != Op::UNDEF {
+            // Only instructions that also exist in the base ISA may decode (e.g. a plain `qadd`).
+            panic!("{} decoded as {:?} without the extension", text, i.op);
+        }
+    }
+}
+
+#[test]
+fn double_precision_and_fpv5_are_undefined_on_the_single_precision_fpu() {
+    const V5: [&str; 8] = ["vsel", "vmaxnm", "vminnm", "vrint", "vcvta", "vcvtn", "vcvtp", "vcvtm"];
+    for (_, bytes, text) in M7_VECTORS {
+        let dp_only = text.contains("f64") || text.contains("mvfr2") || text.contains(".32\t") || V5.iter().any(|p| text.starts_with(p));
+        let (hw1, hw2) = hws(bytes);
+        let op = decode(hw1, hw2, ArmFeatures::CORTEX_M4F).op;
+        let wide = text.starts_with("vmov\t") && text.contains("d");
+        if dp_only || wide {
+            assert_eq!(op, Op::UNDEF, "{text} must be undefined on FPv4-SP");
+        }
+    }
+}
+
+#[test]
+fn parallel_add_subtract_covers_all_36_forms() {
+    use std::collections::HashSet;
+    let mut seen = HashSet::new();
+    for (_, bytes, _) in M4F_VECTORS {
+        let (hw1, hw2) = hws(bytes);
+        let i = decode(hw1, hw2, ArmFeatures::CORTEX_M4F);
+        if i.op == Op::PAR {
+            seen.insert((i.aux, i.shift));
+        }
+    }
+    assert_eq!(seen.len(), 36);
 }
 
 #[test]
@@ -98,10 +152,13 @@ fn long_branches_match() {
 fn every_operation_is_covered_by_the_vectors() {
     use std::collections::HashSet;
     let mut seen = HashSet::new();
-    for (_, bytes, _) in VECTORS {
-        let hw1 = u16::from_le_bytes([bytes[0], bytes[1]]);
-        let hw2 = if bytes.len() > 2 { u16::from_le_bytes([bytes[2], bytes[3]]) } else { 0 };
+    for (_, bytes, _) in VECTORS.iter().chain(M4F_VECTORS) {
+        let (hw1, hw2) = hws(bytes);
         seen.insert(decode(hw1, hw2, ArmFeatures::CORTEX_M4F).op);
+    }
+    for (_, bytes, _) in M7_VECTORS {
+        let (hw1, hw2) = hws(bytes);
+        seen.insert(decode(hw1, hw2, ArmFeatures::CORTEX_M7).op);
     }
     let missing: Vec<usize> = (0..mcs_core::arm::thumb::OP_COUNT)
         .filter(|&n| {

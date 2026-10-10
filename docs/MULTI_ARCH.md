@@ -22,7 +22,7 @@ cores, devices and peripherals. Work is staged so every stage ships with all tes
 * UI: `DeviceSpec = AvrDeviceSpec | ...` discriminated by `arch`; AVR-only panels (fuses,
   I/O view, Chip View, ISA, definitions) check `arch === 'avr'`.
 
-## Stage B — ARMv7-M core (Cortex-M4/M7 integer, then FPU)
+## Stage B — ARMv7-M core (Cortex-M4/M7 integer, then DSP + FPU)
 * `mcs_core::arm`: Thumb/Thumb-2 decoder + disassembler table (16/32-bit encodings), register
   descriptions.
 * `mcs_sim::arm`: CPU (r0-r15, xPSR, MSP/PSP, CONTROL, PRIMASK/FAULTMASK/BASEPRI), memory bus
@@ -32,7 +32,22 @@ cores, devices and peripherals. Work is staged so every stage ships with all tes
 * Loading: ELF (`EM_ARM`) and Intel HEX at 0x0800_0000; vector table at the flash base.
 * Tests: reference encodings from `clang --target=thumbv7em-none-eabi` and `llvm-objdump`
   (`xcrun --find llvm-objdump`), checked in as byte arrays.
-* FPU: FPv4-SP (M4) then FPv5-D16 (M7, double precision).
+* B1 (done): integer ISA, exceptions, NVIC, SysTick, SCB.
+* B2 (done): DSP extension, FPv4-SP (M4F) and FPv5-D16 (M7).
+  * Feature gating: `ArmFeatures::{DSP, FPV4_SP, FPV5_DP}` at decode time; `ArmConfig::{default
+    (M4F), cortex_m7(), cortex_m3()}` select the core. Undefined encodings raise UNDEFINSTR.
+  * FP state (`Cpu::fpr` S0-S31 with D0-D15 aliasing pairs, `Cpu::fpscr`) lives in the CPU struct;
+    arithmetic is `mcs_sim::arm::fpu` (exact soft-float with FPSCR semantics, native f32/f64 fast
+    paths for round-to-nearest without flush-to-zero). Fused ops are single-rounded.
+  * CPACR gates every FP instruction (NOCP UsageFault); CP10 is consulted (CP11 must match).
+  * Exception entry stacks the 26-word extended frame when CONTROL.FPCA is set; EXC_RETURN bit 4
+    selects the frame on return. Lazy stacking (FPCCR.LSPEN) is performed eagerly; LSPACT never
+    sets. On entry FPSCR takes FPDSCR and FPCA is cleared (handlers start with a clean FP state).
+  * Cycle counts: DSP 1; Cortex-M4 TRM table 3-1 / FPU (ARM DDI 0439B) for FPv4-SP; Cortex-M7
+    is dual issue and approximated with the same single-issue counts (double VDIV/VSQRT 29).
+  * Simplifications: FPSID is approximate (implementer + subarchitecture only), instructions for
+    the other coprocessors decode as UNDEFINSTR rather than NOCP, CPACR CP11 is not consulted
+    separately from CP10.
 
 ## Stage C — STM32G4 (Cortex-M4F): STM32G431/G474
 RCC (HSI16/HSE/PLL, bus prescalers), FLASH ACR wait states, GPIO A-G (MODER/OTYPER/OSPEEDR/

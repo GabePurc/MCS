@@ -6,6 +6,7 @@
 //! 16-bit flag-setting data-processing encodings drop the `s` suffix, as in UAL.
 //! Reference: ARM DDI 0403E.e chapter A7 (instruction descriptions, assembler syntax).
 
+use super::disasm_ext::{dsp_text, fp_text};
 use super::thumb::*;
 
 const REGS: [&str; 16] = ["r0", "r1", "r2", "r3", "r4", "r5", "r6", "r7", "r8", "r9", "r10", "r11", "r12", "sp", "lr", "pc"];
@@ -107,6 +108,8 @@ pub fn format_insn(i: &Insn, addr: u32, cond: Option<u8>, in_it: bool) -> String
     let mut mn = name.to_string();
     let mut flags = false;
     let mut wsfx = false;
+    // Data-type suffix of floating-point mnemonics (after the condition): `.f32`.
+    let mut dt = String::new();
     match i.op {
         Op::UNDEF => {
             mn = "<undefined>".into();
@@ -223,6 +226,12 @@ pub fn format_insn(i: &Insn, addr: u32, cond: Option<u8>, in_it: bool) -> String
             ops = format!("{}, #{}, {}{}", r(i.rd), i.imm, r(i.rn), sh);
         }
         Op::QADD | Op::QSUB | Op::QDADD | Op::QDSUB => ops = format!("{}, {}, {}", r(i.rd), r(i.rm), r(i.rn)),
+        Op::PAR | Op::SEL | Op::USAD8 | Op::USADA8 | Op::SSAT16 | Op::USAT16 | Op::PKH | Op::SXTB16 | Op::UXTB16 | Op::SMUL_XY | Op::SMLA_XY | Op::SMULW | Op::SMLAW | Op::SMLAL_XY | Op::SMUAD | Op::SMUSD | Op::SMLAD | Op::SMLSD | Op::SMLALD | Op::SMLSLD | Op::SMMUL | Op::SMMLA | Op::SMMLS | Op::UMAAL => {
+            (mn, ops) = dsp_text(i);
+        }
+        Op::VLDR | Op::VSTR | Op::VLDM | Op::VSTM | Op::VPUSH | Op::VPOP | Op::VMOV_I | Op::VMOV_F | Op::VMOV_RS | Op::VMOV_SR | Op::VMOV_2S | Op::VMOV_D2 | Op::VMOV_SC | Op::VMRS | Op::VMSR | Op::VADD | Op::VSUB | Op::VMUL | Op::VNMUL | Op::VDIV | Op::VMLA | Op::VMLS | Op::VNMLA | Op::VNMLS | Op::VFMA | Op::VFMS | Op::VFNMA | Op::VFNMS | Op::VABS | Op::VNEG | Op::VSQRT | Op::VCMP | Op::VCMPE | Op::VCVT_FI | Op::VCVT_IF | Op::VCVT_FX | Op::VCVT_DS | Op::VCVTB | Op::VCVTT | Op::VRINT | Op::VSEL | Op::VMAXNM | Op::VMINNM => {
+            (mn, dt, ops) = fp_text(i);
+        }
         Op::LDR | Op::LDRB | Op::LDRH | Op::LDRSB | Op::LDRSH | Op::STR | Op::STRB | Op::STRH => {
             wsfx = wide && !matches!(i.aux, AM_PRE | AM_POST) && !(i.aux == AM_OFFSET && (i.imm as i32) < 0);
             ops = format!("{}, {}", r(i.rd), mem_s(i));
@@ -330,6 +339,7 @@ pub fn format_insn(i: &Insn, addr: u32, cond: Option<u8>, in_it: bool) -> String
     if wsfx && wide {
         m.push_str(".w");
     }
+    m.push_str(&dt);
     if !ops.is_empty() {
         m.push('\t');
         m.push_str(&ops);
