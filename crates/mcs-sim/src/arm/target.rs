@@ -16,7 +16,7 @@ use super::{StopReason as ArmStop, systick};
 use crate::avr::peripherals::serial::SerialConfig;
 use crate::avr::CallFrame;
 use crate::pins::{ExtDrive, PinGenerator};
-use crate::protocol::{CoreState, CpuField, MachineState, PeripheralInfo, PinState, StepKind};
+use crate::protocol::{CoreState, CpuField, MachineState, PeripheralInfo, PinState, RamExtra, StepKind};
 use crate::target::{Sent, StepPlan, StopReason, Target};
 
 /// Words of stack scanned when reconstructing the call stack (from SP up, bounded by the stack's
@@ -325,6 +325,16 @@ impl Target for Machine {
     /// AVR-only for now).
     fn set_profiling(&mut self, _enabled: bool) {}
 
+    fn watch_ram(&mut self, index: usize) -> Result<(), String> {
+        if index >= self.bus.ram.len() {
+            return Err(format!("RAM block {index} does not exist"));
+        }
+        self.dbg.extra_sel = index;
+        self.dbg.extra_dirty = true;
+        self.dbg.extra_sent = Vec::new();
+        Ok(())
+    }
+
     fn set_serial(&mut self, config: SerialConfig) {
         let now = self.cpu.cycles;
         let mut cx = cx!(self, BRIDGE_OWNER, now);
@@ -414,6 +424,19 @@ impl Target for Machine {
         } else {
             Vec::new()
         };
+        let ram_extra = match self.dbg.extra_sel {
+            0 => None,
+            k => {
+                let cur = &self.bus.ram[k].data;
+                if first || self.dbg.extra_dirty || self.dbg.extra_sent != *cur {
+                    self.dbg.extra_dirty = false;
+                    self.dbg.extra_sent.clone_from(cur);
+                    Some(RamExtra { index: k, data: cur.clone() })
+                } else {
+                    None
+                }
+            }
+        };
         let io: Vec<u32> = spec.registers.iter().map(|r| self.peek_register(r.addr)).collect();
         let (trace_from, trace_cycles, trace_levels) = self.sys.trace.read_since_wide(sent.trace, max_trace);
         let trace_words = self.sys.trace.words() as u32;
@@ -470,6 +493,7 @@ impl Target for Machine {
             sleep_mode: 0,
             reset_held: false,
             data,
+            ram_extra,
             io,
             flash,
             flash_version: 0,

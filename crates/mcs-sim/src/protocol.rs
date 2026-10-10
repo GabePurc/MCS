@@ -75,6 +75,9 @@ pub enum Command {
     SetPinGenerator { pin: usize, gen: Option<PinGenerator> },
     /// Per-word execution counting for the chip view's heat map.
     SetProfiling { enabled: bool },
+    /// Selects the extra RAM block (`extra_ram[index - 1]`, ARM) the memory view watches; 0 = none.
+    /// The next state carries its bytes in `ram_extra`, later ones only when they changed.
+    WatchRam { index: usize },
     /// Serial Monitor line settings.
     SetSerial { config: SerialConfig },
     /// Bytes typed in the Serial Monitor (sent into the injection pin).
@@ -96,6 +99,13 @@ pub enum Command {
     },
     RequestState,
     Shutdown,
+}
+
+/// Bytes of one extra RAM block (`extra_ram[index - 1]`).
+#[derive(Clone, Debug, Serialize)]
+pub struct RamExtra {
+    pub index: usize,
+    pub data: Vec<u8>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -196,6 +206,10 @@ pub struct MachineState {
     /// ARM: the SRAM image (main SRAM followed by the CCM SRAM, starting at `sramBase`); empty
     /// when it did not change since the previous state.
     pub data: Vec<u8>,
+    /// ARM: contents of the extra RAM block selected with `WatchRam`; present only on the first
+    /// state after the selection (or a load) and when the bytes changed since.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ram_extra: Option<RamExtra>,
     /// ARM: values of the memory-mapped peripheral and core registers, aligned to the device's
     /// `registers` list (empty on AVR).
     #[serde(skip_serializing_if = "Vec::is_empty")]

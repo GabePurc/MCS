@@ -172,6 +172,10 @@ impl Session {
                 self.publish_if_idle();
             }
             Command::SetProfiling { enabled } => self.m().set_profiling(enabled),
+            Command::WatchRam { index } => {
+                self.m().watch_ram(index)?;
+                self.publish_if_idle();
+            }
             Command::SetSerial { config } => {
                 self.m().set_serial(config);
                 self.publish_if_idle();

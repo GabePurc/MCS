@@ -1,11 +1,12 @@
-import { useMemo, useRef, useState, type JSX } from 'react';
+import { useEffect, useMemo, useRef, useState, type JSX } from 'react';
 import { useSim } from '../state/sim';
 import { useWorkspace } from '../state/workspace';
-import { sim } from '../services/simClient';
+import { sim, watchRam } from '../services/simClient';
 import { hex, hexRaw, parseNumber } from '../format';
 import { EmptyHint } from './common';
 
-type Space = 'data' | 'flash' | 'eeprom' | 'nvm';
+/** `ram<k>` = extra RAM block k (ARM `extraRam[k - 1]`). */
+type Space = 'data' | 'flash' | 'eeprom' | 'nvm' | `ram${number}`;
 const ROW_H = 18;
 let savedSpace: Space = 'data';
 let savedCols = 16;
@@ -33,6 +34,15 @@ export function MemoryPanel(): JSX.Element {
     savedCols = c;
     setColsState(c);
   };
+
+  // Extra RAM block shown (ARM, 1-based), 0 when the view shows another memory.
+  const nExtra = spec?.arch === 'arm' ? spec.extraRam.length : 0;
+  const xi = space.startsWith('ram') && Number(space.slice(3)) <= nExtra ? Number(space.slice(3)) : 0;
+  useEffect(() => {
+    if (!xi) return;
+    watchRam(xi);
+    return () => watchRam(0);
+  }, [xi, spec?.id]);
 
   const names = useMemo(() => {
     const m = new Map<number, string>();
@@ -78,13 +88,16 @@ export function MemoryPanel(): JSX.Element {
     );
   }
 
-  const space2: Space = (space === 'eeprom' && eepromSize === 0) || (space === 'nvm' && !avr) ? 'data' : space;
-  const bytes = space2 === 'data' ? st.data : space2 === 'eeprom' ? eeprom ?? new Uint8Array(eepromSize).fill(0xff) : flash ?? new Uint8Array(spec.flashSize).fill(0xff);
+  const space2: Space = (space === 'eeprom' && eepromSize === 0) || (space === 'nvm' && !avr) || (space.startsWith('ram') && !xi) ? 'data' : space;
+  const block = arm && xi ? arm.extraRam[xi - 1] : null;
+  const extra = block && st.ramExtra?.index === xi ? st.ramExtra.data : null;
+  const bytes = block ? extra ?? new Uint8Array(0) : space2 === 'data' ? st.data : space2 === 'eeprom' ? eeprom ?? new Uint8Array(eepromSize).fill(0xff) : flash ?? new Uint8Array(spec.flashSize).fill(0xff);
   // Bus address of byte 0 of the viewed memory (ARM memories sit at their bus addresses).
-  const addrBase = arm ? (space2 === 'flash' ? arm.flashBase : arm.sramBase) : 0;
+  const addrBase = block ? block.base : arm ? (space2 === 'flash' ? arm.flashBase : arm.sramBase) : 0;
   const sramStart = avr ? avr.sramStart : 0;
-  const sramEnd = arm ? arm.sramBase + st.data.length : avr ? avr.sramStart + avr.sramSize : 0;
-  const prev = space === 'data' && base?.data.length === st.data.length ? base?.data : undefined;
+  const sramEnd = block ? block.base + bytes.length : arm ? arm.sramBase + st.data.length : avr ? avr.sramStart + avr.sramSize : 0;
+  const prev = block ? (base?.ramExtra?.index === xi && base.ramExtra.data.length === bytes.length ? base.ramExtra.data : undefined) : space === 'data' && base?.data.length === st.data.length ? base?.data : undefined;
+  const isRam = space2 === 'data' || !!block;
   const total = bytes.length;
   const rowsN = Math.ceil(total / cols);
   const first = Math.max(0, Math.floor(scroll / ROW_H) - 2);
@@ -94,21 +107,22 @@ export function MemoryPanel(): JSX.Element {
   // Bus address of the stack pointer (AVR: data space address; ARM: active SP).
   const sp = st.core.arch === 'arm' ? st.core.r[13] : st.core.sp;
   const markClass = (a: number) => {
-    if (space2 === 'data' && a === sp) return ' mark-sp';
-    if (space2 === 'data' && a > sp && a < sramEnd) return ' mark-stack';
+    if (isRam && a === sp) return ' mark-sp';
+    if (isRam && a > sp && sp >= addrBase && a < sramEnd) return ' mark-stack';
     if (space2 === 'flash' && (a === pcByte || a === pcByte + 1)) return ' mark-pc';
     return '';
   };
   const tipFor = (i: number) => {
     const a = i + addrBase;
-    const n = space2 === 'data' ? names.get(a) : undefined;
+    const n = isRam ? names.get(a) : undefined;
     const ccm = arm?.ccmSram;
-    const region = space2 === 'flash' ? 'Flash' : space2 === 'eeprom' ? 'EEPROM' : arm ? (ccm && a >= ccm.aliasBase ? 'CCM SRAM' : 'SRAM') : a < sramStart ? 'I/O' : 'SRAM';
-    return `${region} ${hex(a, addrDigits)}${n ? ` - ${n}` : ''} = ${hex(bytes[i])} (${bytes[i]})${a === sp && space2 === 'data' ? '\n<- SP' : ''}\nDouble-click to edit`;
+    const region = block ? block.name : space2 === 'flash' ? 'Flash' : space2 === 'eeprom' ? 'EEPROM' : arm ? (ccm && a >= ccm.aliasBase ? 'CCM SRAM' : 'SRAM') : a < sramStart ? 'I/O' : 'SRAM';
+    return `${region} ${hex(a, addrDigits)}${n ? ` - ${n}` : ''} = ${hex(bytes[i])} (${bytes[i]})${a === sp && isRam ? '\n<- SP' : ''}\nDouble-click to edit`;
   };
   const commit = (i: number, v: number) => {
     const a = i + addrBase;
-    if (space2 === 'data') sim({ type: 'writeData', addr: a, value: v });
+    if (block) sim({ type: 'writeMem', addr: a, size: 1, value: v });
+    else if (space2 === 'data') sim({ type: 'writeData', addr: a, value: v });
     else if (space2 === 'eeprom') sim({ type: 'writeEeprom', addr: a, value: v });
     else sim({ type: 'writeFlash', addr: a, value: v });
   };
@@ -120,7 +134,7 @@ export function MemoryPanel(): JSX.Element {
 
   return (
     <div className="panel">
-      <MemToolbar space={space2} setSpace={setSpace} cols={cols} setCols={setCols} gotoText={gotoText} setGotoText={setGotoText} onGoto={goto} eeprom={eepromSize > 0} arm={!!arm} />
+      <MemToolbar space={space2} setSpace={setSpace} cols={cols} setCols={setCols} gotoText={gotoText} setGotoText={setGotoText} onGoto={goto} eeprom={eepromSize > 0} arm={!!arm} extraRam={arm?.extraRam} />
       <div className="hex-header mono">
         <span className="hex-addr">Address</span>
         {Array.from({ length: cols }, (_, i) => (
@@ -189,13 +203,14 @@ export function MemoryPanel(): JSX.Element {
   );
 }
 
-function MemToolbar(p: { arm: boolean; space: Space; setSpace: (s: Space) => void; cols: number; setCols: (c: number) => void; gotoText: string; setGotoText: (s: string) => void; onGoto: () => void; eeprom: boolean }): JSX.Element {
+function MemToolbar(p: { arm: boolean; space: Space; setSpace: (s: Space) => void; cols: number; setCols: (c: number) => void; gotoText: string; setGotoText: (s: string) => void; onGoto: () => void; eeprom: boolean; extraRam?: { name: string }[] }): JSX.Element {
   return (
     <div className="panel-toolbar">
       <span>Memory:</span>
       <select className="w7-select" value={p.space} onChange={(e) => p.setSpace(e.target.value as Space)}>
         <option value="data">{p.arm ? 'SRAM' : 'data (I/O + SRAM)'}</option>
         <option value="flash">{p.arm ? 'Flash' : 'prog (Flash)'}</option>
+        {p.extraRam?.map((r, i) => <option key={r.name} value={`ram${i + 1}`}>{r.name}</option>)}
         {p.eeprom && <option value="eeprom">eeprom (EEPROM)</option>}
         {!p.arm && <option value="nvm">fuses, lock, signature</option>}
       </select>

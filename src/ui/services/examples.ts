@@ -29,6 +29,7 @@ const META: Record<string, { title: string; description: string; device?: string
   'm328p_serial.c': { title: 'Serial hello + echo (C)', description: 'USART at 9600 baud: open View > Serial Monitor', device: 'ATmega328P' },
   't85_pwm.asm': { title: 'Pot to PWM via the PLL (assembly)', description: 'ADC on PB2 sets the 64 MHz-PLL PWM on PB1', device: 'ATtiny85' },
   'stm32g4_blink.elf': { title: 'Blink (prebuilt ELF)', description: 'Cortex-M4F: PA5 toggled by a delay loop; no toolchain needed', device: 'STM32G474RE' },
+  'stm32h7_blink.elf': { title: 'Nucleo-H743 blink (prebuilt ELF)', description: 'Cortex-M7: PB0 (LD1, green) toggled by a delay loop; no toolchain needed', device: 'STM32H743ZIT6' },
   't85_blink.c': { title: 'Timer blink (C)', description: 'Timer0 overflow interrupt toggles PB3', device: 'ATtiny85' },
 };
 

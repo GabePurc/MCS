@@ -18,6 +18,7 @@ export function ArmDeviceInfo({ spec }: { spec: ArmDeviceSpec }): JSX.Element {
     ['CPU core', `${spec.coreName} (32-bit ARMv7-M, Thumb-2, ${fpu}${dsp}, CPUID ${hex(spec.cpuid, 8)})`],
     ['Flash', `${kb(spec.flashSize)} at ${hex(spec.flashBase, 8)}`],
     ['SRAM', `${kb(spec.sramSize)} at ${hex(spec.sramBase, 8)}${ccm ? `, CCM SRAM ${kb(ccm.size)} at ${hex(ccm.base, 8)} (also at ${hex(ccm.aliasBase, 8)})` : ''}`],
+    ...(spec.extraRam.length ? ([['Other RAM', spec.extraRam.map((r) => `${r.name} ${kb(r.size)} at ${hex(r.base, 8)}`).join(', ')]] as [string, string][]) : []),
     ['Package', `${spec.package}, ${spec.pins.length} pins (${io.length} I/O)`],
     ['Clock', `HSI ${formatHz(spec.clock.hsiHz)}, LSI ${formatHz(spec.clock.lsiHz)}, HSE ${formatHz(spec.clock.hseMinHz)}-${formatHz(spec.clock.hseMaxHz)} (default ${formatHz(spec.clock.hseDefaultHz)}), PLL`],
     ['Speed grades', grades || '-'],
@@ -29,6 +30,7 @@ export function ArmDeviceInfo({ spec }: { spec: ArmDeviceSpec }): JSX.Element {
     ['Flash', spec.flashBase, spec.flashBase + spec.flashSize - 1],
     ['SRAM', spec.sramBase, spec.sramBase + spec.sramSize - 1],
     ...(ccm ? ([['CCM SRAM', ccm.base, ccm.base + ccm.size - 1]] as [string, number, number][]) : []),
+    ...spec.extraRam.map((r): [string, number, number] => [r.name, r.base, r.base + r.size - 1]),
     ['Peripherals', 0x40000000, 0x5fffffff],
     ['Core peripherals (SCS, NVIC, SysTick)', 0xe0000000, 0xe00fffff],
   ];

@@ -783,3 +783,39 @@ fn power_cycle_restores_the_reset_clock_tree() {
     assert_eq!(m.scb.vtor, 0x0800_0000);
     assert_eq!(m.cpu.pc, PLL.sym("reset400"));
 }
+
+#[test]
+fn watch_ram_streams_an_extra_block_only_when_it_changes() {
+    let axi = &spec(ZI).extra_ram[1];
+    assert_eq!((axi.name.as_str(), axi.base, axi.size), ("AXI SRAM", 0x2400_0000, 512 * 1024));
+    let c: Command = serde_json::from_str(r#"{"type":"watchRam","index":2}"#).unwrap();
+    assert!(matches!(c, Command::WatchRam { index: 2 }));
+
+    let mut s = Session::new();
+    s.handle(Command::Init { device_id: ZI.into() });
+    s.handle(Command::Load { device_id: ZI.into(), program: Box::new(blink_program()) });
+    // Commands that change the machine publish a state of their own, which carries the block.
+    let ex = |outs: Vec<Output>| states(&outs).pop().unwrap().ram_extra.clone();
+    let last = |s: &mut Session| ex(s.handle(Command::RequestState));
+    assert!(last(&mut s).is_none(), "nothing watched by default");
+
+    let first = ex(s.handle(Command::WatchRam { index: 2 })).expect("first state after the selection carries the block");
+    assert_eq!((first.index, first.data.len()), (2, 512 * 1024));
+    assert!(last(&mut s).is_none(), "unchanged contents are not resent");
+
+    let changed = ex(s.handle(Command::WriteMem { addr: axi.base + 0x10, size: 4, value: 0xdead_beef })).expect("a bus write to the block is sent");
+    assert_eq!(&changed.data[0x10..0x14], &[0xef, 0xbe, 0xad, 0xde]);
+    assert!(last(&mut s).is_none());
+
+    // Reselecting resends; 0 stops the stream; an unknown block is refused.
+    assert_eq!(ex(s.handle(Command::WatchRam { index: 5 })).map(|r| (r.index, r.data.len())), Some((5, 4 * 1024)));
+    assert!(ex(s.handle(Command::WatchRam { index: 0 })).is_none());
+    let outs = s.handle(Command::WatchRam { index: 6 });
+    assert!(outs.iter().any(|o| matches!(o, Output::Error { .. })), "{outs:?}");
+}
+
+#[test]
+fn bundled_example_is_the_tested_blink_elf() {
+    let bundled = std::fs::read(format!("{}/../../examples/stm32h7_blink.elf", env!("CARGO_MANIFEST_DIR"))).unwrap();
+    assert_eq!(bundled, BLINK_ELF, "examples/stm32h7_blink.elf must match mcs-formats/tests/data/stm32h743_blink.elf");
+}
