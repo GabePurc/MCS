@@ -19,6 +19,11 @@
 
 use mcs_core::riscv::{decode, Insn, Op};
 
+use super::esp32c3::serial::SerialBridge;
+use super::esp32c3::stimulus::Stimulus;
+use super::esp32c3::sys::Sys;
+use crate::scheduler::{EventKey, Scheduler};
+
 /// Region permissions.
 pub const PERM_R: u8 = 1;
 pub const PERM_W: u8 = 2;
@@ -44,24 +49,107 @@ pub struct AccessFault;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct MemId(pub usize);
 
-/// Services handed to a peripheral during an access.
-#[derive(Clone, Copy, Debug, Default)]
+/// Scheduler owner ids of the bus-level services (device owners are indices into the device table).
+pub const BRIDGE_OWNER: u8 = 0xfe;
+pub const STIM_OWNER: u8 = 0xfd;
+
+/// Services handed to a peripheral during an access or an event.
 pub struct Cx {
-    /// CPU cycle counter at the time of the access.
+    /// CPU cycle counter at the time of the access / event.
     pub cycles: u64,
     /// Interrupt lines (bit n = line n) the peripheral asserts; applied to `mip` after the access.
     pub irq_raise: u32,
     /// Interrupt lines the peripheral deasserts.
     pub irq_lower: u32,
+    /// Index of the calling device (event owner).
+    pub owner: u8,
+    /// Event scheduler shared by the devices (timed in CPU cycles).
+    pub sched: Scheduler,
+    /// Pins, clocks, interrupt matrix and the other machine-wide state of the ESP32-C3.
+    pub sys: Sys,
+    /// A device asked the run loop to stop (system reset).
+    pub stop_req: bool,
 }
 
-/// A memory-mapped peripheral. Peripherals are event driven (never ticked); a device that needs to
-/// change interrupt lines does so through [`Cx`] during an access, or through
-/// [`Machine::set_irq`](super::Machine::set_irq) from the event loop that owns the machine.
+impl Default for Cx {
+    fn default() -> Self {
+        Self { cycles: 0, irq_raise: 0, irq_lower: 0, owner: 0, sched: Scheduler::new(), sys: Sys::new(0), stop_req: false }
+    }
+}
+
+impl Cx {
+    /// Schedules (or re-schedules) this device's event `tag` at the absolute cycle `cycle`.
+    pub fn schedule(&mut self, tag: u8, cycle: u64) {
+        self.sched.at(EventKey { owner: self.owner, tag }, cycle);
+    }
+
+    pub fn cancel(&mut self, tag: u8) {
+        self.sched.cancel(EventKey { owner: self.owner, tag });
+    }
+
+    /// Cycle of the access / event.
+    #[inline]
+    pub fn now(&self) -> u64 {
+        self.cycles
+    }
+
+    /// Simulated time (s) of the access / event.
+    pub fn time_seconds(&self) -> f64 {
+        self.sys.clock.time_at(self.cycles)
+    }
+
+    /// Drives interrupt matrix source `src` to `level`; the resulting CPU interrupt line changes are
+    /// queued in `irq_raise` / `irq_lower`.
+    pub fn irq_source(&mut self, src: u8, level: bool) {
+        if self.sys.intc.set_source(src, level) {
+            self.push_irq();
+        }
+    }
+
+    /// Re-evaluates the CPU interrupt controller after a register change.
+    pub fn irq_update(&mut self) {
+        self.sys.intc.update();
+        self.push_irq();
+    }
+
+    fn push_irq(&mut self) {
+        if let Some(mask) = self.sys.intc.take_changed() {
+            self.irq_raise = mask;
+            self.irq_lower = !mask & super::cpu::IRQ_MASK;
+        }
+    }
+
+    /// Asks the run loop to stop after the current instruction (system reset).
+    pub fn request_stop(&mut self) {
+        self.stop_req = true;
+        self.irq_lower |= 1;
+    }
+}
+
+/// A memory-mapped peripheral. All timing is event driven: instead of being ticked, a device
+/// schedules the cycle where something observable happens ([`Cx::schedule`]) and advances lazily when
+/// software accesses its registers. A device that changes interrupt lines does so through [`Cx`]
+/// ([`Cx::irq_source`]); plain test devices may set `irq_raise` / `irq_lower` directly.
 pub trait Mmio: Send {
     /// Reads `size` (1, 2 or 4) bytes at `offset` from the start of the window.
     fn read(&mut self, offset: u32, size: u8, cx: &mut Cx) -> u32;
     fn write(&mut self, offset: u32, size: u8, value: u32, cx: &mut Cx);
+    /// A scheduled event (see [`Cx::schedule`]) is due.
+    fn on_event(&mut self, _tag: u8, _cx: &mut Cx) {}
+    /// System / power-on reset, or reset through the SYSTEM peripheral reset register.
+    fn reset(&mut self, _cx: &mut Cx) {}
+    /// The level of GPIO `pin` changed (only delivered to devices registered as listeners).
+    fn on_pin(&mut self, _pin: usize, _level: u8, _cycle: u64, _cx: &mut Cx) {}
+    /// The clock tree changed: re-derive timing from `cx.sys.clk`.
+    fn on_clock_change(&mut self, _cx: &mut Cx) {}
+    /// Side-effect free read of the 32-bit register at `offset` (debugger views).
+    fn peek(&mut self, offset: u32, cx: &mut Cx) -> u32 {
+        self.read(offset & !3, 4, cx)
+    }
+    /// Short status lines for the peripheral inspector.
+    fn inspect(&self, _cx: &Cx) -> Vec<(String, String)> {
+        Vec::new()
+    }
 }
 
 #[inline]
@@ -102,7 +190,16 @@ pub struct Bus {
     devs: Vec<Box<dyn Mmio>>,
     /// Flat arena of pre-decoded pages: page `p` occupies `code[p * SLOTS..(p + 1) * SLOTS]`.
     pub(crate) code: Vec<Insn>,
-    pub(crate) cx: Cx,
+    pub cx: Cx,
+    /// Serial Monitor end of the UART cable and the pin signal generators (test bench, outside the MCU).
+    pub bridge: SerialBridge,
+    pub stim: Stimulus,
+    /// Devices that receive [`Mmio::on_pin`].
+    listeners: Vec<u8>,
+    /// SYSTEM peripheral reset position (register 0/1, bit) of every device, parallel to `devs`.
+    dev_reset: Vec<Option<(u8, u8)>>,
+    pub dev_names: Vec<String>,
+    scratch: Vec<(u16, u8, u64)>,
 }
 
 impl Default for Bus {
@@ -114,7 +211,20 @@ impl Default for Bus {
 impl Bus {
     /// An empty address space (every access faults until memories are mapped).
     pub fn new() -> Self {
-        Self { pages: vec![0; PAGES], regions: vec![NO_REGION], mems: Vec::new(), devs: Vec::new(), code: Vec::new(), cx: Cx::default() }
+        Self {
+            pages: vec![0; PAGES],
+            regions: vec![NO_REGION],
+            mems: Vec::new(),
+            devs: Vec::new(),
+            code: Vec::new(),
+            cx: Cx::default(),
+            bridge: SerialBridge::new(),
+            stim: Stimulus::new(0),
+            listeners: Vec::new(),
+            dev_reset: Vec::new(),
+            dev_names: Vec::new(),
+            scratch: Vec::new(),
+        }
     }
 
     /// Allocates a zero-filled backing memory of `size` bytes (rounded up to 4 KiB).
@@ -172,15 +282,173 @@ impl Bus {
         self.devs.get_mut(idx).map(|d| d.as_mut())
     }
 
-    /// The ESP32-C3 memory map (TRM "System and Memory", internal memory): boot ROM, flash cache
-    /// windows (IROM / DROM, `flash_size` bytes, read-only), 400 KiB SRAM seen as IRAM and DRAM,
-    /// and the 8 KiB RTC fast memory. Peripherals (0x6000_0000 and up) are added by the caller.
-    /// Returns the bus plus the backing memories `(flash, sram)`.
+    /// Number of devices.
+    pub fn device_count(&self) -> usize {
+        self.devs.len()
+    }
+
+    /// Maps a named peripheral. `reset` is its reset position in the SYSTEM peripheral reset registers,
+    /// `listen` makes it receive pin changes.
+    pub fn add_named(&mut self, name: &str, base: u32, size: u32, dev: Box<dyn Mmio>, reset: Option<(u8, u8)>, listen: bool) -> Result<usize, String> {
+        let idx = self.add_device(base, size, dev)?;
+        self.dev_names.push(name.to_string());
+        self.dev_reset.push(reset);
+        if listen {
+            self.listeners.push(idx as u8);
+        }
+        Ok(idx)
+    }
+
+    /// Side-effect free read of the 32-bit peripheral register at `addr` (debugger views).
+    pub fn peek_register(&mut self, addr: u32, cycles: u64) -> Option<u32> {
+        let r = *self.region(addr);
+        if r.perm & PERM_R == 0 || r.kind != KIND_DEV {
+            return None;
+        }
+        self.cx.cycles = cycles;
+        self.cx.owner = r.target as u8;
+        Some(self.devs[r.target as usize].peek((addr - r.base) & !3, &mut self.cx))
+    }
+
+    /// Inspector lines of every device that has some, as `(name, lines)`.
+    pub fn inspect_all(&mut self, cycles: u64) -> Vec<(String, Vec<(String, String)>)> {
+        self.cx.cycles = cycles;
+        let mut out = Vec::new();
+        for (i, d) in self.devs.iter().enumerate() {
+            let v = d.inspect(&self.cx);
+            if !v.is_empty() {
+                out.push((self.dev_names.get(i).cloned().unwrap_or_default(), v));
+            }
+        }
+        out
+    }
+
+    /// Moves the start of a memory window onto its backing memory (`mem_off` into the memory,
+    /// 4 KiB aligned): the simplified flash MMU. Returns false if no window starts at `base`.
+    pub fn set_window_offset(&mut self, base: u32, mem_off: u32) -> bool {
+        let idx = self.pages[(base >> PAGE_SHIFT) as usize] as usize;
+        if idx == 0 || self.regions[idx].base != base || !mem_off.is_multiple_of(PAGE_SIZE) {
+            return false;
+        }
+        self.regions[idx].off = mem_off;
+        self.flush_code();
+        true
+    }
+
+    /// The whole contents of a backing memory.
+    pub fn mem_data(&self, mem: MemId) -> &[u8] {
+        &self.mems[mem.0].data
+    }
+
+    pub fn mem_data_mut(&mut self, mem: MemId) -> &mut [u8] {
+        &mut self.mems[mem.0].data
+    }
+
+    // ---- scheduled events and machine-wide side effects ----------------------------------------
+
+    /// Dispatches every scheduler event due at or before `now`.
+    pub fn service(&mut self, now: u64) {
+        while let Some((key, at)) = self.cx.sched.pop_due(now) {
+            self.cx.cycles = at;
+            self.cx.owner = key.owner;
+            match key.owner {
+                BRIDGE_OWNER => self.bridge.on_event(key.tag, &mut self.cx),
+                STIM_OWNER => self.stim.on_event(key.tag, &mut self.cx),
+                o => {
+                    if let Some(d) = self.devs.get_mut(o as usize) {
+                        d.on_event(key.tag, &mut self.cx);
+                    }
+                }
+            }
+            if self.cx.sys.attn {
+                self.after_io(now);
+            }
+        }
+        self.cx.cycles = now;
+    }
+
+    /// Work that follows a register access or event: peripheral resets requested through SYSTEM, clock-tree
+    /// changes and pin level changes are delivered to the interested devices.
+    #[inline(never)]
+    pub fn after_io(&mut self, now: u64) {
+        self.cx.sys.attn = false;
+        while let Some((reg, bit)) = self.cx.sys.resets.pop() {
+            for d in 0..self.devs.len() {
+                if self.dev_reset[d] == Some((reg, bit)) {
+                    self.cx.owner = d as u8;
+                    self.cx.cycles = now;
+                    self.devs[d].reset(&mut self.cx);
+                }
+            }
+        }
+        let mut rounds = 0;
+        while self.cx.sys.clock_dirty && rounds < 4 {
+            self.cx.sys.clock_dirty = false;
+            rounds += 1;
+            self.cx.cycles = now;
+            for d in 0..self.devs.len() {
+                self.cx.owner = d as u8;
+                self.devs[d].on_clock_change(&mut self.cx);
+            }
+            self.cx.owner = BRIDGE_OWNER;
+            self.bridge.on_clock_change(&mut self.cx);
+            self.cx.owner = STIM_OWNER;
+            self.stim.on_clock_change(&mut self.cx);
+        }
+        self.cx.sys.clock_dirty = false;
+        let mut rounds = 0;
+        while !self.cx.sys.changed.is_empty() && rounds < 64 {
+            rounds += 1;
+            let mut ev = std::mem::take(&mut self.scratch);
+            std::mem::swap(&mut ev, &mut self.cx.sys.changed);
+            for &(pin, level, cycle) in &ev {
+                let at = now.max(cycle);
+                self.cx.cycles = at;
+                self.cx.sys.gpio_pin_changed(pin as usize, level, at);
+                self.cx.gpio_irq_sync();
+                for k in 0..self.listeners.len() {
+                    let d = self.listeners[k] as usize;
+                    self.cx.owner = d as u8;
+                    self.devs[d].on_pin(pin as usize, level, cycle, &mut self.cx);
+                }
+                self.cx.owner = BRIDGE_OWNER;
+                self.bridge.on_pin(pin as usize, level, cycle, &mut self.cx);
+            }
+            ev.clear();
+            self.scratch = ev;
+        }
+        self.cx.sys.changed.clear();
+        self.cx.sys.attn = false;
+        self.cx.cycles = now;
+    }
+
+    /// Resets all devices (power-on or system reset; pin generators keep running across the latter).
+    pub fn reset_devices(&mut self, now: u64, power_on: bool) {
+        self.cx.cycles = now;
+        for d in 0..self.devs.len() {
+            self.cx.owner = d as u8;
+            self.devs[d].reset(&mut self.cx);
+        }
+        self.cx.owner = BRIDGE_OWNER;
+        self.bridge.reset(&mut self.cx);
+        self.cx.owner = STIM_OWNER;
+        self.stim.reset(power_on, &mut self.cx);
+        self.after_io(now);
+    }
+
+    /// The ESP32-C3 memory map (TRM "System and Memory", internal memory): boot ROM (384 KiB IBUS, 128 KiB
+    /// DBUS; both empty), flash cache windows (IROM / DROM, `flash_size` bytes), 400 KiB SRAM seen as
+    /// IRAM and DRAM (SRAM0 16 KiB IRAM only + SRAM1 384 KiB on both buses) and the 8 KiB RTC fast memory.
+    /// The ROM windows are mapped without execute permission: the machine stops with
+    /// [`StopReason::RomCall`](super::StopReason::RomCall) when the pc enters them. Peripherals
+    /// (0x6000_0000 and up) are added by the caller. Returns the bus plus the backing memories
+    /// `(flash, sram)`.
     pub fn esp32c3(flash_size: u32) -> (Bus, MemId, MemId) {
         let mut bus = Bus::new();
         let flash = bus.add_mem(flash_size.clamp(PAGE_SIZE, 8 << 20));
         let sram = bus.add_mem(0x64000);
-        let rom = bus.add_mem(0x60000);
+        let rom0 = bus.add_mem(0x60000);
+        let rom1 = bus.add_mem(0x20000);
         let rtc = bus.add_mem(0x2000);
         let fs = bus.mem_size(flash);
         let ok = "esp32c3 memory map is static";
@@ -188,8 +456,8 @@ impl Bus {
         bus.map(0x3c00_0000, fs, flash, 0, PERM_R).expect(ok);
         bus.map(0x4037_c000, 0x64000, sram, 0, PERM_RWX).expect(ok);
         bus.map(0x3fc8_0000, 0x60000, sram, 0x4000, PERM_RW).expect(ok);
-        bus.map(0x4000_0000, 0x60000, rom, 0, PERM_RX).expect(ok);
-        bus.map(0x3ff0_0000, 0x20000, rom, 0, PERM_R).expect(ok);
+        bus.map(0x4000_0000, 0x60000, rom0, 0, PERM_R).expect(ok);
+        bus.map(0x3ff0_0000, 0x20000, rom1, 0, PERM_R).expect(ok);
         bus.map(0x5000_0000, 0x2000, rtc, 0, PERM_RWX).expect(ok);
         (bus, flash, sram)
     }
@@ -222,14 +490,29 @@ impl Bus {
 
     #[inline(never)]
     fn dev_read(&mut self, dev: u32, off: u32, size: u32, cycles: u64) -> u32 {
+        if self.cx.sched.next <= cycles {
+            self.service(cycles);
+        }
         self.cx.cycles = cycles;
-        self.devs[dev as usize].read(off, size as u8, &mut self.cx) & size_mask(size)
+        self.cx.owner = dev as u8;
+        let v = self.devs[dev as usize].read(off, size as u8, &mut self.cx) & size_mask(size);
+        if self.cx.sys.attn {
+            self.after_io(cycles);
+        }
+        v
     }
 
     #[inline(never)]
     fn dev_write(&mut self, dev: u32, off: u32, size: u32, value: u32, cycles: u64) {
+        if self.cx.sched.next <= cycles {
+            self.service(cycles);
+        }
         self.cx.cycles = cycles;
+        self.cx.owner = dev as u8;
         self.devs[dev as usize].write(off, size as u8, value & size_mask(size), &mut self.cx);
+        if self.cx.sys.attn {
+            self.after_io(cycles);
+        }
     }
 
     /// Writes `size` (1, 2 or 4) bytes, little-endian, invalidating pre-decoded code.

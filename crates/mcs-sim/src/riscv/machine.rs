@@ -38,6 +38,7 @@ use mcs_core::riscv::{Insn, Op};
 
 use super::bus::Bus;
 use super::cpu::*;
+use super::debug::{is_call, is_return, Dbg, StepCond};
 
 pub const C_ALU: u64 = 1;
 pub const C_LOAD: u64 = 2;
@@ -75,6 +76,13 @@ pub enum StopReason {
     /// The hart executed `wfi` and sleeps until an enabled interrupt is pending. Time does not
     /// advance while sleeping; use [`Machine::idle`] and [`Machine::set_irq`].
     Wfi,
+    /// A breakpoint address was reached (pc is at the breakpoint, the instruction has not executed).
+    Breakpoint,
+    /// A run-to address or step condition was met, or a device asked for a stop (system reset).
+    Requested,
+    /// The pc entered the boot ROM range ([`Machine::rom_range`]), whose contents are not simulated;
+    /// pc is the ROM address, `ra` the caller's return address.
+    RomCall,
 }
 
 /// A synchronous exception raised by an instruction.
@@ -114,6 +122,13 @@ pub struct Machine {
     /// Treat `ebreak` as a debugger breakpoint: stop with [`StopReason::Ebreak`] instead of trapping.
     pub halt_on_ebreak: bool,
     pub csr_hook: Option<Box<dyn CsrHook>>,
+    /// Address range `[start, end)` whose execution stops the run loop with [`StopReason::RomCall`]
+    /// (the pages must not be executable on the bus). Empty by default.
+    pub rom_range: (u32, u32),
+    /// Breakpoints, run-to address and step conditions (checked by the `CHK` variant of the loop).
+    pub dbg: Dbg,
+    /// A device asked the run loop to stop (see `Cx::request_stop`).
+    halt_pending: bool,
     /// Interrupt taken at the next instruction boundary (`MIE` set and a pending enabled line).
     irq_gate: bool,
     sleeping: bool,
@@ -140,6 +155,9 @@ impl Machine {
             cfg,
             halt_on_ebreak: false,
             csr_hook: None,
+            rom_range: (0, 0),
+            dbg: Dbg::default(),
+            halt_pending: false,
             irq_gate: false,
             sleeping: false,
             attn: false,
@@ -155,6 +173,11 @@ impl Machine {
         self.cpu = Cpu::new(self.cfg.ids, self.cfg.reset_pc);
         self.cpu.csr.mip = mip;
         self.sleeping = false;
+        self.halt_pending = false;
+        self.dbg.trap_depth = 0;
+        self.dbg.step = None;
+        self.dbg.skip_pc = None;
+        self.dbg.set_run_to(None);
         self.recompute();
     }
 
@@ -224,7 +247,20 @@ impl Machine {
         if pend {
             self.sleeping = false;
         }
-        self.attn = self.irq_gate || self.sleeping;
+        self.attn = self.irq_gate || self.sleeping || self.halt_pending;
+    }
+
+    /// Re-evaluates the interrupt gate after the host changed `mstatus` / `mie` / `mip`.
+    pub fn refresh_irq_state(&mut self) {
+        self.recompute();
+    }
+
+    /// Applies interrupt-line changes and stop requests that devices queued outside a bus access (for
+    /// example while the owner of the machine dispatched scheduler events).
+    pub fn sync_irq(&mut self) {
+        if self.bus.cx.irq_raise | self.bus.cx.irq_lower != 0 {
+            self.apply_cx();
+        }
     }
 
     /// Applies interrupt-line changes a peripheral requested during a bus access.
@@ -235,6 +271,9 @@ impl Machine {
         cx.irq_raise = 0;
         cx.irq_lower = 0;
         self.cpu.csr.mip = (self.cpu.csr.mip | set) & !clr & IRQ_MASK;
+        if std::mem::take(&mut self.bus.cx.stop_req) {
+            self.halt_pending = true;
+        }
         self.recompute();
     }
 
@@ -283,17 +322,42 @@ impl Machine {
     // ---- run loop ---------------------------------------------------------------------------
 
     /// Executes for at least `budget` cycles (the last instruction may overshoot) or until a stop
-    /// condition.
+    /// condition. While breakpoints, a run-to address or a step condition are armed the checking
+    /// variant of the loop runs; a breakpoint at the starting pc is skipped so execution can resume
+    /// from it.
     pub fn run(&mut self, budget: u64) -> StopReason {
+        if self.dbg.active() {
+            self.run_loop::<true>(budget)
+        } else {
+            self.run_loop::<false>(budget)
+        }
+    }
+
+    fn run_loop<const CHK: bool>(&mut self, budget: u64) -> StopReason {
         let limit = self.cpu.cycles.saturating_add(budget);
         // The program counter lives in a local so consecutive instructions do not wait on a
         // store-to-load round trip through memory; it is written back on every exit.
         let mut pc = self.cpu.pc & !1;
+        // Resuming from the address a stop condition fired at must not fire it again.
+        let mut skip = if CHK {
+            self.dbg.hit_breakpoint = false;
+            self.dbg.skip_pc.take() == Some(pc)
+        } else {
+            false
+        };
         let reason = loop {
             if self.attn {
                 self.cpu.pc = pc;
+                if self.halt_pending {
+                    self.halt_pending = false;
+                    self.recompute();
+                    break StopReason::Requested;
+                }
                 if self.irq_gate {
                     self.take_interrupt();
+                    if CHK {
+                        self.dbg.trap_depth += 1;
+                    }
                     pc = self.cpu.pc;
                 } else if self.sleeping {
                     break StopReason::Wfi;
@@ -302,11 +366,27 @@ impl Machine {
             if self.cpu.cycles >= limit {
                 break StopReason::Cycles;
             }
+            if CHK {
+                if skip {
+                    skip = false;
+                } else if self.dbg.wants(pc) {
+                    if let Some(r) = self.check_stop(pc) {
+                        self.dbg.skip_pc = Some(pc);
+                        break r;
+                    }
+                }
+            }
             let insn = self.fetch(pc);
             if insn.op == Op::Undecoded {
+                if pc >= self.rom_range.0 && pc < self.rom_range.1 {
+                    break StopReason::RomCall;
+                }
                 // fetch fault; `fetch_slow` left the cause in `self.fault`
                 let t = self.fault;
                 self.take_exception(pc, t.cause, t.tval);
+                if CHK {
+                    self.dbg.trap_depth += 1;
+                }
                 pc = self.cpu.pc;
                 continue;
             }
@@ -315,6 +395,9 @@ impl Machine {
                     pc = next;
                     self.cpu.instret += 1;
                     self.cpu.x[0] = 0;
+                    if CHK && self.dbg.step.is_some() {
+                        self.track(&insn);
+                    }
                 }
                 Err(Trap { cause: HOST_EBREAK, .. }) => {
                     pc = pc.wrapping_add(insn.len as u32);
@@ -323,12 +406,78 @@ impl Machine {
                 }
                 Err(t) => {
                     self.take_exception(pc, t.cause, t.tval);
+                    if CHK {
+                        self.dbg.trap_depth += 1;
+                    }
                     pc = self.cpu.pc;
                 }
             }
         };
         self.cpu.pc = pc;
         reason
+    }
+
+    /// Debugger conditions evaluated before the instruction at `pc` executes.
+    #[cold]
+    #[inline(never)]
+    fn check_stop(&mut self, pc: u32) -> Option<StopReason> {
+        let d = &mut self.dbg;
+        if !d.bps.is_empty() && d.bps.binary_search(&pc).is_ok() {
+            d.hit_breakpoint = true;
+            return Some(StopReason::Breakpoint);
+        }
+        if d.run_to == Some(pc) {
+            return Some(StopReason::Requested);
+        }
+        let st = d.step?;
+        if d.trap_depth != st.trap_base {
+            return None; // inside a handler entered during the step
+        }
+        let key = d.key_at(pc);
+        let hit = match st.cond {
+            StepCond::OverCall { ret } => pc == ret && st.depth <= 0,
+            StepCond::Out { lines } => st.depth < 0 && (!lines || key != -1),
+            StepCond::IntoSrc { start } => key != -1 && (key != start || st.depth != 0),
+            StepCond::OverSrc { start } => {
+                if key == -1 {
+                    false
+                } else if start == -1 {
+                    true
+                } else if st.depth != 0 {
+                    st.depth < 0
+                } else {
+                    key >> 20 == start >> 20 && key != start
+                }
+            }
+        };
+        hit.then_some(StopReason::Requested)
+    }
+
+    /// Updates the step's call depth after `insn` executed.
+    fn track(&mut self, insn: &Insn) {
+        let d = &mut self.dbg;
+        let Some(st) = d.step.as_mut() else { return };
+        if insn.op == Op::Mret {
+            let before = d.trap_depth;
+            d.trap_depth = before.saturating_sub(1);
+            if before <= st.trap_base {
+                st.depth -= 1; // exception return out of the stepped context
+            }
+        } else if d.trap_depth != st.trap_base {
+            // handler instructions do not change the depth
+        } else if is_call(insn) {
+            st.depth += 1;
+        } else if is_return(insn) {
+            st.depth -= 1;
+        }
+    }
+
+    /// The decoded instruction at `pc` in plain memory (no side effects); `None` when unmapped or not
+    /// readable.
+    pub fn insn_at(&self, pc: u32) -> Option<Insn> {
+        let lo = self.bus.peek(pc, 2)?;
+        let word = if lo & 3 == 3 { lo | self.bus.peek(pc.wrapping_add(2), 2)? << 16 } else { lo };
+        Some(mcs_core::riscv::decode(word))
     }
 
     /// Executes one instruction (or takes one pending interrupt, or reports `wfi` sleep).

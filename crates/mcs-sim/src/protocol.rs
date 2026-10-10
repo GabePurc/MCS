@@ -32,7 +32,7 @@ pub enum SpeedMode {
 pub enum CpuField {
     /// Program counter in the architecture's native unit (AVR: word address, ARM: byte address).
     Pc,
-    /// AVR stack pointer / ARM active stack pointer.
+    /// AVR stack pointer / ARM active stack pointer / RISC-V sp (x2).
     Sp,
     Sreg,
     /// ARM: xPSR flags (N, Z, C, V, Q).
@@ -40,7 +40,7 @@ pub enum CpuField {
     /// ARM: main / process stack pointer.
     Msp,
     Psp,
-    /// ARM: link register (r14).
+    /// ARM: link register (r14) / RISC-V return address (x1).
     Lr,
     /// ARM: CONTROL (nPRIV, SPSEL, FPCA).
     Control,
@@ -49,6 +49,14 @@ pub enum CpuField {
     Faultmask,
     /// ARM: floating-point status and control register (FPU devices).
     Fpscr,
+    /// RISC-V machine-mode CSRs.
+    Mstatus,
+    Mie,
+    Mtvec,
+    Mepc,
+    Mcause,
+    Mtval,
+    Mscratch,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -180,6 +188,10 @@ pub enum CoreState {
         fpr: Vec<u32>,
         fpscr: u32,
     },
+    /// RV32IMC hart: x0-x31 (x1 = ra, x2 = sp), the program counter and the machine-mode CSRs
+    /// (`mstatus` as read by software: MPP reads 3).
+    #[serde(rename_all = "camelCase")]
+    Riscv { x: [u32; 32], pc: u32, mstatus: u32, mie: u32, mip: u32, mtvec: u32, mepc: u32, mcause: u32, mtval: u32, mscratch: u32 },
 }
 
 #[derive(Clone, Debug, Serialize)]
