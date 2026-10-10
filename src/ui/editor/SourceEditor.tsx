@@ -196,7 +196,7 @@ const hoverInfo = hoverTooltip((view, pos) => {
     const i = armReg[2] ? 13 : armReg[3] ? 14 : armReg[4] ? 15 : Number(armReg[1]);
     if (i < 16) info = `${word.toUpperCase()} = ${hex(armCore(st).r[i], 8)} (${armCore(st).r[i]})`;
   } else if (reg && Number(reg[1]) < 32 && spec) {
-    info = st ? `${word.toUpperCase()} = ${hex(avrCore(st).regs[Number(reg[1])])} (${avrCore(st).regs[Number(reg[1])]})` : `Register ${word}`;
+    info = st?.core.arch === 'avr' ? `${word.toUpperCase()} = ${hex(avrCore(st).regs[Number(reg[1])])} (${avrCore(st).regs[Number(reg[1])]})` : `Register ${word}`;
   } else if (spec) {
     const r = spec.registers.find((x) => x.name === word.toUpperCase());
     if (r) {

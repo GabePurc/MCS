@@ -26,13 +26,14 @@ function AvrProcessorPanel(): JSX.Element {
   const spec = useSim((s) => s.spec);
   const stopwatch = useSim((s) => s.stopwatch);
   const symbols = useWorkspace((s) => s.build?.symbols);
-  if (!st || !spec || spec.arch !== 'avr') return <EmptyHint>Build or import a program to see the processor state.</EmptyHint>;
+  // Spec and state switch architectures in separate messages: check both.
+  if (!st || !spec || spec.arch !== 'avr' || st.core.arch !== 'avr') return <EmptyHint>Build or import a program to see the processor state.</EmptyHint>;
   const rc = spec.coreName === 'AVRrc';
   const firstReg = rc ? 16 : 0;
   const changed = (a: number, b: number | null | undefined) => (b !== undefined && b !== null && a !== b ? "changed" : "");
   const ptr = (r: Uint8Array, lo: number) => r[lo] | (r[lo + 1] << 8);
   const core = avrCore(st);
-  const baseCore = base ? avrCore(base) : null;
+  const baseCore = base?.core.arch === 'avr' ? avrCore(base) : null;
   const swCycles = st.cycles - stopwatch.cycles;
   const swTime = st.timeSec - stopwatch.time;
   const rows: [string, JSX.Element | string, string?][] = [

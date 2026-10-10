@@ -1,5 +1,4 @@
 import { useMemo, useRef, useState, type JSX } from 'react';
-import { armCore, avrCore } from '../backend/types';
 import { useSim } from '../state/sim';
 import { useWorkspace } from '../state/workspace';
 import { sim } from '../services/simClient';
@@ -93,7 +92,7 @@ export function MemoryPanel(): JSX.Element {
   const addrDigits = arm ? 8 : total > 0x10000 ? 6 : 4;
   const pcByte = st.pcBytes;
   // Bus address of the stack pointer (AVR: data space address; ARM: active SP).
-  const sp = arm ? armCore(st).r[13] : avrCore(st).sp;
+  const sp = st.core.arch === 'arm' ? st.core.r[13] : st.core.sp;
   const markClass = (a: number) => {
     if (space2 === 'data' && a === sp) return ' mark-sp';
     if (space2 === 'data' && a > sp && a < sramEnd) return ' mark-stack';
