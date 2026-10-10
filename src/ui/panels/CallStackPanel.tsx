@@ -14,7 +14,7 @@ export function CallStackPanel(): JSX.Element {
   const build = useWorkspace((s) => s.build);
   if (!st) return <EmptyHint>No program running.</EmptyHint>;
   const arch = spec?.arch ?? 'avr';
-  const addrDigits = arch === 'arm' ? 8 : 4;
+  const addrDigits = arch === 'avr' ? 4 : 8;
   const frames = [...st.callStack].reverse();
   const describe = (pc: number) => build?.symbols.describeCode(pcToBytes(arch, pc)) ?? hex(pcToBytes(arch, pc), addrDigits);
   const srcOf = (wpc: number) => {
@@ -35,7 +35,7 @@ export function CallStackPanel(): JSX.Element {
     ...frames.map((f) => ({
       name: describe(f.returnPc),
       pc: f.returnPc,
-      note: f.vector >= 0 ? `interrupted by ${spec?.vectors.find((v) => v.index === f.vector)?.name ?? `vector ${f.vector}`}` : `called ${describe(f.targetPc)}`,
+      note: f.vector >= 0 ? `interrupted by ${(spec?.arch === 'riscv' ? spec.interrupts.find((v) => v.source === f.vector)?.name : spec?.vectors.find((v) => v.index === f.vector)?.name) ?? `vector ${f.vector}`}` : `called ${describe(f.targetPc)}`,
       src: srcOf(f.returnPc),
     })),
   ];

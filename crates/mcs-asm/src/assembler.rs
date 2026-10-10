@@ -492,6 +492,7 @@ impl<'a> Assembler<'a> {
             eeprom,
             fuses: None,
             lock: None,
+            segments: Vec::new(),
             entry: 0,
             symbols,
             files: std::mem::take(&mut self.files),

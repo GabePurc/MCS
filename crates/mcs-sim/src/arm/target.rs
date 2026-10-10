@@ -408,6 +408,7 @@ impl Target for Machine {
             CpuField::Fpscr if self.cfg.features.has_fpu() => self.cpu.fpscr = value,
             CpuField::Fpscr => return Err("This core has no FPU".into()),
             CpuField::Sreg => return Err("The ARM core has no SREG; use xPSR".into()),
+            CpuField::Mstatus | CpuField::Mie | CpuField::Mtvec | CpuField::Mepc | CpuField::Mcause | CpuField::Mtval | CpuField::Mscratch => return Err("That CPU field does not exist on ARM".into()),
         }
         Ok(())
     }

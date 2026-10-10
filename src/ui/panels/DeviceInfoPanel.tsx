@@ -9,6 +9,7 @@ import { formatHz, hex } from '../format';
 import { Icons } from '../icons';
 import { EmptyHint, Section } from './common';
 import { ArmDeviceInfo } from './ArmDeviceInfo';
+import { RiscvDeviceInfo } from './RiscvDeviceInfo';
 
 const kb = (b: number) => (b >= 1024 ? `${b / 1024} KB` : `${b} bytes`);
 
@@ -17,6 +18,7 @@ export function DeviceInfoPanel(): JSX.Element {
   const spec = useSim((s) => s.spec);
   if (!spec) return <EmptyHint>No device loaded.</EmptyHint>;
   if (spec.arch === 'arm') return <ArmDeviceInfo spec={spec} />;
+  if (spec.arch === 'riscv') return <RiscvDeviceInfo spec={spec} />;
   const io = spec.pins.filter((p) => p.kind === 'io');
   const grades = spec.speedGrades.map(([hz, v]) => `${formatHz(hz)} @ ${v.toFixed(1)}-${spec.vccRange[1].toFixed(1)} V`).join(', ');
   const rows: [string, string][] = [

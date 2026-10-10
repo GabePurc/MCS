@@ -87,9 +87,13 @@ fn program_to_machine_code(device_id: String, flash: Vec<u8>, used: usize, label
 
 #[tauri::command]
 async fn build_c(source: String, file_name: String, file_path: Option<String>, device_id: String, optimize: String, extra_flags: Vec<String>, gcc_path: Option<String>) -> BuildOutcome {
-    // The toolchain wrapper drives avr-gcc; ARM devices load an ELF / HEX built elsewhere for now.
-    if mcs_core::devices::get_any(&device_id).is_some_and(|d| d.as_avr().is_none()) {
-        let message = "C builds target AVR devices (avr-gcc). For an ARM Cortex-M device, build with arm-none-eabi-gcc or clang and load the ELF or Intel HEX file (File > Import HEX/ELF)".to_string();
+    // The toolchain wrapper drives avr-gcc; ARM and RISC-V devices load an ELF / HEX / app image built elsewhere for now.
+    if let Some(d) = mcs_core::devices::get_any(&device_id).filter(|d| d.as_avr().is_none()) {
+        let message = if d.as_riscv().is_some() {
+            format!("C builds target AVR devices (avr-gcc). {} is a RISC-V device: build with a riscv32 toolchain (e.g. clang --target=riscv32 -march=rv32imc or ESP-IDF) and load the ELF or ESP-IDF .bin app image (File > Import HEX/ELF)", d.name())
+        } else {
+            "C builds target AVR devices (avr-gcc). For an ARM Cortex-M device, build with arm-none-eabi-gcc or clang and load the ELF or Intel HEX file (File > Import HEX/ELF)".to_string()
+        };
         let diagnostics = vec![mcs_core::program::Diagnostic::new(mcs_core::program::Severity::Error, message, file_name, 0, 0)];
         return BuildOutcome { ok: false, program: None, diagnostics, output: String::new(), listing: None, device_id };
     }

@@ -355,6 +355,7 @@ impl Session {
             StopReason::BreakInsn => StopInfo { reason: StopKind::Break, pc, message: Some("BREAK instruction executed".into()) },
             StopReason::InvalidOpcode => StopInfo { reason: StopKind::Invalid, pc, message: Some("Invalid opcode".into()) },
             StopReason::Lockup => StopInfo { reason: StopKind::Invalid, pc, message: Some("CPU locked up (fault while handling a fault)".into()) },
+            StopReason::RomCall => StopInfo { reason: StopKind::Invalid, pc, message: Some("Execution entered the boot ROM, which is not simulated".into()) },
             _ => StopInfo { reason: if self.run_to.is_some() { StopKind::RunTo } else { StopKind::Step }, pc, message: None },
         }
     }

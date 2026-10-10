@@ -138,5 +138,6 @@ pub fn new_target(device: DeviceRef) -> Box<dyn Target> {
     match device {
         DeviceRef::Avr(spec) => Box::new(Machine::new(spec)),
         DeviceRef::Arm(spec) => Box::new(crate::arm::Machine::from_spec(spec)),
+        DeviceRef::Riscv(spec) => Box::new(crate::riscv::Esp32c3::from_spec(spec)),
     }
 }

@@ -94,6 +94,14 @@ pub struct LineEntry {
     pub is_stmt: bool,
 }
 
+/// A chunk of the image at an absolute address, for architectures whose program is spread over several
+/// memories (ESP32-C3: flash windows, IRAM, DRAM, RTC memory). Run-time addresses (VMA).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProgramSegment {
+    pub address: u32,
+    pub data: Vec<u8>,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LoadedProgram {
@@ -113,6 +121,10 @@ pub struct LoadedProgram {
     pub fuses: Option<Vec<u8>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lock: Option<Vec<u8>>,
+    /// Loadable segments at absolute addresses (ESP32-C3 ELF / app images); `flash` then holds the part
+    /// of them that lies in the instruction flash window, for the disassembly view.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub segments: Vec<ProgramSegment>,
     /// Entry point (byte address).
     pub entry: u32,
     pub symbols: Vec<ProgramSymbol>,
@@ -135,6 +147,7 @@ impl LoadedProgram {
             eeprom: None,
             fuses: None,
             lock: None,
+            segments: Vec::new(),
             entry: 0,
             symbols: Vec::new(),
             files: Vec::new(),

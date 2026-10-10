@@ -4,7 +4,7 @@ import { useSim, resetStopwatch } from '../state/sim';
 import { sim } from '../services/simClient';
 import { useWorkspace } from '../state/workspace';
 import { f32FromBits, f64FromBits, formatFloat, formatHz, formatTime, hex } from '../format';
-import { EditableValue, EmptyHint, Section } from './common';
+import { EditableValue, EmptyHint, Flag, Section } from './common';
 import { Icons } from '../icons';
 import { useState } from 'react';
 import { activeStack, exceptionName } from '../services/armState';
@@ -42,15 +42,6 @@ const FPSCR_FLAGS: [string, number, string][] = [
 ];
 const RMODES = ['to nearest', 'toward +inf', 'toward -inf', 'toward zero'];
 const REG_NAMES = ['R0', 'R1', 'R2', 'R3', 'R4', 'R5', 'R6', 'R7', 'R8', 'R9', 'R10', 'R11', 'R12'];
-
-function Flag({ name, on, was, tip, onClick }: { name: string; on: boolean; was?: boolean; tip: string; onClick: () => void }): JSX.Element {
-  return (
-    <button className={`flag-box${on ? ' on' : ''}${was !== undefined && on !== was ? ' changed' : ''}`} data-tip={`${name}: ${tip} (click to toggle)`} onClick={onClick}>
-      <span className="flag-name">{name}</span>
-      <span className="flag-led" />
-    </button>
-  );
-}
 
 function write(field: CpuField, value: number): void {
   sim({ type: 'writeCpu', field, value: value >>> 0 });

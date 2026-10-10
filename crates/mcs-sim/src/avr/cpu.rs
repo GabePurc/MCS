@@ -36,6 +36,8 @@ pub enum StopReason {
     Lockup,
     /// A step predicate or `request_stop` asked to stop.
     Requested,
+    /// RISC-V: execution entered the boot ROM, which is not simulated.
+    RomCall,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]

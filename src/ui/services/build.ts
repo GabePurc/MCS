@@ -130,7 +130,7 @@ function loadImported(r: BuildOutcome, name: string): boolean {
 /** File > Import HEX/ELF. */
 export async function importHexOrElf(): Promise<void> {
   const path = await pickFile('Import Program Image', [
-    { name: 'Program images', extensions: ['hex', 'ihex', 'elf', 'out', 'o'] },
+    { name: 'Program images', extensions: ['hex', 'ihex', 'elf', 'out', 'o', 'bin'] },
     { name: 'All files', extensions: ['*'] },
   ]);
   if (!path) return;

@@ -3,9 +3,9 @@ import { useSim } from '../state/sim';
 import { sim } from '../services/simClient';
 import { hex } from '../format';
 import { EditableValue, EmptyHint } from './common';
-import type { ArmDeviceSpec, MmioRegisterSpec } from '../backend/types';
+import type { ArmDeviceSpec, MmioRegisterSpec, RiscvDeviceSpec } from '../backend/types';
 
-const expandedGroups = new Set<string>(['GPIOA']);
+const expandedGroups = new Set<string>(['GPIOA', 'GPIO']);
 const expandedRegs = new Set<string>();
 
 function popcount(m: number): number {
@@ -26,9 +26,9 @@ interface Entry {
   idx: number;
 }
 
-/** Peripheral register view for ARM devices: group > register (32-bit values from `state.io`) > bit fields. */
-export function ArmIoView(): JSX.Element {
-  const spec = useSim((s) => (s.spec?.arch === 'arm' ? s.spec : null));
+/** Peripheral register view for memory-mapped devices (ARM, RISC-V): group > register (32-bit values from `state.io`) > bit fields. */
+export function MmioIoView(): JSX.Element {
+  const spec = useSim((s) => (s.spec && s.spec.arch !== 'avr' ? s.spec : null));
   const io = useSim((s) => s.state?.io);
   const peripherals = useSim((s) => s.state?.peripherals);
   const baseIo = useSim((s) => s.baseline?.io);
@@ -154,7 +154,7 @@ function registerRows(r: MmioRegisterSpec, v: number, was: number | undefined, w
   return rows;
 }
 
-function groupRegisters(spec: ArmDeviceSpec): Map<string, Entry[]> {
+function groupRegisters(spec: ArmDeviceSpec | RiscvDeviceSpec): Map<string, Entry[]> {
   const m = new Map<string, Entry[]>();
   spec.registers.forEach((reg, idx) => {
     const a = m.get(reg.group);

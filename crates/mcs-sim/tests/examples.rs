@@ -200,3 +200,64 @@ fn t85_pwm_follows_the_potentiometer() {
     assert!((0.2..0.3).contains(&d1), "{d1}");
     assert!((0.7..0.8).contains(&d2), "{d2}");
 }
+
+// ------------------------------------------------------------------ ESP32-C3 (prebuilt ELF examples)
+
+mod esp32c3_examples {
+    use mcs_core::riscv::devices;
+    use mcs_sim::riscv::Esp32c3;
+    use mcs_sim::target::{Sent, StopReason, Target};
+
+    const IROM: u32 = 0x4200_0000;
+
+    fn boot(name: &str) -> Esp32c3 {
+        let bytes = std::fs::read(format!("{}/../../examples/{name}", env!("CARGO_MANIFEST_DIR"))).unwrap();
+        let spec = devices::get("esp32-c3").unwrap();
+        let prog = mcs_formats::parse_elf_at(&bytes, spec.flash_size as usize, name, Some(IROM));
+        assert!(!prog.has_errors(), "{name}: {:?}", prog.diagnostics);
+        let mut m = Esp32c3::from_spec(spec);
+        m.load_program(Some(&prog));
+        m
+    }
+
+    #[test]
+    fn blink_toggles_gpio2_every_250ms() {
+        let mut m = boot("esp32c3_blink.elf");
+        // 20 MHz reset clock: 1.25 s = 25M cycles = five 250 ms half periods.
+        assert_eq!(m.run_until(26_000_000), StopReason::Limit);
+        let s = m.snapshot(&mut Sent { trace: 0, eeprom: u64::MAX }, false, 1 << 20);
+        let w = s.trace_words as usize;
+        let mut edges = Vec::new();
+        let mut last = None;
+        for (i, &c) in s.trace_cycles.iter().enumerate() {
+            let lv = s.trace_levels[i * w] >> 2 & 1;
+            if last != Some(lv) {
+                edges.push(c);
+                last = Some(lv);
+            }
+        }
+        // The first few cycles settle the pad (pull-up, output enable, first W1TS): look at the steady state.
+        edges.retain(|&c| c > 100);
+        assert!(edges.len() >= 4, "{edges:?}");
+        for pair in edges.windows(2) {
+            let d = pair[1] - pair[0];
+            assert!((4_990_000..5_010_000).contains(&d), "half period {d} cycles: {edges:?}");
+        }
+    }
+
+    #[test]
+    fn hello_prints_the_greeting_and_echoes_input() {
+        let mut m = boot("esp32c3_hello.elf");
+        let mut sent = Sent { trace: 0, eeprom: u64::MAX };
+        let mut serial = Vec::new();
+        // The greeting is 64 characters at 115200 baud: about 5.6 ms = 112k cycles.
+        m.run_until(200_000);
+        serial.extend(m.snapshot(&mut sent, false, 1 << 20).serial);
+        let text = String::from_utf8_lossy(&serial).into_owned();
+        assert!(text.starts_with("Hello from the ESP32-C3!\r\n") && text.ends_with("echoed back.\r\n"), "{text:?}");
+        m.serial_send(b"ok");
+        m.run_until(400_000);
+        serial.extend(m.snapshot(&mut sent, false, 1 << 20).serial);
+        assert!(serial.ends_with(b"ok"), "{:?}", String::from_utf8_lossy(&serial));
+    }
+}

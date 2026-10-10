@@ -10,12 +10,16 @@
 //! (`flash_base`, 0x0800_0000 unless the caller says otherwise; a device with a boot alias also
 //! accepts addresses below the flash size). Symbol, line-table and entry addresses stay absolute;
 //! the Thumb bit is cleared from function symbols and the entry point.
+//!
+//! RISC-V (`e_machine` 243, ESP32-C3): every loadable segment is kept at its run-time (virtual) address in
+//! `LoadedProgram::segments` -- flash windows (IROM 0x4200_0000, DROM 0x3C00_0000), IRAM / DRAM, RTC memory --
+//! and the part inside the IROM window is also copied into the flash image for the disassembly view.
 
 use std::collections::HashMap;
 use std::fmt;
 use std::ops::Range;
 
-use mcs_core::program::{
+use mcs_core::program::{ProgramSegment, 
     Diagnostic, LineEntry, LoadedProgram, ProgramFormat, ProgramSymbol, Severity, SymbolKind, SymbolSpace,
 };
 
@@ -24,9 +28,12 @@ use crate::{decode_utf8, sat_u32, strip_bom};
 
 pub const EM_AVR: u16 = 83;
 pub const EM_ARM: u16 = 40;
+pub const EM_RISCV: u16 = 243;
 
 /// Default load address of the flash of an STM32 when the caller does not know the device.
 const ARM_DEFAULT_FLASH_BASE: u32 = 0x0800_0000;
+/// ESP32-C3 IROM window: the flash image as seen by the instruction bus.
+const RISCV_DEFAULT_FLASH_BASE: u32 = 0x4200_0000;
 const SHF_EXECINSTR: u64 = 0x4;
 
 const AVR_DATA_BASE: u64 = 0x80_0000;
@@ -148,6 +155,7 @@ impl fmt::Display for SectionLabel<'_, '_> {
 struct Segment {
     p_type: u32,
     offset: u64,
+    vaddr: u64,
     paddr: u64,
     filesz: u64,
 }
@@ -318,11 +326,12 @@ fn read_elf(bytes: &[u8]) -> Result<ElfFile<'_>, ElfError> {
         for i in 0..phnum {
             let o = phoff + i * u64::from(phentsize);
             segments.push(if is64 {
-                Segment { p_type: r.u32(o)?, offset: r.u64(o + 8)?, paddr: r.u64(o + 24)?, filesz: r.u64(o + 32)? }
+                Segment { p_type: r.u32(o)?, offset: r.u64(o + 8)?, vaddr: r.u64(o + 16)?, paddr: r.u64(o + 24)?, filesz: r.u64(o + 32)? }
             } else {
                 Segment {
                     p_type: r.u32(o)?,
                     offset: r.u32(o + 4)?.into(),
+                    vaddr: r.u32(o + 8)?.into(),
                     paddr: r.u32(o + 12)?.into(),
                     filesz: r.u32(o + 16)?.into(),
                 }
@@ -368,9 +377,10 @@ pub fn parse_elf_at(bytes: &[u8], flash_size: usize, file_name: &str, flash_base
     let diagnostics = &mut program.diagnostics;
     let is_avr = elf.machine == EM_AVR;
     let is_arm = elf.machine == EM_ARM;
+    let is_riscv = elf.machine == EM_RISCV;
     let arm_base = if is_arm { u64::from(flash_base.filter(|&b| b != 0).unwrap_or(ARM_DEFAULT_FLASH_BASE)) } else { 0 };
-    if !is_avr && !is_arm {
-        let msg = format!("ELF machine type {} is neither AVR ({EM_AVR}) nor ARM ({EM_ARM}); loading anyway", elf.machine);
+    if !is_avr && !is_arm && !is_riscv {
+        let msg = format!("ELF machine type {} is not AVR ({EM_AVR}), ARM ({EM_ARM}) or RISC-V ({EM_RISCV}); loading anyway", elf.machine);
         report(diagnostics, file_name, Severity::Warning, msg);
     }
     if elf.e_type == ET_REL {
@@ -385,12 +395,17 @@ pub fn parse_elf_at(bytes: &[u8], flash_size: usize, file_name: &str, flash_base
         }
     }
 
-    load_image(&elf, &mut program, is_avr, is_arm.then_some(arm_base), file_name);
+    if is_riscv {
+        let base = flash_base.filter(|&b| b != 0).unwrap_or(RISCV_DEFAULT_FLASH_BASE);
+        load_riscv(&elf, &mut program, base, file_name);
+    } else {
+        load_image(&elf, &mut program, is_avr, is_arm.then_some(arm_base), file_name);
+    }
     if is_arm {
         program.flash_base = arm_base as u32;
     }
 
-    match read_symbols(&elf, is_avr, is_arm) {
+    match read_symbols(&elf, is_avr, is_arm, is_riscv) {
         Ok((symbols, skipped)) => {
             program.symbols = symbols;
             if skipped > 0 {
@@ -412,6 +427,10 @@ pub fn parse_elf_at(bytes: &[u8], flash_size: usize, file_name: &str, flash_base
     if let Some(debug_line) = elf.section_named(b".debug_line") {
         if debug_line.sh_type != SHT_NOBITS && debug_line.size > 0 {
             load_line_info(&elf, debug_line, &mut program, file_name);
+            if is_riscv {
+                // Code the linker discarded (--gc-sections) leaves rows at address 0.
+                program.lines.retain(|l| l.address >= 0x1000);
+            }
         }
     }
 
@@ -605,6 +624,59 @@ fn load_image(elf: &ElfFile<'_>, program: &mut LoadedProgram, is_avr: bool, arm_
     program.lock = lock.build();
 }
 
+/// RISC-V (ESP32-C3) images: every loadable segment goes into `program.segments` at its run-time
+/// address (flash windows, IRAM, DRAM, RTC memory are all just address ranges); the part inside the
+/// instruction flash window starting at `base` is also copied into `program.flash` so the disassembly
+/// view has the code.
+fn load_riscv(elf: &ElfFile<'_>, program: &mut LoadedProgram, base: u32, file: &str) {
+    let len = elf.bytes.len();
+    let mut chunks: Vec<(u64, &[u8], String)> = Vec::new();
+    let mut loads = elf.segments.iter().filter(|s| s.p_type == PT_LOAD).peekable();
+    if loads.peek().is_some() {
+        for (i, seg) in loads.enumerate() {
+            if seg.filesz == 0 {
+                continue; // .bss-like
+            }
+            match file_range(seg.offset, seg.filesz, len) {
+                Some(range) => chunks.push((seg.vaddr, &elf.bytes[range], SegmentLabel(i).to_string())),
+                None => report(&mut program.diagnostics, file, Severity::Error, format!("Segment {i} extends beyond end of file")),
+            }
+        }
+    } else {
+        for sec in &elf.sections {
+            if sec.sh_type != SHT_PROGBITS || sec.flags & SHF_ALLOC == 0 || sec.size == 0 {
+                continue;
+            }
+            match file_range(sec.offset, sec.size, len) {
+                Some(range) => chunks.push((sec.addr, &elf.bytes[range], SectionLabel(sec).to_string())),
+                None => report(&mut program.diagnostics, file, Severity::Error, format!("{} extends beyond end of file", SectionLabel(sec))),
+            }
+        }
+    }
+    let flash_len = program.flash.len() as u64;
+    let mut used = 0usize;
+    for (addr, data, what) in chunks {
+        if addr + data.len() as u64 > u64::from(u32::MAX) + 1 {
+            report(&mut program.diagnostics, file, Severity::Error, format!("{what} at 0x{addr:x} does not fit the 32-bit address space"));
+            continue;
+        }
+        let b = u64::from(base);
+        if addr >= b && addr < b + flash_len {
+            let off = (addr - b) as usize;
+            let n = data.len().min(program.flash.len() - off);
+            program.flash[off..off + n].copy_from_slice(&data[..n]);
+            used = used.max(off + n);
+            if n < data.len() {
+                let lost = data.len() - n;
+                report(&mut program.diagnostics, file, Severity::Error, format!("{what}: {lost} byte(s) beyond the end of flash ({flash_len} bytes) were ignored"));
+            }
+        }
+        program.segments.push(ProgramSegment { address: addr as u32, data: data.to_vec() });
+    }
+    program.flash_used = sat_u32(used);
+    program.flash_base = base;
+}
+
 fn space_order(space: SymbolSpace) -> u8 {
     match space {
         SymbolSpace::Code => 0,
@@ -616,7 +688,7 @@ fn space_order(space: SymbolSpace) -> u8 {
 
 /// Symbols from `.symtab` (or `.dynsym`), sorted by space then address. Also returns how many
 /// symbols were dropped because their address does not fit in 32 bits.
-fn read_symbols(elf: &ElfFile<'_>, is_avr: bool, is_arm: bool) -> Result<(Vec<ProgramSymbol>, usize), String> {
+fn read_symbols(elf: &ElfFile<'_>, is_avr: bool, is_arm: bool, is_riscv: bool) -> Result<(Vec<ProgramSymbol>, usize), String> {
     let symtab = elf
         .sections
         .iter()
@@ -663,7 +735,7 @@ fn read_symbols(elf: &ElfFile<'_>, is_avr: bool, is_arm: bool) -> Result<(Vec<Pr
         }
         // Compiler-internal local labels (.L*, .Loc.*) and anything defined in a
         // non-allocated section (.debug_*, .comment) are not program symbols.
-        if name.starts_with(".L") {
+        if name.starts_with(".L") || (is_riscv && name.starts_with('$')) {
             continue;
         }
         if shndx < SHN_LORESERVE {
@@ -694,6 +766,10 @@ fn read_symbols(elf: &ElfFile<'_>, is_avr: bool, is_arm: bool) -> Result<(Vec<Pr
             space = SymbolSpace::Data; // CCM SRAM / SRAM: absolute addresses
         } else if is_arm && value >= 0x4000_0000 {
             space = SymbolSpace::None; // peripheral / system addresses
+        } else if is_riscv && !in_exec_section && st_type != STT_FUNC && ((0x3c00_0000..0x3c80_0000).contains(&value) || (0x3fc8_0000..0x3fce_0000).contains(&value) || (0x5000_0000..0x5000_2000).contains(&value)) {
+            space = SymbolSpace::Data; // DROM / DRAM / RTC memory objects: absolute addresses
+        } else if is_riscv && value >= 0x6000_0000 {
+            space = SymbolSpace::None; // peripheral addresses
         } else if is_avr && value >= AVR_DATA_BASE {
             if value < AVR_EEPROM_BASE {
                 space = SymbolSpace::Data;

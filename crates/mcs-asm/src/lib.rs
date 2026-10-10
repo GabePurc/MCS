@@ -115,13 +115,17 @@ fn run<'a>(
     asm.finish()
 }
 
-/// Name of the registered non-AVR device `id`, if it is one (the assembler only knows AVR).
+/// Description of the registered non-AVR device `id` ("<name> is a ..."), if it is one (the assembler only
+/// knows AVR).
 pub(crate) fn non_avr_device(id: &str) -> Option<String> {
-    mcs_core::arm::devices::get(id).map(|d| d.name.clone())
+    if let Some(d) = mcs_core::arm::devices::get(id) {
+        return Some(format!("{} is an ARM Cortex-M device. Build it with arm-none-eabi-gcc or clang and load the ELF or Intel HEX file", d.name));
+    }
+    mcs_core::riscv::devices::get(id).map(|d| format!("{} is a RISC-V device. Build it with a riscv32 toolchain (e.g. clang --target=riscv32 -march=rv32imc) and load the ELF or ESP-IDF app image", d.name))
 }
 
-pub(crate) fn non_avr_message(name: &str) -> String {
-    format!("The built-in assembler supports AVR devices only; {name} is an ARM Cortex-M device. Build it with arm-none-eabi-gcc or clang and load the ELF or Intel HEX file")
+pub(crate) fn non_avr_message(what: &str) -> String {
+    format!("The built-in assembler supports AVR devices only; {what}")
 }
 
 fn refuse(file: &str, device_id: &str, name: &str) -> AssembleResult {

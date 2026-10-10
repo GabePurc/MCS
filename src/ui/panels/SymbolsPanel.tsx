@@ -14,8 +14,8 @@ export function SymbolsPanel(): JSX.Element {
   const base = useSim((s) => s.baseline);
   const spec = useSim((s) => s.spec);
   const arch = spec?.arch ?? 'avr';
-  const dataBase = spec?.arch === 'arm' ? spec.sramBase : 0;
-  const addrDigits = arch === 'arm' ? 8 : 4;
+  const dataBase = spec && spec.arch !== 'avr' ? spec.sramBase : 0;
+  const addrDigits = arch === 'avr' ? 4 : 8;
   const [filter, setFilter] = useState('');
   if (!build) return <EmptyHint>Build a program to list its symbols.</EmptyHint>;
   const f = filter.trim().toLowerCase();

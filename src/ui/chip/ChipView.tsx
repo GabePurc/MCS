@@ -60,8 +60,8 @@ function describe(h: Hover['hit']): { title: string; lines: string[] } | null {
 
 /** Chip View exists for AVR devices only (die floorplan, 3D package and execution heat map). */
 export function ChipView(): JSX.Element {
-  const arm = useSim((s) => s.spec?.arch === 'arm');
-  return arm ? <EmptyHint>Chip View is available for AVR devices.</EmptyHint> : <AvrChipView />;
+  const notAvr = useSim((s) => !!s.spec && s.spec.arch !== 'avr');
+  return notAvr ? <EmptyHint>Chip View is available for AVR devices.</EmptyHint> : <AvrChipView />;
 }
 
 function AvrChipView(): JSX.Element {

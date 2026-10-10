@@ -1,6 +1,7 @@
 import type { JSX } from 'react';
 import { avrCore } from '../backend/types';
 import { ArmProcessorPanel } from './ArmProcessorPanel';
+import { RiscvProcessorPanel } from './RiscvProcessorPanel';
 import { useSim, resetStopwatch } from '../state/sim';
 import { sim } from '../services/simClient';
 import { useWorkspace } from '../state/workspace';
@@ -16,8 +17,8 @@ const FLAG_DESC: Record<string, string> = {
 const SLEEP_MODES = ['Idle', 'ADC Noise Reduction', 'Power-down', 'Power-save', 'Standby', 'Extended Standby'];
 
 export function ProcessorPanel(): JSX.Element {
-  const arm = useSim((s) => s.spec?.arch === 'arm');
-  return arm ? <ArmProcessorPanel /> : <AvrProcessorPanel />;
+  const arch = useSim((s) => s.spec?.arch);
+  return arch === 'riscv' ? <RiscvProcessorPanel /> : arch === 'arm' ? <ArmProcessorPanel /> : <AvrProcessorPanel />;
 }
 
 function AvrProcessorPanel(): JSX.Element {

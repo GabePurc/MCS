@@ -5,7 +5,8 @@
 //! unusable images, warnings for missing or bad optional information such as debug info).
 //!
 //! * [`ihex`] — Intel HEX reader ([`parse_intel_hex`]) and writer ([`to_intel_hex`]).
-//! * [`elf`] — ELF32/ELF64 loader ([`parse_elf`]) with AVR address-space conventions.
+//! * [`elf`] — ELF32/ELF64 loader ([`parse_elf`]) with AVR address-space conventions (and ARM / RISC-V images).
+//! * [`espimage`] — ESP-IDF application image (`.bin`) reader for the ESP32-C3.
 //! * [`dwarf`] — DWARF 2–5 `.debug_line` interpreter used by the ELF loader.
 
 use std::borrow::Cow;
@@ -14,9 +15,11 @@ use mcs_core::program::LoadedProgram;
 
 pub mod dwarf;
 pub mod elf;
+pub mod espimage;
 pub mod ihex;
 
-pub use elf::{parse_elf, parse_elf_at, EM_ARM, EM_AVR};
+pub use elf::{parse_elf, parse_elf_at, EM_ARM, EM_AVR, EM_RISCV};
+pub use espimage::{looks_like_esp_image, parse_esp_image};
 pub use ihex::{parse_intel_hex, parse_intel_hex_at, to_intel_hex};
 
 const ELF_MAGIC: &[u8; 4] = b"\x7fELF";
@@ -37,6 +40,8 @@ pub fn load_program_file(bytes: &[u8], file_name: &str, flash_size: usize) -> Lo
 pub fn load_program_file_at(bytes: &[u8], file_name: &str, flash_size: usize, flash_base: u32) -> LoadedProgram {
     if bytes.starts_with(ELF_MAGIC) || has_elf_extension(file_name) {
         parse_elf_at(bytes, flash_size, file_name, (flash_base != 0).then_some(flash_base))
+    } else if looks_like_esp_image(bytes) {
+        parse_esp_image(bytes, flash_size, file_name, (flash_base != 0).then_some(flash_base))
     } else {
         parse_intel_hex_at(&String::from_utf8_lossy(bytes), flash_size, file_name, flash_base)
     }
