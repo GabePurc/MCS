@@ -5,6 +5,7 @@ use serde::Serialize;
 
 use crate::arm::device::ArmDeviceSpec;
 use crate::avr::device::AvrDeviceSpec;
+use crate::riscv::device::RiscvDeviceSpec;
 
 /// CPU architecture family of a device.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -12,6 +13,7 @@ use crate::avr::device::AvrDeviceSpec;
 pub enum Arch {
     Avr,
     Arm,
+    Riscv,
 }
 
 /// Reference to a registered device of any architecture. Serializes as the architecture's spec
@@ -21,6 +23,7 @@ pub enum Arch {
 pub enum DeviceRef {
     Avr(&'static AvrDeviceSpec),
     Arm(&'static ArmDeviceSpec),
+    Riscv(&'static RiscvDeviceSpec),
 }
 
 impl DeviceRef {
@@ -28,6 +31,7 @@ impl DeviceRef {
         match *self {
             DeviceRef::Avr(s) => s.id.as_str(),
             DeviceRef::Arm(s) => s.id.as_str(),
+            DeviceRef::Riscv(s) => s.id.as_str(),
         }
     }
 
@@ -35,6 +39,7 @@ impl DeviceRef {
         match *self {
             DeviceRef::Avr(s) => s.name.as_str(),
             DeviceRef::Arm(s) => s.name.as_str(),
+            DeviceRef::Riscv(s) => s.name.as_str(),
         }
     }
 
@@ -42,6 +47,7 @@ impl DeviceRef {
         match self {
             DeviceRef::Avr(_) => Arch::Avr,
             DeviceRef::Arm(_) => Arch::Arm,
+            DeviceRef::Riscv(_) => Arch::Riscv,
         }
     }
 
@@ -50,14 +56,16 @@ impl DeviceRef {
         match *self {
             DeviceRef::Avr(s) => s.flash_size,
             DeviceRef::Arm(s) => s.flash_size,
+            DeviceRef::Riscv(s) => s.flash_size,
         }
     }
 
-    /// Address of the first byte of program memory (0 for AVR, 0x0800_0000 for STM32).
+    /// Address of the first byte of program memory (0 for AVR, 0x0800_0000 for STM32, 0x4200_0000 for the ESP32-C3 IROM window).
     pub fn flash_base(&self) -> u32 {
         match *self {
             DeviceRef::Avr(_) => 0,
             DeviceRef::Arm(s) => s.flash_base,
+            DeviceRef::Riscv(s) => s.flash_base,
         }
     }
 
@@ -77,11 +85,20 @@ impl DeviceRef {
         }
     }
 
+    /// The RISC-V spec, for RISC-V-only code paths.
+    pub fn as_riscv(&self) -> Option<&'static RiscvDeviceSpec> {
+        match *self {
+            DeviceRef::Riscv(s) => Some(s),
+            _ => None,
+        }
+    }
+
     /// True when both refer to the same registered device.
     pub fn same_as(&self, other: &DeviceRef) -> bool {
         match (self, other) {
             (DeviceRef::Avr(a), DeviceRef::Avr(b)) => std::ptr::eq(*a, *b),
             (DeviceRef::Arm(a), DeviceRef::Arm(b)) => std::ptr::eq(*a, *b),
+            (DeviceRef::Riscv(a), DeviceRef::Riscv(b)) => std::ptr::eq(*a, *b),
             _ => false,
         }
     }

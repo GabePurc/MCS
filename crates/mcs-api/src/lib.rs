@@ -93,6 +93,16 @@ fn summary(d: DeviceRef) -> DeviceSummary {
             package: s.package.clone(),
             core_name: s.core_name.clone(),
         },
+        DeviceRef::Riscv(s) => DeviceSummary {
+            arch: Arch::Riscv,
+            id: s.id.clone(),
+            name: s.name.clone(),
+            family: s.family.clone(),
+            flash_size: s.flash_size,
+            sram_size: s.sram_size + s.extra_ram.iter().map(|r| r.size).sum::<u32>(),
+            package: s.package.clone(),
+            core_name: s.core_name.clone(),
+        },
     }
 }
 
@@ -240,6 +250,9 @@ pub fn disassemble(device_id: &str, flash: &[u8], labels: &HashMap<u32, String>)
     if let Some(arm) = mcs_core::devices::get_any(device_id).and_then(|d| d.as_arm()) {
         return disassemble_arm(arm, flash, labels);
     }
+    if let Some(rv) = mcs_core::devices::get_any(device_id).and_then(|d| d.as_riscv()) {
+        return disassemble_riscv(rv.flash_base, flash, labels);
+    }
     let Some(spec) = avr_spec(device_id) else { return Vec::new() };
     let table = isa::decode_table(spec.features);
     let io_names: HashMap<u32, String> = spec.registers.iter().rev().filter_map(|r| spec.data_to_io(r.addr).map(|io| (io as u32, r.name.clone()))).collect();
@@ -292,6 +305,38 @@ fn disassemble_arm(spec: &mcs_core::arm::device::ArmDeviceSpec, flash: &[u8], la
             DisasmLine { pc: addr, words: (n / 2) as u8, raw, mnemonic, operands, target, valid }
         })
         .collect()
+}
+
+/// RISC-V disassembly: `pc` is the absolute byte address (`base` = start of `flash` in the address space), `raw`
+/// holds the one or two halfwords, `words` counts them. Direct jump / branch targets are resolved through
+/// `labels` (code byte addresses).
+fn disassemble_riscv(base: u32, flash: &[u8], labels: &HashMap<u32, String>) -> Vec<DisasmLine> {
+    use mcs_core::riscv::{decode, Op};
+    let half = |o: usize| -> u32 { flash.get(o..o + 2).map_or(0xffff, |b| u16::from_le_bytes([b[0], b[1]]) as u32) };
+    let mut out = Vec::with_capacity(flash.len() / 3);
+    let mut off = 0usize;
+    while off + 2 <= flash.len() {
+        let lo = half(off);
+        let word = if lo & 3 == 3 { lo | half(off + 2) << 16 } else { lo };
+        let insn = decode(word);
+        let n = insn.len as usize;
+        let pc = base.wrapping_add(off as u32);
+        let text = mcs_core::riscv::disassemble(word, pc).1;
+        let (mnemonic, mut operands) = match text.split_once([' ', '\t']) {
+            Some((m, o)) => (m.to_string(), o.trim().to_string()),
+            None => (text.clone(), String::new()),
+        };
+        let target = matches!(insn.op, Op::Jal | Op::Beq | Op::Bne | Op::Blt | Op::Bge | Op::Bltu | Op::Bgeu).then(|| pc.wrapping_add(insn.imm as u32));
+        if let Some(name) = target.and_then(|t| labels.get(&t)) {
+            if let Some(i) = operands.rfind("0x") {
+                operands.replace_range(i.., name);
+            }
+        }
+        let raw = (0..n / 2).map(|k| half(off + 2 * k) as u16).collect();
+        out.push(DisasmLine { pc, words: (n / 2) as u8, raw, mnemonic, operands, target, valid: insn.op != Op::Illegal });
+        off += n;
+    }
+    out
 }
 
 pub fn instruction_set(device_id: &str) -> Vec<InsnInfo> {
@@ -407,6 +452,43 @@ mod tests {
         assert!(lines.iter().all(|l| l.valid || l.pc < 0x0800_00e8), "code after the vector table decodes");
         // Machine-code export is AVR-only.
         assert!(program_to_machine_code("stm32g474re", &p.flash, 16, &HashMap::new(), "x").contains("AVR devices only"));
+    }
+
+    const ESP_CALLS_ELF: &[u8] = include_bytes!("../../mcs-formats/tests/data/esp32c3_calls.elf");
+
+    #[test]
+    fn riscv_devices_listing_import_and_disassembly() {
+        let devs = list_devices();
+        let c3 = devs.iter().find(|d| d.id == "esp32-c3").expect("ESP32-C3 is listed");
+        assert_eq!((c3.arch, c3.flash_size, c3.sram_size, c3.package.as_str()), (Arch::Riscv, 4 << 20, 400 * 1024 + 8 * 1024, "QFN32"));
+        assert!(devs.iter().any(|d| d.id == "esp32-c3fh4" && d.arch == Arch::Riscv));
+
+        // The AVR-only assemblers refuse RISC-V devices with a clear message.
+        let a = build_asm("nop", "t.s", "esp32-c3", &HashMap::new());
+        assert!(!a.ok && a.diagnostics[0].message.contains("AVR devices only") && a.diagnostics[0].message.contains("RISC-V"), "{:?}", a.diagnostics);
+        let m = build_machine_code("0000", "t.mc", "esp32-c3fh4");
+        assert!(!m.ok && m.diagnostics[0].message.contains("RISC-V"), "{:?}", m.diagnostics);
+
+        // ELF import keeps the run-time segments and the IROM part as the flash image.
+        let r = import_program(ESP_CALLS_ELF, "calls.elf", "esp32-c3");
+        assert!(r.ok, "{:?}", r.diagnostics);
+        let p = r.program.unwrap();
+        assert_eq!((p.flash_base, p.flash.len(), p.entry), (0x4200_0000, 4 << 20, 0x4200_0000));
+        assert!(!p.segments.is_empty());
+
+        // Disassembly: absolute byte addresses, compressed and 32-bit instructions, labels in jump targets.
+        let leaf = p.symbols.iter().find(|s| s.name == "leaf").unwrap().address;
+        let labels = HashMap::from([(leaf, "leaf".to_string())]);
+        let lines = disassemble("esp32-c3", &p.flash[..p.flash_used as usize], &labels);
+        let first = &lines[0];
+        assert_eq!((first.pc, first.mnemonic.as_str(), first.operands.as_str(), first.words, first.raw.len()), (0x4200_0000, "lui", "sp, 0x3fce0", 2, 2));
+        let ret = lines.iter().find(|l| l.pc == leaf + 8).expect("ret");
+        assert_eq!((ret.mnemonic.as_str(), ret.words, ret.raw.len()), ("ret", 1, 1));
+        let jmp = lines.iter().find(|l| l.mnemonic == "j").expect("the idle loop");
+        assert_eq!(jmp.target, Some(jmp.pc));
+        assert!(lines.iter().all(|l| l.valid));
+        // Machine-code export is AVR-only.
+        assert!(program_to_machine_code("esp32-c3", &p.flash, 16, &HashMap::new(), "x").contains("AVR devices only"));
     }
 
     #[test]

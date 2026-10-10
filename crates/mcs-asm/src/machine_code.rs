@@ -177,6 +177,7 @@ pub fn assemble_machine_code(source: &str, file_name: &str, device_id: &str) -> 
         eeprom: None,
         fuses: None,
         lock: None,
+        segments: Vec::new(),
         entry: 0,
         symbols: Vec::new(),
         files: vec![file_name.to_string()],
