@@ -19,6 +19,7 @@ import { asmCompletions, avrAsm, deviceWords, vsHighlight } from './avrLanguage'
 import { machineCodeSupport } from './mcLanguage';
 import { editorStates, initialTexts } from './docText';
 import { setEditorApi } from './editorApi';
+import { addSymbol, clearOutline, focusSymbol, outlineKind, publishOutline, revealEffect, setSymbolView, symbolView } from './symbolView';
 import { markDirty } from '../services/files';
 import { pcToSource, resolvedSourcePc, sameFile } from '../services/debugInfo';
 import { docKey, toggleSourceBreakpoint, useWorkspace, type Doc } from '../state/workspace';
@@ -257,8 +258,10 @@ const languageConf = new Compartment();
 const fontConf = new Compartment();
 
 function languageFor(doc: Doc): Extension {
-  if (doc.language === 'mc') return machineCodeSupport();
-  return doc.language === 'asm' ? [avrAsm, autocompletion({ override: [asmCompletions] })] : [cpp(), autocompletion()];
+  if (doc.language === 'mc') return [machineCodeSupport(), outlineKind.of('none')];
+  if (doc.language === 'asm') return [avrAsm, autocompletion({ override: [asmCompletions] }), outlineKind.of('asm')];
+  // GNU assembler sources (.S) use C highlighting but have assembly labels.
+  return [cpp(), autocompletion(), outlineKind.of(doc.language === 'c' ? 'c' : 'asm')];
 }
 
 function createState(doc: Doc, text: string): EditorState {
@@ -287,6 +290,7 @@ function createState(doc: Doc, text: string): EditorState {
       search({ top: true }),
       lintGutter(),
       hoverInfo,
+      symbolView(),
       languageConf.of(languageFor(doc)),
       fontConf.of([]),
       keymap.of([...closeBracketsKeymap, ...defaultKeymap, ...searchKeymap, ...historyKeymap, ...completionKeymap, { key: 'Tab', run: softTab, shift: indentLess }]),
@@ -303,6 +307,7 @@ function createState(doc: Doc, text: string): EditorState {
           const l = u.state.doc.lineAt(head);
           useWorkspace.setState({ cursor: { line: l.number, col: head - l.from + 1 } });
         }
+        if (useSettings.getState().symbolView && (u.docChanged || u.selectionSet || u.transactions.some((t) => t.effects.length))) publishOutline(u.view);
       }),
     ],
   });
@@ -356,8 +361,17 @@ export function SourceEditor({ doc }: { doc: Doc }): JSX.Element {
         view.dispatch(view.state.replaceSelection(text));
         view.focus();
       },
+      focusSymbol: (index) => focusSymbol(view, index),
+      addSymbol: (name) => addSymbol(view, name),
+    });
+    const unsubSettings = useSettings.subscribe((s, p) => {
+      if (s.symbolView === p.symbolView || !currentDocId) return;
+      setSymbolView(view, s.symbolView);
+      publishOutline(view, true);
     });
     return () => {
+      unsubSettings();
+      clearOutline();
       if (currentDocId) editorStates.set(currentDocId, view.state);
       currentDocId = null;
       setEditorApi(null);
@@ -377,6 +391,9 @@ export function SourceEditor({ doc }: { doc: Doc }): JSX.Element {
     currentDocId = doc.id;
     view.setState(st);
     syncDecorations(view, doc);
+    const symView = useSettings.getState().symbolView;
+    setSymbolView(view, symView);
+    if (symView) publishOutline(view, true);
     view.focus();
   }, [doc.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -465,7 +482,11 @@ function syncDecorations(view: EditorView, doc: Doc): void {
     });
 
   view.dispatch(setDiagnostics(view.state, diags));
-  view.dispatch({ effects: [setBps.of(bps), setExec.of(execLine)] });
+  const effects: StateEffect<unknown>[] = [setBps.of(bps), setExec.of(execLine)];
+  // Symbol View: stopping in another symbol shows that symbol.
+  const reveal = execLine !== null ? revealEffect(view.state, view.state.doc.line(execLine).from) : null;
+  if (reveal) effects.push(reveal);
+  view.dispatch({ effects });
   if (execLine !== null) {
     const pos = view.state.doc.line(execLine).from;
     const vp = view.viewport;

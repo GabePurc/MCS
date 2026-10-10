@@ -97,5 +97,9 @@ logic is Rust; TypeScript only renders and routes user input.
   silicon and the live block contents on canvases; `engine.ts` turns machine states into decaying
   highlights and redraws only blocks whose content fingerprint changed; `scene3d.ts` (three.js,
   lazily loaded) renders the package/lead frame/bond wires/die on demand with shadows and GTAO.
+* Symbol View (`editor/symbolView.ts`): a CodeMirror extension keeps the document outline
+  (labels / top-level C functions, updated incrementally) and a shown region; block
+  decorations hide the rest, a change filter keeps typing inside it and a transaction filter
+  clamps cursor moves or switches the region when something else moves the selection.
 * Machine-code sources (`.mc`) are parsed by `mcs_asm::assemble_machine_code` into an ordinary
   `LoadedProgram` with a line table, so they debug like assembly.

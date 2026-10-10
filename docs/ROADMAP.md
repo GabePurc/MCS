@@ -48,6 +48,10 @@ Update this file when work is finished (only list items that are done in the rep
 - [x] Chip View: zoom into FLASH / SRAM / EEPROM to read individual words and bytes (addresses, disassembly when large); clicking a memory block zooms there (from the 3D view too); costs scale with the visible area / executed code, not the memory size
 - [x] Fix: Tab inserts spaces at the cursor (indents only with a selection)
 
+### User requests (GitHub issue #2)
+- [x] Symbol View (View > Symbol View, Ctrl+Shift+O): the editor shows one assembly label / C function at a time with a symbol sidebar in file order; one document (real line numbers, one undo history), edits and cursor stay in the shown symbol, jumps (go to line, breakpoints, debugger, search, undo) switch symbols; "+" adds a label / function after the shown one; incremental outline (changed lines only for assembly, top-level syntax tree for C)
+- [x] Device Definitions (.inc) is a tool window (float, dock or pop out) with a line filter
+
 ## Next
 - [ ] DWARF variable/type info (`.debug_info`) for a typed Watch window and locals
 - [ ] Data breakpoints (watchpoints) and conditional / hit-count breakpoints

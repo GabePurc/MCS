@@ -3,7 +3,7 @@ import { CaptionGlyph, Icons } from '../icons';
 import { closeDialog, useDialogs } from '../state/dialogs';
 import { useSettings } from '../state/settings';
 import { useSim } from '../state/sim';
-import { defInclude, detectToolchain, pickFile, platform } from '../backend/api';
+import { detectToolchain, pickFile, platform } from '../backend/api';
 import type { AvrDeviceSpec, FuseBitSpec, SpeedMode, ToolchainInfo } from '../backend/types';
 import { sim } from '../services/simClient';
 import { setSpeed, speedLabel } from '../services/commands';
@@ -55,7 +55,6 @@ export function DialogHost(): JSX.Element | null {
     case 'supply': return <SupplyDialog />;
     case 'speed': return <SpeedDialog />;
     case 'update': return <UpdateDialog />;
-    case 'include': return <IncludeDialog />;
     case 'customDevice': return <CustomDeviceDialog />;
     default: return null;
   }
@@ -529,29 +528,6 @@ function UpdateDialog(): JSX.Element {
         {st.kind === 'installed' && <p><Icons.Success size={13} /> Version {st.version} is installed. Restarting...</p>}
         {st.kind === 'checking' && <div className="w7-progress marquee"><div /></div>}
       </div>
-    </Dialog>
-  );
-}
-
-function IncludeDialog(): JSX.Element {
-  const spec = useSim((s) => s.spec);
-  const [inc, setInc] = useState<[string, string] | null>(null);
-  useEffect(() => {
-    if (spec) defInclude(spec.id).then(setInc).catch(() => {});
-  }, [spec]);
-  return (
-    <Dialog
-      title={inc ? inc[0] : 'Device definitions'}
-      width={640}
-      buttons={
-        <>
-          <button className="w7-btn" onClick={() => inc && void navigator.clipboard.writeText(inc[1])}><span>Copy</span></button>
-          <button className="w7-btn default" onClick={closeDialog}><span>Close</span></button>
-        </>
-      }
-    >
-      <p>Use <span className="mono">.include "{inc?.[0]}"</span> in assembly sources. These definitions are generated from the device model:</p>
-      <pre className="mono selectable include-view">{inc?.[1] ?? 'Loading...'}</pre>
     </Dialog>
   );
 }

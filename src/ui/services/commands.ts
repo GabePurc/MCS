@@ -124,6 +124,7 @@ export const PANELS: [PanelId, string, IconName][] = [
   ['info', 'Device Info', 'Info'],
   ['isa', 'Instruction Set', 'Book'],
   ['serial', 'Serial Monitor', 'Serial'],
+  ['defs', 'Device Definitions (.inc)', 'Book'],
 ];
 
 export const PANEL_TITLES: Record<PanelId, string> = Object.fromEntries(PANELS.map(([id, t]) => [id, t])) as Record<PanelId, string>;
@@ -162,6 +163,14 @@ const list: CommandDef[] = [
     run: () => useLayout.getState().toggle(id),
     checked: () => isPanelOpen(id),
   })),
+  {
+    id: 'view.symbolView',
+    label: 'Symbol View',
+    icon: 'Symbols',
+    keys: ['Mod+Shift+O'],
+    run: () => useSettings.getState().set({ symbolView: !useSettings.getState().symbolView }),
+    checked: () => useSettings.getState().symbolView,
+  },
   { id: 'view.resetLayout', label: 'Reset Window Layout', run: () => useLayout.getState().reset() },
   { id: 'view.startPage', label: 'Start Page', run: () => useWorkspace.setState({ activeDocId: null }) },
 
@@ -246,7 +255,7 @@ const list: CommandDef[] = [
   { id: 'device.info', label: 'Device Info', icon: 'Info', run: () => useLayout.getState().show('info') },
   { id: 'device.chip', label: 'Chip View (3D)', icon: 'Chip3D', run: () => useLayout.getState().show('chip') },
   { id: 'help.isa', label: 'Instruction Set Reference', icon: 'Book', keys: ['F1'], run: () => useLayout.getState().show('isa') },
-  { id: 'help.include', label: 'Device Definitions (.inc)', run: () => openDialog('include') },
+  { id: 'help.include', label: 'Device Definitions (.inc)', run: () => useLayout.getState().show('defs') },
   { id: 'help.toolchain', label: 'C Toolchain Setup', run: () => openDialog('toolchainHelp') },
   { id: 'help.updates', label: 'Check for Updates...', icon: 'Download', run: openUpdateDialog, enabled: () => inTauri },
   { id: 'help.about', label: 'About MCS', icon: 'App', run: () => openDialog('about') },

@@ -8,6 +8,7 @@ import { baseName } from '../services/debugInfo';
 import { Icons } from '../icons';
 import { useDevices } from '../state/devices';
 import { SourceEditor } from './SourceEditor';
+import { SymbolSidebar } from './SymbolSidebar';
 import { openContextMenu } from '../controls/Menu';
 import { runCommand } from '../services/commands';
 
@@ -16,6 +17,7 @@ export function EditorArea(): JSX.Element {
   const docs = useWorkspace((s) => s.docs);
   const activeId = useWorkspace((s) => s.activeDocId);
   const active = docs.find((d) => d.id === activeId);
+  const symbolView = useSettings((s) => s.symbolView);
   return (
     <div className="dock-group" style={{ flex: 1 }}>
       <div className="dock-tabs doc-tabs">
@@ -50,7 +52,10 @@ export function EditorArea(): JSX.Element {
         ))}
         <div className="tabs-spacer" />
       </div>
-      <div className="dock-body">{active ? <SourceEditor doc={active} /> : <StartPage />}</div>
+      <div className="dock-body editor-body">
+        {active && symbolView && <SymbolSidebar />}
+        {active ? <div className="editor-main"><SourceEditor doc={active} /></div> : <StartPage />}
+      </div>
     </div>
   );
 }
