@@ -34,7 +34,7 @@ export function BreakpointsPanel(): JSX.Element {
             <tbody>
               {bps.map((b) => {
                 const arch = build?.arch ?? 'avr';
-                const digits = arch === 'arm' ? 8 : 4;
+                const digits = arch === 'avr' ? 4 : 8;
                 const pc = resolveBreakpoint(b, build?.program ?? null, arch);
                 return (
                   <tr

@@ -341,7 +341,7 @@ function SupplyDialog(): JSX.Element {
           <input type="range" className="w7-slider" min={spec?.vccRange[0] ?? 1.8} max={spec?.vccRange[1] ?? 5.5} step={0.05} value={vcc} onChange={(e) => { const v = Number(e.target.value); useSettings.getState().set({ vcc: v }); sim({ type: 'setVcc', volts: v }); }} />
           <span className="mono">{vcc.toFixed(2)} V</span>
         </div>
-        <p className="dim">{spec?.arch === 'arm' ? 'Affects the ADC reference and the pin input thresholds.' : 'Affects the ADC reference, the analog comparator and the VCC level monitor (VLM).'} {spec && maxHz > 0 && <>Datasheet speed grade at this voltage: up to <b>{formatHz(maxHz)}</b>.</>}</p>
+        <p className="dim">{spec && spec.arch !== 'avr' ? 'Affects the ADC reference and the pin input thresholds.' : 'Affects the ADC reference, the analog comparator and the VCC level monitor (VLM).'} {spec && maxHz > 0 && <>Datasheet speed grade at this voltage: up to <b>{formatHz(maxHz)}</b>.</>}</p>
         {st && maxHz > 0 && st.hz > maxHz * 1.0001 && (
           <div className="hint warn"><Icons.Warning size={13} /> The CPU runs at {formatHz(st.hz)}, faster than the {formatHz(maxHz)} allowed at {vcc.toFixed(2)} V. A real chip may not run reliably.</div>
         )}

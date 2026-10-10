@@ -17,6 +17,7 @@ export function DeviceInfoPanel(): JSX.Element {
   const spec = useSim((s) => s.spec);
   if (!spec) return <EmptyHint>No device loaded.</EmptyHint>;
   if (spec.arch === 'arm') return <ArmDeviceInfo spec={spec} />;
+  if (spec.arch === 'riscv') return <EmptyHint>RISC-V devices (ESP32-C3) are not yet supported by this panel (Stage E3).</EmptyHint>;
   const io = spec.pins.filter((p) => p.kind === 'io');
   const grades = spec.speedGrades.map(([hz, v]) => `${formatHz(hz)} @ ${v.toFixed(1)}-${spec.vccRange[1].toFixed(1)} V`).join(', ');
   const rows: [string, string][] = [

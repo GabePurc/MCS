@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { armCore, armHasDouble, armHasFpu, avrCore, bytesToPc, convertCore, flashBaseOf, isArm, isAvr, pcToBytes, pcUnit, type ArmDeviceSpec, type AvrDeviceSpec, type MachineState } from './types';
+import { armCore, armHasDouble, armHasFpu, avrCore, bytesToPc, convertCore, flashBaseOf, isArm, isAvr, isRiscv, pcToBytes, pcUnit, riscvCore, type ArmDeviceSpec, type AvrDeviceSpec, type MachineState, type RiscvDeviceSpec } from './types';
 
 const armSpec = { arch: 'arm', flashBase: 0x08000000, features: 3 } as ArmDeviceSpec;
 const m7Spec = { arch: 'arm', flashBase: 0x08000000, features: 7 } as ArmDeviceSpec;
@@ -60,5 +60,32 @@ describe('core state conversion', () => {
     const st = { core: convertCore({ arch: 'avr', sp: 0, sreg: 0, regs: [] }) } as MachineState;
     expect(() => armCore(st)).toThrow(/ARM/);
     expect(avrCore(st).sp).toBe(0);
+  });
+});
+
+describe('RISC-V', () => {
+  const rvSpec = { arch: 'riscv', flashBase: 0x4200_0000 } as RiscvDeviceSpec;
+  const raw = { arch: 'riscv' as const, x: Array.from({ length: 32 }, (_, i) => 0x8000_0000 + i), mstatus: 8, mie: 0, mip: 0, mtvec: 0x4200_0001, mepc: 0, mcause: 0, mtval: 0, mscratch: 0 };
+
+  it('counts pc in bytes and has a flash base', () => {
+    expect(pcUnit('riscv')).toBe(1);
+    expect(pcToBytes('riscv', 0x4200_0010)).toBe(0x4200_0010);
+    expect(bytesToPc('riscv', 0x4200_0010)).toBe(0x4200_0010);
+    expect(flashBaseOf(rvSpec)).toBe(0x4200_0000);
+  });
+
+  it('discriminates by arch', () => {
+    expect(isRiscv(rvSpec) && !isAvr(rvSpec) && !isArm(rvSpec)).toBe(true);
+    expect(isRiscv(avrSpec) || isRiscv(armSpec)).toBe(false);
+  });
+
+  it('converts the core and the accessor rejects other architectures', () => {
+    const st = { core: convertCore(raw) } as MachineState;
+    expect(riscvCore(st).x).toBeInstanceOf(Uint32Array);
+    expect(riscvCore(st).x[31]).toBe(0x8000_001f);
+    expect(() => armCore(st)).toThrow(/riscv/);
+    expect(() => avrCore(st)).toThrow(/riscv/);
+    const avr = { core: convertCore({ arch: 'avr', sp: 0, sreg: 0, regs: [] }) } as MachineState;
+    expect(() => riscvCore(avr)).toThrow(/RISC-V/);
   });
 });

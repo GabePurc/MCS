@@ -6,7 +6,7 @@ import { EmptyHint } from './common';
 /** The generated avrasm2 definitions include (`tn10def.inc`...) as a tool window, with a line filter. */
 export function DefinitionsPanel(): JSX.Element {
   const deviceId = useSim((s) => (s.spec?.arch === 'avr' ? s.spec.id : undefined));
-  const arm = useSim((s) => s.spec?.arch === 'arm');
+  const notAvr = useSim((s) => !!s.spec && s.spec.arch !== 'avr');
   const [inc, setInc] = useState<[string, string] | null>(null);
   const [filter, setFilter] = useState('');
   const query = useDeferredValue(filter.trim().toLowerCase());
@@ -18,7 +18,7 @@ export function DefinitionsPanel(): JSX.Element {
     if (!inc || !query) return inc?.[1] ?? '';
     return inc[1].split('\n').filter((l) => l.toLowerCase().includes(query)).join('\n');
   }, [inc, query]);
-  if (arm) return <EmptyHint>Device definition files (.inc) are available for AVR devices.</EmptyHint>;
+  if (notAvr) return <EmptyHint>Device definition files (.inc) are available for AVR devices.</EmptyHint>;
   if (!deviceId) return <EmptyHint>No device selected.</EmptyHint>;
   if (!inc) return <EmptyHint>Loading...</EmptyHint>;
   return (

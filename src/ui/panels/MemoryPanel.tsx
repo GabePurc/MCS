@@ -53,6 +53,7 @@ export function MemoryPanel(): JSX.Element {
   }, [spec, build]);
 
   if (!spec || !st) return <EmptyHint>No device loaded.</EmptyHint>;
+  if (spec.arch === 'riscv') return <EmptyHint>RISC-V devices (ESP32-C3) are not yet supported by this panel (Stage E3).</EmptyHint>;
 
   const avr = spec.arch === 'avr' ? spec : null;
   const arm = spec.arch === 'arm' ? spec : null;
@@ -105,7 +106,7 @@ export function MemoryPanel(): JSX.Element {
   const addrDigits = arm ? 8 : total > 0x10000 ? 6 : 4;
   const pcByte = st.pcBytes;
   // Bus address of the stack pointer (AVR: data space address; ARM: active SP).
-  const sp = st.core.arch === 'arm' ? st.core.r[13] : st.core.sp;
+  const sp = st.core.arch === 'arm' ? st.core.r[13] : st.core.arch === 'riscv' ? st.core.x[2] : st.core.sp;
   const markClass = (a: number) => {
     if (isRam && a === sp) return ' mark-sp';
     if (isRam && a > sp && sp >= addrBase && a < sramEnd) return ' mark-stack';

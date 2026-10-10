@@ -65,6 +65,11 @@ export function clearSerial(): void {
 /** Default line settings: the device's USART pins when it has one. */
 export function defaultSerialConfig(spec: DeviceSpec): SerialConfig {
   const pin = (fn: string) => spec.pins.find((p) => p.functions.includes(fn))?.gpio ?? null;
+  if (spec.arch === 'riscv') {
+    // ESP32-C3 console UART0: TX = GPIO21, RX = GPIO20.
+    const has = (g: number) => spec.pins.some((p) => p.gpio === g);
+    return { monitor: has(21) ? 21 : null, inject: has(20) ? 20 : null, baud: 115200, dataBits: 8, parity: 0, stopBits: 1 };
+  }
   if (spec.arch === 'arm') {
     // USART2 is the ST-LINK virtual COM port on Nucleo boards; fall back to the first USART/UART.
     const uart = ['USART2', 'USART1', 'USART3', 'UART4', 'UART5', 'LPUART1'].find((u) => pin(`${u}_TX`) !== null && pin(`${u}_RX`) !== null);

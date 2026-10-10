@@ -24,7 +24,7 @@ export function DisassemblyPanel(): JSX.Element {
   const build = useWorkspace((s) => s.build);
   const arch = spec?.arch ?? 'avr';
   const flashBase = spec ? flashBaseOf(spec) : 0;
-  const addrDigits = arch === 'arm' ? 8 : 4;
+  const addrDigits = arch === 'avr' ? 4 : 8;
   const bps = useWorkspace((s) => s.breakpoints);
   const disasmGoto = useWorkspace((s) => s.disasmGoto);
   const [lines, setLines] = useState<DisasmLine[]>([]);

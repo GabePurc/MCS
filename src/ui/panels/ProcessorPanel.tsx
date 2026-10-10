@@ -16,8 +16,9 @@ const FLAG_DESC: Record<string, string> = {
 const SLEEP_MODES = ['Idle', 'ADC Noise Reduction', 'Power-down', 'Power-save', 'Standby', 'Extended Standby'];
 
 export function ProcessorPanel(): JSX.Element {
-  const arm = useSim((s) => s.spec?.arch === 'arm');
-  return arm ? <ArmProcessorPanel /> : <AvrProcessorPanel />;
+  const arch = useSim((s) => s.spec?.arch);
+  if (arch === 'riscv') return <EmptyHint>RISC-V devices (ESP32-C3) are not yet supported by this panel (Stage E3).</EmptyHint>;
+  return arch === 'arm' ? <ArmProcessorPanel /> : <AvrProcessorPanel />;
 }
 
 function AvrProcessorPanel(): JSX.Element {

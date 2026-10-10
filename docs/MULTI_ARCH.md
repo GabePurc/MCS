@@ -95,12 +95,52 @@ if wanted.
   * Simplifications: M-mode only (no U-mode/PMP; MPP reads as 3), `time`/`mcountinhibit`/hpm counters absent or
     read-as-zero, misaligned loads/stores trap (like the ESP32-C3 core), `ebreak` can be a host breakpoint
     (`halt_on_ebreak`), `mtval` holds the instruction bits for illegal instructions and the pc for `ebreak`.
-* **E2 (planned): ESP32-C3 device + Target.** `Esp32c3` device description (memory map from the TRM, IO MUX/GPIO
-  matrix pins, `DeviceRef::Riscv`), interrupt matrix + the ESP32-C3 INTC (CPU interrupts 1-31 with priorities,
-  thresholds and edge/level types driving `Machine::set_irq_pending`), SYSTEM/clock, GPIO, UART0/1, TIMG0/1,
-  SYSTIMER; `riscv::target` implementing `Target` (registers, breakpoints, step over/out, disassembly through
-  `mcs_api`), ELF `EM_RISCV` + flash image loading (`esptool`-style app images), custom CSR hook for the C3
-  GPIO/performance-counter CSRs.
+* **E2 (done on the Rust side; UI = E3): ESP32-C3 device + `Target`.**
+  * Devices: `ESP32-C3` (QFN32, external flash assumed 4 MiB) and `ESP32-C3FH4` (4 MiB in-package flash; pins 17-23 are
+    connected to it) as `DeviceRef::Riscv` (`mcs_core::riscv::{device, devices}`, arch tag `"riscv"`). Peripheral base
+    addresses, register offsets/fields/reset values (about 560 registers for the UI register view) and interrupt matrix
+    source numbers come from Espressif's official `esp32c3.svd` (Apache-2.0) through `gen_esp32c3.py` -> `esp32c3_gen.rs`
+    (the SVD is not checked in); memory map, clocks, pins and boot behaviour are from the TRM / datasheet and cited in
+    the module docs, with the unverified items marked as assumptions (QFN32 pin numbering and IO MUX function names
+    were written from memory of the datasheet, GPIO matrix constant-input encoding, `GPIO_STRAP_REG` bit layout).
+  * Memory: ROM (384 KiB IBUS / 128 KiB DBUS) is mapped but empty and not executable; the machine stops with
+    `StopReason::RomCall` (message with the ROM address and `ra`) when the pc enters it. SRAM0 16 KiB (IRAM only) +
+    SRAM1 384 KiB (IRAM 0x4038_0000 and DRAM 0x3FC8_0000 alias one memory), RTC FAST 8 KiB at 0x5000_0000. Flash is a
+    simplified cache/MMU: the flash image is mapped linearly at IROM 0x4200_0000 (offset = vaddr - base) and, because
+    IDF-style images link IROM and DROM both at +0x20, DROM 0x3C00_0000 starts at a 64 KiB aligned flash offset behind the
+    IROM data (`Bus::set_window_offset`, chosen at load time); no page-granular MMU, cache or wait states. The peripheral
+    page 0x6000_0000-0x600D_0000 is filled with catch-all devices (reads 0, writes ignored, one warning per 4 KiB page).
+  * Loading is "direct boot": `LoadedProgram.segments` (new; absolute-address chunks) hold the ELF `PT_LOAD` segments
+    (`EM_RISCV` 243) or the segments of an ESP-IDF app image (`.bin`, magic 0xE9, `mcs_formats::espimage`); `Esp32c3::load`
+    writes them to flash/RAM by address, re-applies the RAM ones at every power-on, and starts at the entry point with the
+    peripherals in their reset state (CPU on XTAL/2 = 20 MHz as per the SYSTEM reset values, `mie` all ones, watchdogs
+    disabled, no ROM or 2nd stage bootloader, no flash encryption/secure boot). `flash`/`flash_base` of the program carry the
+    IROM part for the disassembly view. DWARF line info and symbols work as for ARM.
+  * Peripherals, all event driven on the shared scheduler (`riscv::bus::Cx` carries scheduler, `Sys` and the interrupt
+    controller; devices are dispatched through `Mmio` with `on_event`/`on_pin`/`on_clock_change`/`reset`; scheduler events due
+    before a register access are dispatched first, so reads are exact): SYSTEM (CPU clock: XTAL/(PRE_DIV+1), PLL 80/160 MHz,
+    RC_FAST/(PRE_DIV+1); APB 80 MHz under the PLL, else = CPU; clock-enable gating for UART/TIMG, `PERIP_RST_EN` resets the
+    peripheral, `CPU_INTR_FROM_CPU_n` software interrupts); INTERRUPT_CORE0 (62 sources -> CPU interrupts 1-31 with enable,
+    level/edge type, priority 0-15, threshold; the controller presents the single winner - highest priority, lowest number among
+    equals, `priority >= threshold` - to the core as the matching `mip` bit); SYSTIMER (2 x 52-bit units at 16 MHz, 3 comparators,
+    target and period modes); TIMG0/1 T0 (54-bit, divider, up/down, alarm with auto-reload, XTAL or APB source; MWDT registers
+    stored, never reset); RTC_CNTL (stored; `SW_SYS_RST` resets the system; RTC/super watchdogs never fire); GPIO + IO MUX (22 pads,
+    W1TS/W1TC, matrix `OUT_SEL`/`OEN_SEL`/`IN_SEL` for UART0/1, pull-ups, input enable, GPIO interrupts via source 16);
+    UART0/1 (128-byte FIFOs, CLKDIV/FRAG baud from the selected source, bit-level TX/RX on the matrix signals, threshold/timeout/
+    done/error interrupts, loopback); USB Serial/JTAG EP1 (bytes appear in the Serial Monitor at once). The Serial Monitor is
+    bridged to UART0 (GPIO21 TX / GPIO20 RX, 115200 8N1) by default. Custom CSRs through `CsrHook`: PMP registers (stored),
+    trigger module and performance counters (read 0, writes ignored), dedicated-GPIO CSRs (stored, unconnected).
+  * `Esp32c3` (`mcs_sim::riscv::esp32c3`) owns the `Machine` and implements `Target`: load/reset/power cycle, breakpoints (the
+    machine's `CHK` loop variant, a 64-bit bloom filter keeps checked runs near full speed), run-to, step into/over/out at
+    instruction and source level (call depth from `jal(r)`/`ret`, trap nesting ignored), call stack from `ra` + a stack scan for
+    return addresses with static targets recovered from `jal` / `auipc`+`jalr`, pins/serial/stimulus, debugger writes,
+    snapshots with `CoreState::Riscv` and the register values (`io`). `mcs-api` disassembles RISC-V flash images; the AVR
+    assemblers refuse RISC-V devices. Tests: `crates/mcs-sim/tests/esp32c3.rs` with programs built by
+    `tests/esp32c3/gen_programs.py` (rustc `riscv32imc` + rust-lld, ELFs checked in under `tests/esp32c3/elf/`).
+  * Simplifications / not modelled: the flash MMU/cache (above), instruction timing (E1 table, no flash wait states), the
+    RTC slow clock/timer, deep/light sleep, EFUSE (reads 0, so no MAC address), RNG, SPI/I2C/LEDC/ADC/TWAI/RMT/DMA/crypto
+    (catch-all devices), the USB host-to-device direction, GPIO sleep/hold features, UART flow control/RS485/IrDA/autobaud, the
+    fractional `SCLK_DIV_A/B`, PMP enforcement, dedicated GPIO routing, JTAG. TIMG watchdogs and RTC watchdogs are stored only.
 * **E3 (planned): UI + more peripherals.** RISC-V Processor panel (x0-x31 with ABI names, pc, mstatus/mie/mip/
   mtvec/mcause), ESP32-C3 pin diagram, serial/waveform adapted; then SPI/I2C/LEDC/ADC and the classic ESP32
   (Xtensa LX6) if wanted.

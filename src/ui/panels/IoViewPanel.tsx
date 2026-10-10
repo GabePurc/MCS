@@ -19,8 +19,9 @@ function popcount(m: number): number {
 
 /** Peripheral register view: the AVR (Atmel Studio style) or the ARM variant. */
 export function IoViewPanel(): JSX.Element {
-  const arm = useSim((s) => s.spec?.arch === 'arm');
-  return arm ? <ArmIoView /> : <AvrIoView />;
+  const arch = useSim((s) => s.spec?.arch);
+  if (arch === 'riscv') return <EmptyHint>RISC-V devices (ESP32-C3) are not yet supported by this panel (Stage E3).</EmptyHint>;
+  return arch === 'arm' ? <ArmIoView /> : <AvrIoView />;
 }
 
 /** Atmel Studio style I/O view: peripherals > registers > bits, live values, editable. */

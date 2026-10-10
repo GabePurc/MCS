@@ -11,6 +11,7 @@ import { clearBreakpoints } from '../state/workspace';
  * them exist on a package (see `existingGpios`); the names of the others are still well-formed.
  */
 export function gpioNames(spec: DeviceSpec): string[] {
+  if (spec.arch === 'riscv') return Array.from({ length: spec.gpioCount }, (_, i) => `GPIO${i}`);
   if (spec.arch === 'arm') return Array.from({ length: spec.gpioCount }, (_, i) => `P${String.fromCharCode(65 + (i >> 4))}${i & 15}`);
   const names = Array.from({ length: spec.gpioCount }, (_, i) => `GPIO${i}`);
   for (const p of spec.pins) if (p.gpio !== undefined) names[p.gpio] = p.name;
@@ -53,6 +54,6 @@ export function selectDevice(id: string): void {
 /** Rows of the logic analyzer: every GPIO on AVR parts, only the ones on the package on ARM (index gaps). */
 export function waveformRows(spec: DeviceSpec): { pin: number; name: string }[] {
   const names = gpioNames(spec);
-  const pins = spec.arch === 'arm' ? existingGpios(spec) : names.map((_, i) => i);
+  const pins = spec.arch !== 'avr' ? existingGpios(spec) : names.map((_, i) => i);
   return pins.map((pin) => ({ pin, name: names[pin] }));
 }

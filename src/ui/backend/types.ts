@@ -49,6 +49,8 @@ export interface LoadedProgram {
   lines: LineEntry[];
   device?: string;
   diagnostics: Diagnostic[];
+  /** Additional loadable segments (RISC-V: address + bytes). */
+  segments?: { address: number; data: number[] }[];
 }
 
 // ---------------------------------------------------------------- device.rs
@@ -252,7 +254,7 @@ export type SimCommand =
   | { type: 'requestState' };
 
 /** `pc` is in the architecture's native unit; `sreg` is AVR-only, the rest ARM-only. */
-export type CpuField = 'pc' | 'sp' | 'sreg' | 'xpsr' | 'msp' | 'psp' | 'lr' | 'control' | 'primask' | 'basepri' | 'faultmask' | 'fpscr';
+export type CpuField = 'pc' | 'sp' | 'sreg' | 'xpsr' | 'msp' | 'psp' | 'lr' | 'control' | 'primask' | 'basepri' | 'faultmask' | 'fpscr' | 'mstatus' | 'mie' | 'mtvec' | 'mepc' | 'mcause' | 'mtval' | 'mscratch';
 
 export interface SerialConfig {
   /** GPIO decoded into the Serial Monitor (the MCU's TX). */
@@ -300,8 +302,42 @@ export interface SimMessage {
   text: string;
 }
 
+/** RISC-V (ESP32-C3) device spec (mirrors mcs_core::riscv::device::RiscvDeviceSpec). */
+export interface RiscvDeviceSpec {
+  arch: 'riscv';
+  id: string;
+  name: string;
+  family: string;
+  coreName: string;
+  isa: string;
+  flashBase: number;
+  dromBase: number;
+  flashSize: number;
+  flashExternal: boolean;
+  sramBase: number;
+  sramSize: number;
+  iramBase: number;
+  extraRam: { name: string; base: number; size: number }[];
+  memoryMap: { name: string; base: number; size: number; perm: string; desc: string }[];
+  registers: MmioRegisterSpec[];
+  groups: { name: string; desc: string }[];
+  interrupts: { source: number; name: string; desc: string }[];
+  cpuInterrupts: number;
+  package: string;
+  pins: PinSpec[];
+  gpioCount: number;
+  strapping: number[];
+  clock: { xtalHz: number; rcFastHz: number; rcSlowHz: number; systimerHz: number; cpuMaxHz: number };
+  vcc: number;
+  vccRange: [number, number];
+  speedGrades: [number, number][];
+  datasheet: string;
+  die: { widthUm: number; heightUm: number; photoUrl: string; photoCredit: string } | null;
+  peripheralSet: unknown;
+}
+
 /** Any supported device spec; discriminated by `arch` (more architectures are added to the union). */
-export type DeviceSpec = AvrDeviceSpec | ArmDeviceSpec;
+export type DeviceSpec = AvrDeviceSpec | ArmDeviceSpec | RiscvDeviceSpec;
 export type Arch = DeviceSpec['arch'];
 
 /** Architecture-specific CPU state as received from Rust. */
@@ -321,13 +357,28 @@ export type RawCoreState =
       /** S0-S31 as raw bits (absent without an FPU). */
       fpr?: number[];
       fpscr: number;
+    }
+  | {
+      arch: 'riscv';
+      /** x0-x31 (x0 is always 0). */
+      x: number[];
+      mstatus: number;
+      mie: number;
+      mip: number;
+      mtvec: number;
+      mepc: number;
+      mcause: number;
+      mtval: number;
+      mscratch: number;
     };
 /** CPU state as used by the UI (typed arrays). */
 export type CoreState =
   | { arch: 'avr'; sp: number; sreg: number; regs: Uint8Array }
-  | { arch: 'arm'; r: Uint32Array; xpsr: number; msp: number; psp: number; control: number; primask: boolean; basepri: number; faultmask: boolean; fpr: Uint32Array; fpscr: number };
+  | { arch: 'arm'; r: Uint32Array; xpsr: number; msp: number; psp: number; control: number; primask: boolean; basepri: number; faultmask: boolean; fpr: Uint32Array; fpscr: number }
+  | { arch: 'riscv'; x: Uint32Array; mstatus: number; mie: number; mip: number; mtvec: number; mepc: number; mcause: number; mtval: number; mscratch: number };
 export type AvrCore = Extract<CoreState, { arch: 'avr' }>;
 export type ArmCore = Extract<CoreState, { arch: 'arm' }>;
+export type RiscvCore = Extract<CoreState, { arch: 'riscv' }>;
 
 /** Raw state as received from Rust. */
 export interface RawMachineState {
@@ -391,6 +442,7 @@ export interface MachineState extends Omit<RawMachineState, 'core' | 'data' | 'i
 
 export const isAvr = (spec: DeviceSpec): spec is AvrDeviceSpec => spec.arch === 'avr';
 export const isArm = (spec: DeviceSpec): spec is ArmDeviceSpec => spec.arch === 'arm';
+export const isRiscv = (spec: DeviceSpec): spec is RiscvDeviceSpec => spec.arch === 'riscv';
 
 /** AVR CPU state of a snapshot (throws for other architectures). */
 export function avrCore(st: MachineState): AvrCore {
@@ -404,14 +456,20 @@ export function armCore(st: MachineState): ArmCore {
   return st.core;
 }
 
-/** Bytes per unit of the architecture's native program counter (AVR: 16-bit words, ARM: bytes). */
+/** RISC-V CPU state of a snapshot (throws for other architectures). */
+export function riscvCore(st: MachineState): RiscvCore {
+  if (st.core.arch !== 'riscv') throw new Error(`Expected a RISC-V state, got ${st.core.arch}`);
+  return st.core;
+}
+
+/** Bytes per unit of the architecture's native program counter (AVR: 16-bit words, ARM/RISC-V: bytes). */
 export const pcUnit = (arch: Arch): number => (arch === 'avr' ? 2 : 1);
 /** Native program counter -> byte address in the program's address space. */
 export const pcToBytes = (arch: Arch, pc: number): number => pc * pcUnit(arch);
 /** Byte address -> native program counter (rounded down). */
 export const bytesToPc = (arch: Arch, bytes: number): number => Math.floor(bytes / pcUnit(arch));
 /** Address of the first flash byte on the bus (0 on AVR). */
-export const flashBaseOf = (spec: DeviceSpec): number => (spec.arch === 'arm' ? spec.flashBase : 0);
+export const flashBaseOf = (spec: DeviceSpec): number => (spec.arch === 'avr' ? 0 : spec.flashBase);
 
 /** Whether the FPU is present (FPv4-SP or FPv5). */
 export const armHasFpu = (spec: ArmDeviceSpec): boolean => (spec.features & 6) !== 0;
@@ -420,9 +478,9 @@ export const armHasDouble = (spec: ArmDeviceSpec): boolean => (spec.features & 4
 
 /** Converts the raw core state of a snapshot (typed arrays). */
 export function convertCore(c: RawCoreState): CoreState {
-  return c.arch === 'avr'
-    ? { ...c, regs: Uint8Array.from(c.regs) }
-    : { ...c, r: Uint32Array.from(c.r), fpr: Uint32Array.from(c.fpr ?? []) };
+  if (c.arch === 'avr') return { ...c, regs: Uint8Array.from(c.regs) };
+  if (c.arch === 'riscv') return { ...c, x: Uint32Array.from(c.x) };
+  return { ...c, r: Uint32Array.from(c.r), fpr: Uint32Array.from(c.fpr ?? []) };
 }
 
 export type SimOutput =

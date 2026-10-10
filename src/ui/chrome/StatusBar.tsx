@@ -33,7 +33,7 @@ export function StatusBar(): JSX.Element {
     text = st?.sleeping ? 'Running (CPU sleeping)' : 'Running';
   } else if (lastStop && st) {
     led = lastStop.reason === 'invalid' ? 'error' : 'pause';
-    const where = `0x${pcToBytes(spec?.arch ?? 'avr', lastStop.pc).toString(16).toUpperCase().padStart(spec?.arch === 'arm' ? 8 : 4, '0')}`;
+    const where = `0x${pcToBytes(spec?.arch ?? 'avr', lastStop.pc).toString(16).toUpperCase().padStart(spec && spec.arch !== 'avr' ? 8 : 4, '0')}`;
     text = {
       breakpoint: `Breakpoint hit at ${where}`,
       break: `BREAK at ${where}`,
@@ -41,7 +41,7 @@ export function StatusBar(): JSX.Element {
       step: `Paused at ${where}`,
       pause: `Paused at ${where}`,
       runTo: `Paused at ${where}`,
-      reset: spec?.arch === 'arm' ? `Reset - paused at ${where}` : 'Reset - paused at 0x0000',
+      reset: spec && spec.arch !== 'avr' ? `Reset - paused at ${where}` : 'Reset - paused at 0x0000',
       load: 'Program loaded - paused at reset vector',
     }[lastStop.reason];
   }

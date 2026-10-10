@@ -80,7 +80,7 @@ export function PinsPanel(): JSX.Element {
     <div className="panel">
       <div className="panel-scroll">
         <Section title={`${spec.name} - ${spec.package}`}>
-          {spec.arch === 'arm' ? <QuadDiagram pins={spec.pins} states={st.pins} name={spec.name} pkg={spec.package} vcc={st.vcc} /> : <ChipDiagram pins={spec.pins} states={st.pins} name={spec.name} vcc={st.vcc} />}
+          {spec.arch !== 'avr' ? <QuadDiagram pins={spec.pins} states={st.pins} name={spec.name} pkg={spec.package} vcc={st.vcc} /> : <ChipDiagram pins={spec.pins} states={st.pins} name={spec.name} vcc={st.vcc} />}
         </Section>
         <Section title="Pin stimulus">
           <table className="grid-table pin-table">
@@ -173,8 +173,8 @@ export function PinsPanel(): JSX.Element {
             <input
               type="range"
               className="w7-slider"
-              min={spec.arch === 'arm' ? spec.vccRange[0] : 1.8}
-              max={spec.arch === 'arm' ? spec.vccRange[1] : 5.5}
+              min={spec.arch !== 'avr' ? spec.vccRange[0] : 1.8}
+              max={spec.arch !== 'avr' ? spec.vccRange[1] : 5.5}
               step={0.05}
               value={vcc}
               onChange={(e) => {
