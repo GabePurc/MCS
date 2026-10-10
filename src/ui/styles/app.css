@@ -409,3 +409,17 @@
 .popout-dock { margin-right: 8px; height: 21px; gap: 4px; }
 .status-cell.clickable { cursor: pointer; }
 .status-cell.clickable:hover { text-decoration: underline; }
+
+/* Custom microcontroller dialog */
+.cmcu-top { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; }
+.cmcu-top .grow { flex: 1; min-width: 120px; }
+.cmcu-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.cmcu-cols .w7-group { margin: 0; }
+.cmcu-top .seg-btn { white-space: nowrap; width: auto; padding: 0 8px; }
+.cmcu-size { display: flex; align-items: center; gap: 6px; }
+.cmcu-size .w7-input { width: 90px; }
+.cmcu-num { width: 70px; }
+.cmcu-two { grid-template-columns: max-content 70px max-content 70px; }
+.cmcu-summary { margin-top: 8px; padding: 6px 8px; background: #fff; border: 1px solid var(--border-soft); min-height: 36px; }
+.cmcu-summary.error { background: #fff4f4; border-color: #e3b4b4; }
+.w7-input.invalid { border-color: #d33; }

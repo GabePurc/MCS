@@ -26,6 +26,10 @@ const INC_PREFIXES: [(&str, &str); 6] =
 
 /// avrasm2 include name for a device: ATtiny10 -> "tn10def.inc", ATmega328P -> "m328Pdef.inc".
 pub fn def_include_name(spec: &AvrDeviceSpec) -> String {
+    if spec.id.starts_with("custom-") {
+        // User-defined devices: "<id>def.inc" (matches `devices::id_from_include_name`).
+        return format!("{}def.inc", spec.id);
+    }
     let name = spec.name.as_str();
     for (prefix, short) in INC_PREFIXES {
         if name.get(..prefix.len()).is_some_and(|h| h.eq_ignore_ascii_case(prefix)) {
@@ -215,7 +219,8 @@ pub fn generate_def_include(spec: &AvrDeviceSpec) -> String {
          \n\
          ; ***** SPECIFY DEVICE ***************************************************\n\
          .device {}",
-        spec.name, spec.core_name, spec.flash_size, spec.sram_size, spec.eeprom_size, spec.name
+        spec.name, spec.core_name, spec.flash_size, spec.sram_size, spec.eeprom_size,
+        if spec.id.starts_with("custom-") { spec.id.as_str() } else { spec.name.as_str() }
     );
     for e in build_entries(spec) {
         match e {

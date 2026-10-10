@@ -155,7 +155,7 @@ fn describe_kind(kind: OperandKind) -> &'static str {
 }
 
 fn supported_devices() -> String {
-    devices::all().iter().map(|d| d.name.as_str()).collect::<Vec<_>>().join(", ")
+    devices::list().iter().map(|d| d.name.as_str()).collect::<Vec<_>>().join(", ")
 }
 
 // ---------------------------------------------------------------------------------------------

@@ -69,6 +69,7 @@ const MENUS: TopMenu[] = [
           label: fam,
           items: () => devs.filter((d) => d.family === fam).map((d): MenuItem => ({ kind: 'action', label: `${d.name}  (${d.flashSize >= 1024 ? `${d.flashSize / 1024} KB` : `${d.flashSize} B`} flash, ${d.sramSize} B SRAM, ${d.package})`, checked: d.id === cur, run: () => selectDevice(d.id) })),
         })),
+        sep, cmd('device.custom'),
         sep, cmd('device.info'), cmd('device.chip'),
         sep, cmd('device.fuses'), cmd('device.supply'),
       ];

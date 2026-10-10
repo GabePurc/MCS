@@ -143,6 +143,21 @@ fn instruction_set(device_id: String) -> Vec<InsnInfo> {
 }
 
 #[tauri::command]
+fn register_custom_devices(configs: Vec<mcs_api::CustomMcuConfig>) -> Vec<mcs_api::CustomRegistration> {
+    mcs_api::register_custom_devices(&configs)
+}
+
+#[tauri::command]
+fn custom_device_preview(config: mcs_api::CustomMcuConfig) -> Result<mcs_api::CustomPreview, String> {
+    mcs_api::custom_device_preview(&config)
+}
+
+#[tauri::command]
+fn custom_device_defaults() -> mcs_api::CustomMcuConfig {
+    mcs_api::custom_device_defaults()
+}
+
+#[tauri::command]
 fn def_include(device_id: String) -> Option<(String, String)> {
     mcs_api::def_include(&device_id)
 }
@@ -183,6 +198,9 @@ pub fn run() {
             export_hex,
             disassemble,
             instruction_set,
+            register_custom_devices,
+            custom_device_preview,
+            custom_device_defaults,
             def_include,
         ])
         .run(tauri::generate_context!())

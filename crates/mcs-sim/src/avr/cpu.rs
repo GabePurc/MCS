@@ -5,7 +5,7 @@
 use std::sync::Arc;
 
 use mcs_core::avr::device::{fuse_field_value, AvrDeviceSpec};
-use mcs_core::avr::isa::{self, feature, DecodeTable, OP_COUNT};
+use mcs_core::avr::isa::{self, feature, op, DecodeTable, OP_COUNT};
 use serde::Serialize;
 
 pub const SREG_C: u8 = 0x01;
@@ -67,6 +67,11 @@ pub struct Cpu {
     pub flash: Vec<u8>,
     pub flash_words: u32,
     pub pc_mask: u32,
+    /// 22-bit PC (flash > 128 KB): calls, returns and interrupts use 3 stack bytes.
+    pub pc3: bool,
+    /// Data addresses of EIND / RAMPZ (None = absent, reads as 0).
+    pub eind_addr: Option<u16>,
+    pub rampz_addr: Option<u16>,
     /// Data space backing store (registers on classic cores + I/O + SRAM).
     pub data: Vec<u8>,
     pub sram_start: u16,
@@ -115,6 +120,9 @@ pub struct Cpu {
     pub breakpoints: Vec<bool>,
     /// Per-word execution counters (empty = profiling off). Filled by `Machine::run`.
     pub exec_counts: Vec<u32>,
+    /// Words whose counter went from 0 to 1 since the last take (capacity = all words, so
+    /// pushing never allocates).
+    pub exec_touched: Vec<u32>,
     pub shadow_stack: Vec<CallFrame>,
     pub stop_reason: StopReason,
     pub halt: bool,
@@ -132,6 +140,15 @@ impl Cpu {
             cyc[d.op as usize] = if rc { d.cycles_rc } else { d.cycles };
             len[d.op as usize] = d.words;
         }
+        let pc3 = flash_words > 65536;
+        if pc3 && !rc {
+            // Microchip AVR Instruction Set Manual (DS40002198B): cycle counts with a 22-bit PC.
+            for (o, c) in [(op::CALL, 5), (op::RCALL, 4), (op::ICALL, 4), (op::EICALL, 4), (op::RET, 5), (op::RETI, 5)] {
+                cyc[o as usize] = c;
+            }
+        }
+        let pc_mask = flash_words.next_power_of_two() - 1;
+        let padded = pc_mask as usize + 1;
         let vector_count = spec.vector_count();
         let mut cpu = Self {
             spec,
@@ -145,7 +162,10 @@ impl Cpu {
             instructions: 0,
             flash: vec![0xff; spec.flash_size as usize],
             flash_words,
-            pc_mask: flash_words - 1,
+            pc_mask,
+            pc3,
+            eind_addr: spec.register("EIND").map(|r| r.addr),
+            rampz_addr: spec.register("RAMPZ").map(|r| r.addr),
             data: vec![0; data_end as usize],
             sram_start: spec.sram_start,
             data_end,
@@ -156,9 +176,9 @@ impl Cpu {
             eeprom_version: 0,
             reset_vector: 0,
             vector_base: 0,
-            ops: vec![0; flash_words as usize],
-            oa: vec![0; flash_words as usize],
-            ob: vec![0; flash_words as usize],
+            ops: vec![0; padded],
+            oa: vec![0; padded],
+            ob: vec![0; padded],
             cyc,
             len,
             io_owner: vec![IO_PLAIN; spec.sram_start as usize],
@@ -172,8 +192,9 @@ impl Cpu {
             sleeping: false,
             sleep_mode: 0,
             wake_mask: Vec::new(),
-            breakpoints: vec![false; flash_words as usize],
+            breakpoints: vec![false; padded],
             exec_counts: Vec::new(),
+            exec_touched: Vec::new(),
             shadow_stack: Vec::with_capacity(64),
             stop_reason: StopReason::None,
             halt: false,
@@ -208,11 +229,14 @@ impl Cpu {
     #[inline]
     pub fn flash_word(&self, word_addr: u32) -> u16 {
         let i = ((word_addr & self.pc_mask) << 1) as usize;
-        u16::from_le_bytes([self.flash[i], self.flash[i + 1]])
+        match self.flash.get(i..i + 2) {
+            Some(b) => u16::from_le_bytes([b[0], b[1]]),
+            None => 0xffff, // padding beyond a non-power-of-two flash reads as erased
+        }
     }
 
     fn predecode_all(&mut self) {
-        for i in 0..self.flash_words {
+        for i in 0..=self.pc_mask {
             self.predecode(i);
         }
     }
@@ -285,7 +309,7 @@ impl Cpu {
 
     pub(crate) fn pop_frame(&mut self) {
         // Discard frames whose stack slot was unwound (handles manual stack manipulation).
-        while self.shadow_stack.last().is_some_and(|f| (f.sp as u32 + 2) < self.sp as u32) {
+        while self.shadow_stack.last().is_some_and(|f| (f.sp as u32 + 2 + self.pc3 as u32) < self.sp as u32) {
             self.shadow_stack.pop();
         }
         self.shadow_stack.pop();

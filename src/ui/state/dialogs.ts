@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 
-export type DialogId = 'about' | 'toolchain' | 'toolchainHelp' | 'fuses' | 'supply' | 'speed' | 'update' | 'include' | 'gotoAddress';
+export type DialogId = 'about' | 'toolchain' | 'toolchainHelp' | 'fuses' | 'supply' | 'speed' | 'update' | 'include' | 'gotoAddress' | 'customDevice';
 
 interface DialogStore {
   open: DialogId | null;

@@ -171,6 +171,8 @@ pub enum PeripheralSet {
     MegaX8,
     /// ATtiny25/45/85.
     TinyX5,
+    /// User-defined devices (`devices::custom`): wired by register/pin naming convention.
+    Custom,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -226,7 +228,7 @@ pub struct AvrDeviceSpec {
 
 impl AvrDeviceSpec {
     pub fn ram_end(&self) -> u16 {
-        self.sram_start + self.sram_size - 1
+        (self.sram_start as u32 + self.sram_size as u32 - 1) as u16
     }
 
     pub fn flash_words(&self) -> u32 {

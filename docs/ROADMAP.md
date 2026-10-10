@@ -40,6 +40,14 @@ Update this file when work is finished (only list items that are done in the rep
 - [x] ATmega48PA/88PA/168PA/328P and ATtiny25/45/85: specs, generalized timers (8/16-bit, shared flag registers, GTCCR), ATtiny85 PLL Timer1, USART, SPI, TWI (empty bus), USI, EEPROM, 10-bit ADC, comparator ACME/bandgap, INT0/INT1/PCINT groups, classic system control (CKSEL fuses, CLKPR, BOD, BOOTRST/IVSEL), multi-byte fuses, canonical sleep modes
 - [x] Serial Monitor (UART decode/inject on any pin), EEPROM view/edit, fuse dialog with field menus and presets, DIP packages in the Chip View
 
+### User requests (GitHub issue #3)
+- [x] Custom microcontrollers (Device > Custom Microcontroller...): any flash (up to 8 MB), SRAM (up to the 64 KB data space), EEPROM, GPIO ports, INT pins, 8/16-bit timers, USARTs, SPI, TWI, ADC channels, comparator, multiplier, package, clock; only architectural limits (255 vectors, data space, 255 GPIOs); generated on the ATmega2560 register layout and wired from the spec
+- [x] Core: non-power-of-two flash sizes, 22-bit PC (3-byte return addresses, CALL/RET/interrupt timing), EIJMP/EICALL via EIND, ELPM via RAMPZ
+- [x] Build > Clear Output on Build / Run
+- [x] Instruction help: editor hover on mnemonics (operation, flags, cycles, how to use it, example) for every instruction and assembler alias; usage + example in the Instruction Set panel, aliases listed
+- [x] Chip View: zoom into FLASH / SRAM / EEPROM to read individual words and bytes (addresses, disassembly when large); clicking a memory block zooms there (from the 3D view too); costs scale with the visible area / executed code, not the memory size
+- [x] Fix: Tab inserts spaces at the cursor (indents only with a selection)
+
 ## Next
 - [ ] DWARF variable/type info (`.debug_info`) for a typed Watch window and locals
 - [ ] Data breakpoints (watchpoints) and conditional / hit-count breakpoints

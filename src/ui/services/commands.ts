@@ -239,6 +239,7 @@ const list: CommandDef[] = [
   { id: 'speed.custom', label: 'Custom Speed...', icon: 'Settings', run: () => openDialog('speed') },
 
   // Device / tools / help
+  { id: 'device.custom', label: 'Custom Microcontroller...', icon: 'Chip3D', run: () => openDialog('customDevice') },
   { id: 'device.fuses', label: 'Fuses & Lock Bits...', icon: 'Fuse', run: () => openDialog('fuses') },
   { id: 'device.supply', label: 'Supply & Clock...', icon: 'Settings', run: () => openDialog('supply') },
   { id: 'tools.toolchain', label: 'Toolchain Options...', icon: 'Settings', run: () => openDialog('toolchain') },

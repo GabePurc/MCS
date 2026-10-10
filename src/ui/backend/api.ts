@@ -5,7 +5,7 @@
 import { Channel, invoke } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { open, save, ask, message } from '@tauri-apps/plugin-dialog';
-import type { BuildOutcome, DeviceSummary, DisasmLine, InsnInfo, McAnnotations, SimCommand, SimOutput, ToolchainInfo } from './types';
+import type { BuildOutcome, CustomMcuConfig, CustomPreview, CustomRegistration, DeviceSummary, DisasmLine, InsnInfo, McAnnotations, SimCommand, SimOutput, ToolchainInfo } from './types';
 import { core, wasmUrl } from './wasmHost';
 
 /** True when running inside the Tauri shell (false in a plain browser during `npm run dev:web`). */
@@ -35,6 +35,7 @@ export function simAttach(onOutput: (o: SimOutput) => void): Promise<void> {
     browserWorker = new Worker(new URL('./simWorker.ts', import.meta.url), { type: 'module' });
     browserWorker.onmessage = (e: MessageEvent<SimOutput>) => onOutput(e.data);
     browserWorker.postMessage({ init: new URL(wasmUrl, location.href).href });
+    if (customConfigs.length) browserWorker.postMessage({ register: customConfigs });
     return Promise.resolve();
   }
   const channel = new Channel<SimOutput>();
@@ -49,6 +50,25 @@ export function simCommand(cmd: SimCommand): void {
   }
   call('sim_command', { cmd }).catch((e) => console.error('sim_command failed', e));
 }
+
+// ---------------------------------------------------------------- custom devices
+/** Last registered set (browser mode re-sends it to a simulation worker started later). */
+let customConfigs: CustomMcuConfig[] = [];
+
+/** Registers user-defined devices with the backend (and the browser simulation worker). */
+export async function registerCustomDevices(configs: CustomMcuConfig[]): Promise<CustomRegistration[]> {
+  if (inTauri) return call<CustomRegistration[]>('register_custom_devices', { configs });
+  customConfigs = configs;
+  browserWorker?.postMessage({ register: configs });
+  return wasm<CustomRegistration[]>({ method: 'registerCustomDevices', configs });
+}
+
+export async function customDevicePreview(config: CustomMcuConfig): Promise<{ ok?: CustomPreview; error?: string }> {
+  if (inTauri) return call<CustomPreview>('custom_device_preview', { config }).then((ok) => ({ ok }), (e: unknown) => ({ error: String(e) }));
+  return wasm<{ ok?: CustomPreview; error?: string }>({ method: 'customDevicePreview', config });
+}
+
+export const customDeviceDefaults = () => (inTauri ? call<CustomMcuConfig>('custom_device_defaults') : wasm<CustomMcuConfig>({ method: 'customDeviceDefaults' }));
 
 // ---------------------------------------------------------------- build
 export const listDevices = () => (inTauri ? call<DeviceSummary[]>('list_devices') : wasm<DeviceSummary[]>({ method: 'listDevices' }));
@@ -81,10 +101,13 @@ export const importProgram = (path: string, deviceId: string) => {
 
 export const detectToolchain = (gccPath: string | null) => call<ToolchainInfo | null>('detect_toolchain', { gccPath });
 
-export const disassemble = (deviceId: string, flash: number[] | Uint8Array, labels: Record<number, string>) =>
-  inTauri
-    ? call<DisasmLine[]>('disassemble', { deviceId, flash: Array.from(flash), labels })
-    : wasm<DisasmLine[]>({ method: 'disassemble', deviceId, flash: Array.from(flash), labels });
+/** Disassembles the programmed part of `flash` (trailing erased words are left out: large parts have megabytes of them). */
+export function disassemble(deviceId: string, flash: number[] | Uint8Array, labels: Record<number, string>): Promise<DisasmLine[]> {
+  let end = flash.length;
+  while (end > 512 && flash[end - 1] === 0xff) end--;
+  const bytes = Array.from(flash.slice(0, Math.min(flash.length, (end + 3) & ~1)));
+  return inTauri ? call<DisasmLine[]>('disassemble', { deviceId, flash: bytes, labels }) : wasm<DisasmLine[]>({ method: 'disassemble', deviceId, flash: bytes, labels });
+}
 
 export const instructionSet = (deviceId: string) => (inTauri ? call<InsnInfo[]>('instruction_set', { deviceId }) : wasm<InsnInfo[]>({ method: 'instructionSet', deviceId }));
 

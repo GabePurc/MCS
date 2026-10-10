@@ -15,6 +15,8 @@ const WRITE_DECAY = 0.72;
 
 export class LiveModel {
   readonly heat: Float32Array;
+  /** Words with non-zero heat. */
+  readonly hot: number[] = [];
   readonly writes: Float32Array;
   readonly regWrites = new Float32Array(32);
   readonly activity = new Map<string, number>();
@@ -34,29 +36,29 @@ export class LiveModel {
   }
 
   update(st: MachineState): void {
-    // Execution heat: counts since the previous state (profiling), else the PC alone.
+    // Execution heat: counts since the previous state (profiling, sparse [word, count] pairs),
+    // else the PC alone. Only warm words are visited, so cost does not grow with flash size.
     const h = this.heat;
+    const hot = this.hot;
     let changed = false;
-    if (st.execHeat && st.execHeat.length === h.length) {
-      const c = st.execHeat;
-      for (let i = 0; i < h.length; i++) {
-        const add = c[i] ? Math.min(1, 0.3 + Math.log10(1 + c[i]) / 5) : 0;
-        const v = Math.max(h[i] * HEAT_DECAY, add);
-        if (v !== h[i]) {
-          h[i] = v < 0.004 ? 0 : v;
-          changed = true;
-        }
-      }
-    } else if (st.pc < h.length) {
-      for (let i = 0; i < h.length; i++) {
-        if (h[i]) {
-          h[i] = h[i] * HEAT_DECAY < 0.004 ? 0 : h[i] * HEAT_DECAY;
-          changed = true;
-        }
-      }
-      h[st.pc] = Math.max(h[st.pc], 0.6);
+    let n = 0;
+    for (let k = 0; k < hot.length; k++) {
+      const i = hot[k];
+      const v = h[i] * HEAT_DECAY;
+      h[i] = v < 0.004 ? 0 : v;
+      if (h[i]) hot[n++] = i;
       changed = true;
     }
+    hot.length = n;
+    const warm = (i: number, v: number) => {
+      if (i >= h.length || v <= h[i]) return;
+      if (!h[i]) hot.push(i);
+      h[i] = v;
+      changed = true;
+    };
+    const c = st.execHeat;
+    if (c && c.length) for (let k = 0; k + 1 < c.length; k += 2) warm(c[k], Math.min(1, 0.3 + Math.log10(1 + c[k + 1]) / 5));
+    else if (!c) warm(st.pc, 0.6);
     if (changed) this.heatVersion++;
 
     // Data writes and peripheral activity.
@@ -86,7 +88,7 @@ export class LiveModel {
   }
 
   data(st: MachineState, running: boolean): LiveData {
-    return { spec: this.spec, st, running, heat: this.heat, writes: this.writes, regWrites: this.regWrites, activity: this.activity, disasm: this.disasm, flash: this.flash, eeprom: this.eeprom };
+    return { spec: this.spec, st, running, heat: this.heat, writes: this.writes, regWrites: this.regWrites, activity: this.activity, disasm: this.disasm, flash: this.flash, eeprom: this.eeprom, hot: this.hot };
   }
 }
 

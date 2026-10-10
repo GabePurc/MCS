@@ -4,7 +4,9 @@
 
 use std::collections::HashMap;
 
+use mcs_core::avr::device::AvrDeviceSpec;
 use mcs_core::avr::devices;
+pub use mcs_core::avr::devices::CustomMcuConfig;
 use mcs_core::avr::isa::{self, DisasmContext};
 use mcs_core::avr::{isa_docs, isa_usage};
 use mcs_core::program::{Diagnostic, LoadedProgram};
@@ -66,18 +68,67 @@ pub struct InsnInfo {
 }
 
 pub fn list_devices() -> Vec<DeviceSummary> {
-    devices::all()
-        .iter()
-        .map(|d| DeviceSummary {
-            id: d.id.clone(),
-            name: d.name.clone(),
-            family: d.family.clone(),
-            flash_size: d.flash_size,
-            sram_size: d.sram_size,
-            package: d.package.clone(),
-            core_name: d.core_name.clone(),
-        })
-        .collect()
+    devices::list().into_iter().map(summary).collect()
+}
+
+fn summary(d: &AvrDeviceSpec) -> DeviceSummary {
+    DeviceSummary {
+        id: d.id.clone(),
+        name: d.name.clone(),
+        family: d.family.clone(),
+        flash_size: d.flash_size,
+        sram_size: d.sram_size,
+        package: d.package.clone(),
+        core_name: d.core_name.clone(),
+    }
+}
+
+/// Outcome of registering one custom device (`error` is None on success).
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CustomRegistration {
+    pub id: String,
+    pub error: Option<String>,
+}
+
+/// Registers (or replaces) user-defined devices in this process.
+pub fn register_custom_devices(configs: &[CustomMcuConfig]) -> Vec<CustomRegistration> {
+    configs.iter().map(|c| CustomRegistration { id: c.id.clone(), error: devices::register_custom(c).err() }).collect()
+}
+
+/// What a custom configuration turns into (for the editor's live summary).
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CustomPreview {
+    pub package: String,
+    pub pins: usize,
+    pub gpios: u8,
+    pub registers: usize,
+    pub vectors: usize,
+    pub core_name: String,
+    pub sram_start: u16,
+    pub ram_end: u16,
+    /// Peripheral groups ("TC1", "USART2", ...).
+    pub groups: Vec<String>,
+}
+
+pub fn custom_device_preview(config: &CustomMcuConfig) -> Result<CustomPreview, String> {
+    let d = config.build()?;
+    Ok(CustomPreview {
+        package: d.package.clone(),
+        pins: d.pins.len(),
+        gpios: d.gpio_count,
+        registers: d.registers.len(),
+        vectors: d.vector_count(),
+        core_name: d.core_name.clone(),
+        sram_start: d.sram_start,
+        ram_end: d.ram_end(),
+        groups: d.groups.iter().map(|g| g.name.clone()).collect(),
+    })
+}
+
+pub fn custom_device_defaults() -> CustomMcuConfig {
+    CustomMcuConfig::default()
 }
 
 /// Assembles a source with the built-in assembler. `includes` maps `.include` names to text.

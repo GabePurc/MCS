@@ -253,6 +253,8 @@ export interface LiveData {
   flash: Uint8Array | null;
   /** EEPROM contents (latest image). */
   eeprom: Uint8Array | null;
+  /** Flash words with non-zero heat. */
+  hot: number[];
   /** Decayed activity per register group (0..1). */
   activity: Map<string, number>;
   /** Disassembly text by word address. */
@@ -330,6 +332,60 @@ export function memoryGrid(b: Block, spec: AvrDeviceSpec, w: number, h: number):
   const cols = Math.max(1, Math.round(Math.sqrt(n * (w / (h - top)))));
   const rows = Math.ceil(n / cols);
   return { n, cols, base: b.kind === 'sram' ? spec.sramStart : 0, step: b.kind === 'flash' ? 2 : 1, top, cw: w / cols, ch: (h - top) / rows };
+}
+
+/** One pixel per flash word (programmed / erased), rebuilt only when the image or grid changes. */
+const flashImages = new WeakMap<Uint8Array, { cols: number; c: HTMLCanvasElement }>();
+const ERASED_FLASH = new Uint8Array(0);
+function flashImage(flash: Uint8Array | null, g: MemGrid): HTMLCanvasElement {
+  const key = flash ?? ERASED_FLASH;
+  const hit = flashImages.get(key);
+  if (hit && hit.cols === g.cols) return hit.c;
+  const rows = Math.ceil(g.n / g.cols);
+  const c = document.createElement('canvas');
+  c.width = g.cols;
+  c.height = rows;
+  const ctx = c.getContext('2d')!;
+  const img = ctx.createImageData(g.cols, rows);
+  const px = new Uint32Array(img.data.buffer);
+  // ABGR (little-endian): programmed #5b4f8c, erased #2c2742.
+  const on = 0xff8c4f5b;
+  const off = 0xff42272c;
+  for (let i = 0; i < g.n; i++) px[i] = !flash || flash[i * 2] !== 0xff || flash[i * 2 + 1] !== 0xff ? on : off;
+  ctx.putImageData(img, 0, 0);
+  flashImages.set(key, { cols: g.cols, c });
+  return c;
+}
+
+/** One pixel per SRAM / EEPROM byte (same colours as `memCell`), in a reused scratch canvas. */
+const byteCanvases = new Map<string, { c: HTMLCanvasElement; img: ImageData }>();
+function byteImage(b: Block, d: LiveData, g: MemGrid): HTMLCanvasElement {
+  const rows = Math.ceil(g.n / g.cols);
+  let e = byteCanvases.get(b.id);
+  if (!e || e.img.width !== g.cols || e.img.height !== rows) {
+    const c = document.createElement('canvas');
+    c.width = g.cols;
+    c.height = rows;
+    e = { c, img: c.getContext('2d')!.createImageData(g.cols, rows) };
+    byteCanvases.set(b.id, e);
+  }
+  const px = new Uint32Array(e.img.data.buffer);
+  const eep = b.kind === 'eeprom';
+  const { st, writes } = d;
+  const base = d.spec.sramStart;
+  for (let i = 0; i < g.n; i++) {
+    const a = base + i;
+    const v = eep ? d.eeprom?.[i] ?? 0xff : st.data[a] ?? 0;
+    const wr = eep ? 0 : writes[a] ?? 0;
+    let r: number, gg: number, bb: number;
+    if (wr > 0.03) [r, gg, bb] = [255, 170 - 40 * wr, 40];
+    else if (eep) [r, gg, bb] = [40 + v / 4, 40 + v / 3, 70 + v / 3];
+    else if (a > st.sp) [r, gg, bb] = [30 + v / 4, 70 + v / 3, 120 + v / 3];
+    else [r, gg, bb] = [30 + v / 3, 50 + v / 2.2, 80 + v / 2];
+    px[i] = 0xff000000 | (bb << 16) | (gg << 8) | r;
+  }
+  e.c.getContext('2d')!.putImageData(e.img, 0, 0);
+  return e.c;
 }
 
 /** Cell value and fill colour of memory cell `i` (array view). */
@@ -440,10 +496,23 @@ export function drawBlockLive(ctx: CanvasRenderingContext2D, w: number, h: numbe
       const g = memoryGrid(b, spec, w, h)!;
       const { cols, top, cw, ch } = g;
       const pad = Math.max(1, cw * 0.08);
-      cellGrid(0, top, w, h - top, g.n, cols, (i, x, y, cw, ch) => {
-        ctx.fillStyle = memCell(b, d, i).fill;
-        ctx.fillRect(x + pad / 2, y + pad / 2, cw - pad, ch - pad);
-      });
+      if (cw >= 2 && ch >= 2) {
+        cellGrid(0, top, w, h - top, g.n, cols, (i, x, y, cw, ch) => {
+          ctx.fillStyle = memCell(b, d, i).fill;
+          ctx.fillRect(x + pad / 2, y + pad / 2, cw - pad, ch - pad);
+        });
+      } else {
+        // Sub-pixel cells (large flash): cached programmed/erased image + the warm words only.
+        ctx.imageSmoothingEnabled = false;
+        ctx.drawImage(flashImage(d.flash, g), 0, top, cols * cw, Math.ceil(g.n / cols) * ch);
+        ctx.imageSmoothingEnabled = true;
+        const mw = Math.max(1, cw);
+        const mh = Math.max(1, ch);
+        for (const i of d.hot) {
+          ctx.fillStyle = heatColor(d.heat[i], true);
+          ctx.fillRect((i % cols) * cw, top + Math.floor(i / cols) * ch, mw, mh);
+        }
+      }
       // PC marker.
       const px = (st.pc % cols) * cw;
       const py = top + Math.floor(st.pc / cols) * ch;
@@ -491,10 +560,16 @@ export function drawBlockLive(ctx: CanvasRenderingContext2D, w: number, h: numbe
           }
         });
       } else {
-        cellGrid(0, g.top, w, h - g.top, n, g.cols, (i, x, y, cw, ch) => {
-          ctx.fillStyle = memCell(b, d, i).fill;
-          ctx.fillRect(x, y, cw, ch);
-        });
+        if (g.cw >= 2 && g.ch >= 2) {
+          cellGrid(0, g.top, w, h - g.top, n, g.cols, (i, x, y, cw, ch) => {
+            ctx.fillStyle = memCell(b, d, i).fill;
+            ctx.fillRect(x, y, cw, ch);
+          });
+        } else {
+          ctx.imageSmoothingEnabled = false;
+          ctx.drawImage(byteImage(b, d, g), 0, g.top, g.cols * g.cw, Math.ceil(n / g.cols) * g.ch);
+          ctx.imageSmoothingEnabled = true;
+        }
       }
       return;
     }
@@ -639,9 +714,10 @@ export function blockSignature(b: Block, d: LiveData, heatVersion: number): stri
     case 'flash':
       return `${st.pc}|${heatVersion}`;
     case 'sram': {
-      let s = `${st.sp}|`;
-      for (let a = spec.sramStart; a < spec.sramStart + spec.sramSize; a++) s += `${st.data[a]},${q(d.writes[a])};`;
-      return s;
+      // Numeric hash: SRAM can be tens of KB (a string per byte would be far slower).
+      let hsh = st.sp;
+      for (let a = spec.sramStart; a < spec.sramStart + spec.sramSize; a++) hsh = (Math.imul(hsh, 31) + st.data[a] * 16 + q(d.writes[a])) | 0;
+      return `${hsh}`;
     }
     case 'eeprom': {
       // Cheap content hash; the EEPROM image changes rarely.

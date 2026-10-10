@@ -66,6 +66,12 @@ logic is Rust; TypeScript only renders and routes user input.
    `ClassicSystem` (CKSEL clock sources, CLKPR, BOD, MCUCR). Registers shared between modules
    have one owner that announces writes with `Event::RegWritten`; cross-module signals use
    `Trigger`s.
+   **Custom (user-defined) devices:** `devices/custom.rs` turns a `CustomMcuConfig` into a full
+   spec on the ATmega2560 register layout (extra instances are allocated in extended I/O);
+   `devices::register_custom` leaks it into a runtime registry that `get`/`list` search, and
+   `PeripheralSet::Custom` wires it by register/vector/pin-function names. The UI keeps the
+   configurations in local storage and registers them with every backend instance at start-up
+   (Tauri process; browser main thread + simulation worker).
 2. **New architecture (e.g. ARM Cortex-M0, PIC):** add `mcs_core::<arch>` (ISA + device
    descriptions) and `mcs_sim::<arch>` (machine). The session/protocol layer is the seam: give
    the session a machine abstraction (trait) and keep `MachineState` architecture-neutral

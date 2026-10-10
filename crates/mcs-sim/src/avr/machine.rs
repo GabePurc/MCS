@@ -647,7 +647,9 @@ impl Machine {
 
     /// Enables or disables per-word execution counting (see [`Machine::take_exec_counts`]).
     pub fn set_profiling(&mut self, enabled: bool) {
-        self.cpu.exec_counts = if enabled { vec![0; self.cpu.flash_words as usize] } else { Vec::new() };
+        let words = self.cpu.pc_mask as usize + 1;
+        self.cpu.exec_counts = if enabled { vec![0; words] } else { Vec::new() };
+        self.cpu.exec_touched = if enabled { Vec::with_capacity(words) } else { Vec::new() };
     }
 
     pub fn profiling(&self) -> bool {
@@ -655,12 +657,16 @@ impl Machine {
     }
 
     /// Execution counts since the previous call (and resets them). Empty when profiling is off.
+    /// Executions per word since the previous call, as `[word, count, word, count, ...]` for the
+    /// words that ran (cost depends on the code that ran, not on the flash size).
     pub fn take_exec_counts(&mut self) -> Vec<u32> {
-        if self.cpu.exec_counts.is_empty() {
-            return Vec::new();
+        let mut out = Vec::with_capacity(self.cpu.exec_touched.len() * 2);
+        for &w in &self.cpu.exec_touched {
+            let c = &mut self.cpu.exec_counts[w as usize];
+            out.extend_from_slice(&[w, *c]);
+            *c = 0;
         }
-        let out = self.cpu.exec_counts.clone();
-        self.cpu.exec_counts.fill(0);
+        self.cpu.exec_touched.clear();
         out
     }
 
@@ -846,8 +852,12 @@ impl Machine {
             }
             skip_bp = false;
             if PROFILE {
-                let c = &mut self.cpu.exec_counts[pc];
-                *c = c.wrapping_add(1);
+                let c = self.cpu.exec_counts[pc];
+                if c == 0 {
+                    self.cpu.exec_touched.push(pc as u32);
+                }
+                // Saturating: a counter never wraps back to 0 (which would push the word twice).
+                self.cpu.exec_counts[pc] = c.saturating_add(1);
             }
             self.exec();
             if self.sys.sched.next <= self.cpu.cycles {
@@ -928,7 +938,7 @@ impl Machine {
         self.push_pc(ret);
         self.cpu.sreg &= !SREG_I;
         self.cpu.pc = (self.cpu.vector_base + v as u32 * self.cpu.vector_words) & self.cpu.pc_mask;
-        self.cpu.cycles += 4;
+        self.cpu.cycles += 4 + self.cpu.pc3 as u64;
         let target = self.cpu.pc;
         self.cpu.push_frame(ret, target, v as i16);
         true
@@ -940,13 +950,25 @@ impl Machine {
         let sp = self.cpu.sp;
         self.write_data(sp, ret as u8);
         self.write_data(sp.wrapping_sub(1), (ret >> 8) as u8);
-        self.cpu.sp = sp.wrapping_sub(2);
+        if self.cpu.pc3 {
+            self.write_data(sp.wrapping_sub(2), (ret >> 16) as u8);
+            self.cpu.sp = sp.wrapping_sub(3);
+        } else {
+            self.cpu.sp = sp.wrapping_sub(2);
+        }
         self.check_stack();
     }
 
     #[inline]
     fn pop_pc(&mut self) -> u32 {
         let sp = self.cpu.sp;
+        if self.cpu.pc3 {
+            let h = self.read_data(sp.wrapping_add(1)) as u32;
+            let m = self.read_data(sp.wrapping_add(2)) as u32;
+            let l = self.read_data(sp.wrapping_add(3)) as u32;
+            self.cpu.sp = sp.wrapping_add(3);
+            return ((h << 16) | (m << 8) | l) & self.cpu.pc_mask;
+        }
         let hi = self.read_data(sp.wrapping_add(1)) as u32;
         let lo = self.read_data(sp.wrapping_add(2)) as u32;
         self.cpu.sp = sp.wrapping_add(2);
@@ -966,6 +988,13 @@ impl Machine {
         let n = self.cpu.insn_words_at(self.cpu.pc + 1);
         self.cpu.pc = (self.cpu.pc + 1 + n) & self.cpu.pc_mask;
         self.cpu.cycles += n as u64;
+    }
+
+    /// EIND:Z (EIJMP / EICALL target, word address).
+    #[inline]
+    fn eind_z(&self) -> u32 {
+        let e = self.cpu.eind_addr.map_or(0, |a| self.cpu.data[a as usize]) as u32;
+        (e << 16) | self.ptr(30) as u32
     }
 
     #[inline(always)]
@@ -1174,14 +1203,24 @@ impl Machine {
             }
             op::LPM_Z | op::LPM_ZP | op::ELPM_Z | op::ELPM_ZP | op::LPM | op::ELPM => {
                 let z = self.ptr(30);
-                let v = self.cpu.flash[z as usize % self.cpu.flash.len()];
+                let ext = matches!(o, op::ELPM | op::ELPM_Z | op::ELPM_ZP);
+                let rz = if ext { self.cpu.rampz_addr.map_or(0, |a| self.cpu.data[a as usize]) as usize } else { 0 };
+                let v = self.cpu.flash[((rz << 16) | z as usize) % self.cpu.flash.len()];
                 if o == op::LPM || o == op::ELPM {
                     self.cpu.r[0] = v;
                 } else {
                     self.cpu.r[au] = v;
                 }
-                if o == op::LPM_ZP || o == op::ELPM_ZP {
+                if o == op::LPM_ZP {
                     self.set_ptr(30, z.wrapping_add(1));
+                } else if o == op::ELPM_ZP {
+                    let (nz, c) = z.overflowing_add(1);
+                    self.set_ptr(30, nz);
+                    if c {
+                        if let Some(a) = self.cpu.rampz_addr {
+                            self.cpu.data[a as usize] = (rz as u8).wrapping_add(1);
+                        }
+                    }
                 }
             }
             op::XCH | op::LAS | op::LAC | op::LAT => {
@@ -1248,7 +1287,8 @@ impl Machine {
                 self.cpu.sreg |= 1 << a;
             }
             op::BCLR => self.cpu.sreg &= !(1u8 << a),
-            op::IJMP | op::EIJMP => next = self.ptr(30) as u32 & mask,
+            op::IJMP => next = self.ptr(30) as u32 & mask,
+            op::EIJMP => next = self.eind_z() & mask,
             op::DES => {
                 let (c, pc2) = (self.cpu.cycles, pc * 2);
                 self.sys.warn_key(c, "des", format!("DES instruction is not supported by the simulator (PC 0x{pc2:04X})"));
@@ -1297,6 +1337,7 @@ impl Machine {
                 let (ret, target) = match o {
                     op::RCALL => (next, (pc as i64 + 1 + a as i64) as u32 & mask),
                     op::CALL => ((pc + 2) & mask, a as u32 & mask),
+                    op::EICALL => (next, self.eind_z() & mask),
                     _ => (next, self.ptr(30) as u32 & mask),
                 };
                 self.push_pc(ret);

@@ -40,6 +40,7 @@ pub fn wire(m: &mut Machine) {
         PeripheralSet::TinyRc => wire_tiny_rc(m),
         PeripheralSet::MegaX8 => wire_mega_x8(m),
         PeripheralSet::TinyX5 => wire_tiny_x5(m),
+        PeripheralSet::Custom => wire_custom(m),
     }
     // Test bench (every device): signal generators and the Serial Monitor's serial port.
     let pins = m.sys.pins.len();
@@ -415,5 +416,268 @@ fn wire_tiny_x5(m: &mut Machine) {
     set_wake(m, &[
         (SleepKind::AdcNoiseReduction, &["INT0", "PCINT0", "USI_START", "EE_RDY", "ADC", "WDT"]),
         (SleepKind::PowerDown, &["INT0", "PCINT0", "USI_START", "WDT"]),
+    ]);
+}
+
+/// Interns a generated peripheral name (models want `&'static str`); bounded by the number of
+/// distinct names, so rebuilding machines does not leak.
+fn leak(s: String) -> &'static str {
+    use std::collections::HashSet;
+    use std::sync::Mutex;
+    static NAMES: Mutex<Option<HashSet<&'static str>>> = Mutex::new(None);
+    let mut g = NAMES.lock().unwrap_or_else(|e| e.into_inner());
+    let set = g.get_or_insert_with(HashSet::new);
+    if let Some(&n) = set.get(s.as_str()) {
+        return n;
+    }
+    let n: &'static str = Box::leak(s.into_boxed_str());
+    set.insert(n);
+    n
+}
+
+/// User-defined devices (`mcs_core::avr::devices::custom`): every peripheral that the spec
+/// defines is wired by register/pin/vector naming convention, using the same parameterized models
+/// as the ATmega recipes. PRR0 gates the instances that have a bit in it (TWI0, TC0-2, SPI0,
+/// USART0, ADC); further instances are never power-gated.
+fn wire_custom(m: &mut Machine) {
+    let s = m.spec;
+    let has = |n: &str| s.register(n).is_some();
+    let r = |n: &str| s.reg(n);
+    let v = |n: &str| s.vector(n).unwrap_or_else(|| panic!("{}: vector {n} not defined", s.name));
+    let gpio = |f: &str| s.pins.iter().find(|p| p.gpio.is_some() && p.functions.iter().any(|x| x == f)).and_then(|p| p.gpio);
+    let gpio_u = |f: &str| gpio(f).unwrap_or_else(|| panic!("{}: no pin carries {f}", s.name)) as usize;
+    let sx = |k: usize| if k == 0 { String::new() } else { k.to_string() };
+    let ports = s.gpio_count as usize / 8;
+    let prr_bits = s.register("PRR0").map_or(0, |p| p.bits.iter().fold(0u8, |a, b| a | b.mask));
+
+    let crystal = |k: u8| (k, ClockSource::Crystal);
+    let mut cksel = vec![(0, ClockSource::External), (2, ClockSource::Rc8M), (3, ClockSource::Rc128k), (4, ClockSource::LowFreqCrystal), (5, ClockSource::LowFreqCrystal), crystal(6), crystal(7)];
+    cksel.extend((8..16).map(crystal));
+    let sys = ClassicSystem::new(ClassicSystemConfig {
+        clkpr: r("CLKPR"), mcusr: r("MCUSR"), mcucr: r("MCUCR"), mcucr_plain: 0x10,
+        ivsel: s.boot.as_ref().map(|_| (0x02, 0x01)), bods: Some((0x40, 0x20)),
+        prr: r("PRR0"), prr_mask: prr_bits, osccal: r("OSCCAL"), pllcsr: None, cksel,
+        xtal1: None, xtal2: None,
+        bod_levels: vec![(6, 1.8), (5, 2.7), (4, 4.3)],
+    });
+    let regs = sys.registers();
+    add(m, Box::new(sys), regs, &[]);
+
+    // Ports. The DIDR bit of a pin belongs to the first ADC channel that sits on it.
+    let pud = Some((r("MCUCR"), 0x10));
+    let adc_ch = (0..32).take_while(|c| gpio(&format!("ADC{c}")).is_some()).count();
+    let didr_of = |g: usize| (0..adc_ch).find(|&c| gpio(&format!("ADC{c}")) == Some(g as u8)).map(|c| (r(&mcs_core::avr::devices::didr_name(c)), 1u8 << (c % 8)));
+    for p in 0..ports {
+        let l = mcs_core::avr::devices::port_name(p);
+        let base = p * 8;
+        let mut didr: Vec<Option<(u16, u8)>> = (0..8).map(|i| didr_of(base + i)).collect();
+        if has("DIDR1") {
+            for (f, bit) in [("AIN0", 0x01u8), ("AIN1", 0x02)] {
+                if let Some(g) = gpio(f).map(usize::from).filter(|g| (base..base + 8).contains(g)) {
+                    if didr[g - base].is_none() {
+                        didr[g - base] = Some((r("DIDR1"), bit));
+                    }
+                }
+            }
+        }
+        while didr.last() == Some(&None) {
+            didr.pop();
+        }
+        add_port(m, PortConfig {
+            name: leak(format!("PORT{l}")), pin: r(&format!("PIN{l}")), ddr: r(&format!("DDR{l}")), port: r(&format!("PORT{l}")), pue: None,
+            didr, pud, gpios: (base..base + 8).collect(), reset_gpio: None,
+        });
+    }
+
+    // External and pin-change interrupts.
+    let ints = (0..32).take_while(|k| s.vector(&format!("INT{k}")).is_some()).count();
+    let eimsk = |k: usize| if k / 8 == 0 { "EIMSK".to_string() } else { format!("EIMSK{}", k / 8) };
+    let eifr = |k: usize| if k / 8 == 0 { "EIFR".to_string() } else { format!("EIFR{}", k / 8) };
+    let eicr = |k: usize| format!("EICR{}", (b'A' + (k / 4) as u8) as char);
+    let pcr = |g: usize, base: &str| if g / 8 == 0 { base.to_string() } else { format!("{base}{}", g / 8) };
+    let mut owned: Vec<(u16, u8, bool)> = Vec::new();
+    for j in 0..ints.div_ceil(4) {
+        let n = (ints - j * 4).min(4);
+        owned.push((r(&eicr(j * 4)), ((1u16 << (n * 2)) - 1) as u8, false));
+    }
+    for q in 0..ints.div_ceil(8) {
+        let n = (ints - q * 8).min(8);
+        owned.push((r(&eimsk(q * 8)), ((1u16 << n) - 1) as u8, false));
+        owned.push((r(&eifr(q * 8)), 0, true));
+    }
+    for q in 0..ports.div_ceil(8) {
+        let n = (ports - q * 8).min(8);
+        owned.push((r(&pcr(q * 8, "PCICR")), ((1u16 << n) - 1) as u8, false));
+        owned.push((r(&pcr(q * 8, "PCIFR")), 0, true));
+    }
+    let ext = ExtInt::new(ExtIntConfig {
+        ints: (0..ints)
+            .map(|k| IntSpec {
+                gpio: gpio(&format!("INT{k}")).unwrap_or_else(|| panic!("{}: no pin carries INT{k}", s.name)), vector: v(&format!("INT{k}")),
+                isc_reg: r(&eicr(k)), isc_shift: ((k % 4) * 2) as u8, mask_reg: r(&eimsk(k)), mask_bit: 1 << (k % 8), flag_reg: r(&eifr(k)), flag_bit: 1 << (k % 8),
+            })
+            .collect(),
+        groups: (0..ports)
+            .map(|g| PcGroupSpec {
+                gpios: (g * 8..g * 8 + 8).map(|x| x as u8).collect(), msk_reg: r(&format!("PCMSK{g}")), vector: v(&format!("PCINT{g}")),
+                enable_reg: r(&pcr(g, "PCICR")), enable_bit: 1 << (g % 8), flag_reg: r(&pcr(g, "PCIFR")), flag_bit: 1 << (g % 8),
+            })
+            .collect(),
+        owned,
+    });
+    let (regs, vecs) = (ext.registers(), ext.vectors());
+    add(m, Box::new(ext), regs, &vecs);
+
+    // Timers: numbered like the 2560 (TC0, TC2 8-bit; TC1, TC3-5 16-bit; extras from 6 up).
+    let mut psr = Vec::new();
+    let mut has_timer2 = false;
+    let mut timer_ids = Vec::new();
+    for n in 0..32u8 {
+        if !has(&format!("TCCR{n}A")) {
+            continue;
+        }
+        timer_ids.push(n);
+        let wide = has(&format!("TCCR{n}C"));
+        let prr_mask = match n {
+            0 => 0x20,
+            1 => 0x08,
+            2 => 0x40,
+            _ => 0,
+        } & prr_bits;
+        let async2 = n == 2;
+        has_timer2 |= async2;
+        add_timer(m, TimerConfig {
+            name: leak(format!("TC{n}")), id: n, wide,
+            tccr_a: r(&format!("TCCR{n}A")),
+            tccr_b: r(&format!("TCCR{n}B")),
+            foc_reg: if wide { r(&format!("TCCR{n}C")) } else { r(&format!("TCCR{n}B")) },
+            tcnt: if wide { r(&format!("TCNT{n}L")) } else { r(&format!("TCNT{n}")) },
+            ocr_a: if wide { r(&format!("OCR{n}AL")) } else { r(&format!("OCR{n}A")) },
+            ocr_b: if wide { r(&format!("OCR{n}BL")) } else { r(&format!("OCR{n}B")) },
+            icr: wide.then(|| r(&format!("ICR{n}L"))),
+            tifr: r(&format!("TIFR{n}")), timsk: r(&format!("TIMSK{n}")),
+            bits: TimerBits { tov: 0x01, ocfa: 0x02, ocfb: 0x04, icf: if wide { 0x20 } else { 0 } },
+            v_ovf: v(&format!("TIMER{n}_OVF")), v_comp_a: v(&format!("TIMER{n}_COMPA")), v_comp_b: v(&format!("TIMER{n}_COMPB")),
+            v_capt: wide.then(|| v(&format!("TIMER{n}_CAPT"))),
+            oc_a_gpio: gpio(&format!("OC{n}A")).map(usize::from), oc_b_gpio: gpio(&format!("OC{n}B")).map(usize::from),
+            icp_gpio: gpio(&format!("ICP{n}")), t_gpio: gpio(&format!("T{n}")),
+            clock: if async2 { CS_TIMER2 } else { CS_SYNC }, prescaler_group: if async2 { 2 } else { 1 }, prr_mask,
+            // Timer2 keeps running in power-save and extended standby (DS40002061B 10.6).
+            sleep_run: if async2 { (1 << SleepKind::PowerSave as u8) | (1 << SleepKind::ExtendedStandby as u8) } else { ALL_SLEEP },
+        });
+    }
+    if !timer_ids.is_empty() {
+        if timer_ids.iter().any(|&n| n != 2) {
+            psr.push((0x01, 1));
+        }
+        if has_timer2 {
+            psr.push((0x02, 2));
+        }
+        let g = Gtccr::new(GtccrConfig { addr: r("GTCCR"), tsm: 0x80, psr, strobes: 0, config: 0 });
+        let regs = g.registers();
+        add(m, Box::new(g), regs, &[]);
+    }
+
+    for k in 0..32usize {
+        if !has(&format!("UDR{k}")) {
+            continue;
+        }
+        let usart = Usart::new(UsartConfig {
+            name: leak(format!("USART{k}")), udr: r(&format!("UDR{k}")), ucsra: r(&format!("UCSR{k}A")), ucsrb: r(&format!("UCSR{k}B")), ucsrc: r(&format!("UCSR{k}C")),
+            ubrrl: r(&format!("UBRR{k}L")), ubrrh: r(&format!("UBRR{k}H")), rx_gpio: gpio_u(&format!("RXD{k}")), tx_gpio: gpio_u(&format!("TXD{k}")),
+            v_rx: v(&format!("USART{k}_RX")), v_udre: v(&format!("USART{k}_UDRE")), v_tx: v(&format!("USART{k}_TX")), prr_mask: if k == 0 { 0x02 & prr_bits } else { 0 },
+        });
+        let (regs, vecs) = (usart.registers(), usart.vectors());
+        add(m, Box::new(usart), regs, &vecs);
+    }
+
+    for k in 0..32usize {
+        let (spdr, vname) = (format!("SPDR{}", sx(k)), if k == 0 { "SPI_STC".to_string() } else { format!("SPI{k}_STC") });
+        if !has(&spdr) {
+            continue;
+        }
+        let spi = Spi::new(SpiConfig {
+            spcr: r(&format!("SPCR{}", sx(k))), spsr: r(&format!("SPSR{}", sx(k))), spdr: r(&spdr),
+            ss_gpio: gpio_u(&format!("SS{}", sx(k))), mosi_gpio: gpio_u(&format!("MOSI{}", sx(k))), miso_gpio: gpio_u(&format!("MISO{}", sx(k))), sck_gpio: gpio_u(&format!("SCK{}", sx(k))),
+            vector: v(&vname), prr_mask: if k == 0 { 0x04 & prr_bits } else { 0 },
+        });
+        let regs = spi.registers();
+        add(m, Box::new(spi), regs, &[Some(v(&vname))]);
+    }
+
+    for k in 0..32usize {
+        let (twcr, vname) = (format!("TWCR{}", sx(k)), format!("TWI{}", sx(k)));
+        if !has(&twcr) {
+            continue;
+        }
+        let q = |x: &str| r(&format!("{x}{}", sx(k)));
+        let twi = Twi::new(TwiConfig { twbr: q("TWBR"), twsr: q("TWSR"), twar: q("TWAR"), twdr: q("TWDR"), twcr: q("TWCR"), twamr: q("TWAMR"), vector: v(&vname), prr_mask: if k == 0 { 0x80 & prr_bits } else { 0 } });
+        let regs = twi.registers();
+        add(m, Box::new(twi), regs, &[Some(v(&vname))]);
+    }
+
+    if has("ACSR") {
+        let ac = AnalogComparator::new(AcConfig {
+            acsr: r("ACSR"), ain0_gpio: gpio_u("AIN0") as u8, ain1_gpio: gpio_u("AIN1") as u8, vector: v("ANALOG_COMP"), acbg: true, acic: timer_ids.contains(&1),
+            acme: has("ADCSRB").then(|| AcmeConfig {
+                reg: r("ADCSRB"), bit: 0x40, adcsra: r("ADCSRA"), admux: r("ADMUX"), mux_mask: 0x07,
+                channels: (0..8).map(|i| (i < adc_ch).then(|| gpio_u(&format!("ADC{i}")))).collect(),
+            }),
+        });
+        let regs = ac.registers();
+        add(m, Box::new(ac), regs, &[Some(v("ANALOG_COMP"))]);
+    }
+
+    if has("ADCSRA") {
+        let mut inputs: Vec<Option<AdcInput>> = (0..32).map(|i| (i < adc_ch).then(|| AdcInput::Pin(gpio_u(&format!("ADC{i}"))))).collect();
+        inputs[30] = Some(AdcInput::Volts(BANDGAP_V));
+        inputs[31] = Some(AdcInput::Volts(0.0));
+        let tc = |n: u8| timer_ids.contains(&n);
+        let adc = Adc::new(AdcConfig {
+            adcsra: r("ADCSRA"), adcsrb: r("ADCSRB"), admux: r("ADMUX"), adcl: r("ADCL"), adch: Some(r("ADCH")), mux_mask: 0x1f, inputs,
+            // REFS1:0 = 00 AREF (tied to VCC here), 01 AVCC, 11 internal 1.1 V.
+            ref_mask: 0xc0, ref_extra: 0, refs: vec![Some(AdcRef::Aref(None)), Some(AdcRef::Vcc), None, Some(AdcRef::Volts(BANDGAP_V))],
+            adlar: 0x20, admux_mask: 0xff, adcsrb_mask: if has("ACSR") { 0x47 } else { 0x07 }, bin: 0,
+            triggers: [
+                None,
+                has("ACSR").then_some(Trigger::Ac),
+                (ints > 0).then_some(Trigger::Int0),
+                tc(0).then_some(Trigger::TimerCompA(0)),
+                tc(0).then_some(Trigger::TimerOvf(0)),
+                tc(1).then_some(Trigger::TimerCompB(1)),
+                tc(1).then_some(Trigger::TimerOvf(1)),
+                tc(1).then_some(Trigger::TimerCapt(1)),
+            ],
+            vector: v("ADC"), prr_mask: 0x01 & prr_bits, notify: true,
+        });
+        let regs = adc.registers();
+        add(m, Box::new(adc), regs, &[Some(v("ADC"))]);
+    }
+
+    if has("EECR") {
+        let ee = Eeprom::new(EepromConfig { eecr: r("EECR"), eedr: r("EEDR"), eearl: r("EEARL"), eearh: Some(r("EEARH")), vector: v("EE_READY") });
+        let regs = ee.registers();
+        add(m, Box::new(ee), regs, &[Some(v("EE_READY"))]);
+    }
+
+    let wdt = Watchdog::new(WatchdogConfig { wdtcsr: r("WDTCSR"), rstflr: r("MCUSR"), vector: v("WDT"), wdce: true });
+    let regs = wdt.registers();
+    add(m, Box::new(wdt), regs, &[Some(v("WDT"))]);
+
+    // Wake-up sources per sleep mode (DS2549 table 10-1 pattern, extended to all instances).
+    let mut pd: Vec<String> = (0..ints).map(|k| format!("INT{k}")).chain((0..ports).map(|g| format!("PCINT{g}"))).collect();
+    pd.extend(s.vectors.iter().filter(|x| x.name.starts_with("TWI")).map(|x| x.name.clone()));
+    pd.push("WDT".into());
+    let mut ps = pd.clone();
+    ps.extend(["TIMER2_COMPA", "TIMER2_COMPB", "TIMER2_OVF"].map(String::from));
+    let mut nr = ps.clone();
+    nr.extend(["SPM_READY", "EE_READY", "ADC"].map(String::from));
+    let (pd, ps, nr): (Vec<&str>, Vec<&str>, Vec<&str>) = (pd.iter().map(String::as_str).collect(), ps.iter().map(String::as_str).collect(), nr.iter().map(String::as_str).collect());
+    set_wake(m, &[
+        (SleepKind::AdcNoiseReduction, &nr),
+        (SleepKind::PowerDown, &pd),
+        (SleepKind::PowerSave, &ps),
+        (SleepKind::Standby, &pd),
+        (SleepKind::ExtendedStandby, &ps),
     ]);
 }

@@ -3,6 +3,17 @@
 The release workflow copies the section for the tagged version into the GitHub release, and
 the in-app updater shows it as the update notes.
 
+## [Unreleased]
+
+- **Custom microcontrollers** (Device > Custom Microcontroller...): choose flash, SRAM and
+  EEPROM sizes, ports, timers, USARTs, SPI, I²C, ADC channels and more, from a few bytes up to
+  8 MB of flash. The simulator generates the registers, interrupts and pins.
+- **Instruction help**: hover an instruction in the editor to see what it does, how to use it
+  and an example; the Instruction Set window shows the same and lists aliases like BRNE.
+- **Chip View**: zoom into the memories to read every byte; click a memory to jump there.
+- **Clear Output on Build / Run** option (Build menu).
+- **Fixed**: Tab in the middle of a line moved the whole line.
+
 ## [0.2.0]
 
 - **New microcontrollers**: ATmega328P (the Arduino Uno chip) with the ATmega48PA/88PA/168PA,

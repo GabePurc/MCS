@@ -22,6 +22,7 @@ import { useSettings } from './state/settings';
 import { useSim } from './state/sim';
 import { appendOutput, enabledBreakpointPcs, requestGoto, useWorkspace } from './state/workspace';
 import { loadDevices } from './state/devices';
+import { registerStoredCustomDevices } from './state/customDevices';
 import { backendAvailable, inTauri, win } from './backend/api';
 
 let started = false;
@@ -35,7 +36,8 @@ export function App(): JSX.Element {
     if (started) return; // React StrictMode mounts twice in development
     started = true;
     const s = useSettings.getState();
-    void loadDevices();
+    // Custom devices are registered first: the request is sent before any simulator command.
+    void registerStoredCustomDevices().then(loadDevices);
     void connectSim();
     void initMainWindowBridge();
     scheduleStartupCheck();

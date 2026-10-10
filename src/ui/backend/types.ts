@@ -343,3 +343,43 @@ export interface ToolchainInfo {
   gcc: string;
   version: string;
 }
+
+/** User-defined microcontroller (mirrors mcs_core::avr::devices::CustomMcuConfig). */
+export interface CustomMcuConfig {
+  id: string;
+  name: string;
+  flashSize: number;
+  sramSize: number;
+  eepromSize: number;
+  ports: number;
+  extInterrupts: number;
+  timers8: number;
+  timers16: number;
+  usarts: number;
+  spis: number;
+  twis: number;
+  adcChannels: number;
+  analogComparator: boolean;
+  hardwareMultiplier: boolean;
+  package: 'DIP' | 'SOIC';
+  internalHz: number;
+  maxHz: number;
+  vcc: number;
+}
+
+export interface CustomPreview {
+  package: string;
+  pins: number;
+  gpios: number;
+  registers: number;
+  vectors: number;
+  coreName: string;
+  sramStart: number;
+  ramEnd: number;
+  groups: string[];
+}
+
+export interface CustomRegistration {
+  id: string;
+  error: string | null;
+}
