@@ -44,6 +44,11 @@ pub struct Dbg {
     pub hit_breakpoint: bool,
     /// SRAM image last sent to the UI (the next state only carries it when it changed).
     pub ram_sent: Vec<u8>,
+    /// Extra RAM block watched by the memory view (`bus.ram` index, 0 = none) and the image last sent.
+    pub extra_sel: usize,
+    pub extra_sent: Vec<u8>,
+    /// The selected block must be sent with the next state.
+    pub extra_dirty: bool,
 }
 
 impl Dbg {

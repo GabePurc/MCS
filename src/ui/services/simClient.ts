@@ -55,6 +55,14 @@ export function sim(cmd: SimCommand): void {
   void attached.then(() => simCommand(cmd));
 }
 
+let watchedRam = 0;
+
+/** Selects the extra RAM block the memory view watches (ARM; 0 = none). */
+export function watchRam(index: number): void {
+  watchedRam = index;
+  sim({ type: 'watchRam', index });
+}
+
 /** Raw backend state -> UI state (typed arrays). */
 export function convertState(r: RawMachineState): MachineState {
   return {
@@ -62,6 +70,7 @@ export function convertState(r: RawMachineState): MachineState {
     core: convertCore(r.core),
     data: Uint8Array.from(r.data),
     io: Uint32Array.from(r.io ?? []),
+    ramExtra: r.ramExtra ? { index: r.ramExtra.index, data: Uint8Array.from(r.ramExtra.data) } : undefined,
     flash: r.flash ? Uint8Array.from(r.flash) : undefined,
     traceCycles: Float64Array.from(r.traceCycles),
     traceLevels: Uint32Array.from(r.traceLevels),
@@ -93,9 +102,13 @@ function applyState(st: MachineState): void {
   if (!forward) for (const m of st.messages) appendOutput(m.level === 'warning' ? 'warning' : m.level === 'error' ? 'error' : 'info', `[sim @ ${m.cycle}] ${m.text}`);
   // ARM sends the SRAM image only when it changed: keep the previous one in between.
   if (st.core.arch === 'arm' && st.data.length === 0 && cur.state?.core.arch === 'arm') st.data = cur.state.data;
+  // Same for the watched extra RAM block.
+  if (!st.ramExtra && watchedRam && cur.state?.ramExtra?.index === watchedRam) st.ramExtra = cur.state.ramExtra;
   const patch: Partial<typeof cur> = { state: st, running: st.running };
   if (st.flash) patch.flash = st.flash;
   if (st.eeprom) patch.eeprom = st.eeprom;
+  // A block selected after the baseline was taken has no baseline image: its first image becomes it.
+  if (st.ramExtra && cur.baseline && cur.baseline.ramExtra?.index !== st.ramExtra.index) patch.baseline = { ...cur.baseline, ramExtra: st.ramExtra };
   if (st.serial?.length) serialTaps.forEach((f) => f(st.serial!));
   if (st.stop?.reason === 'load' || (st.stop?.reason === 'reset' && st.cycles === 0)) {
     trace.clear();

@@ -289,6 +289,7 @@ impl Target for Machine {
             sleep_mode: m.cpu.sleep_mode,
             reset_held: m.sys.reset_held,
             data,
+            ram_extra: None,
             io: Vec::new(),
             flash,
             flash_version: 0,

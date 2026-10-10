@@ -174,6 +174,8 @@ export interface ArmDeviceSpec {
   /** Main SRAM in bytes; the CCM SRAM (when present) follows it in the data the session sends. */
   sramSize: number;
   ccmSram: { base: number; size: number; aliasBase: number } | null;
+  /** Further RAM blocks (STM32H7: ITCM, AXI SRAM, SRAM1-3, SRAM4, backup SRAM); block k is `extraRam[k - 1]`. */
+  extraRam: { name: string; base: number; size: number }[];
   registers: MmioRegisterSpec[];
   groups: { name: string; desc: string }[];
   vectors: ArmVectorSpec[];
@@ -235,6 +237,8 @@ export type SimCommand =
   | { type: 'setClockConfig'; source: number; prescaleLog2: number }
   | { type: 'setPinGenerator'; pin: number; gen: PinGenerator | null }
   | { type: 'setProfiling'; enabled: boolean }
+  /** ARM: which extra RAM block (`extraRam[index - 1]`) the memory view watches; 0 = none. */
+  | { type: 'watchRam'; index: number }
   | { type: 'writeData'; addr: number; value: number }
   /** Wide (1/2/4-byte) write through the bus; needed for ARM peripheral registers. */
   | { type: 'writeMem'; addr: number; size: number; value: number }
@@ -345,6 +349,8 @@ export interface RawMachineState {
   data: number[];
   /** ARM: values of the memory-mapped registers, aligned to `spec.registers`. */
   io?: number[];
+  /** ARM: bytes of the extra RAM block selected with `watchRam`; present on the first state after the selection and when they changed. */
+  ramExtra?: { index: number; data: number[] };
   flash?: number[];
   flashVersion: number;
   fuses: number[];
@@ -371,8 +377,9 @@ export interface RawMachineState {
 }
 
 /** State as used by the UI (typed arrays). */
-export interface MachineState extends Omit<RawMachineState, 'core' | 'data' | 'io' | 'flash' | 'traceCycles' | 'traceLevels' | 'execHeat' | 'eeprom'> {
+export interface MachineState extends Omit<RawMachineState, 'core' | 'data' | 'io' | 'flash' | 'traceCycles' | 'traceLevels' | 'execHeat' | 'eeprom' | 'ramExtra'> {
   eeprom?: Uint8Array;
+  ramExtra?: { index: number; data: Uint8Array };
   core: CoreState;
   data: Uint8Array;
   io: Uint32Array;

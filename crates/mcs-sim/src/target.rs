@@ -82,6 +82,11 @@ pub trait Target: Send {
     fn set_vcc(&mut self, volts: f64);
     fn set_external_clock(&mut self, hz: f64);
     fn set_profiling(&mut self, enabled: bool);
+    /// Selects the extra RAM block the memory view watches (0 = none); a no-op where there are none.
+    fn watch_ram(&mut self, index: usize) -> Result<(), String> {
+        let _ = index;
+        Ok(())
+    }
     fn set_serial(&mut self, config: SerialConfig);
     fn serial_send(&mut self, bytes: &[u8]);
 

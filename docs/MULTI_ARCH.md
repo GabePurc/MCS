@@ -55,12 +55,15 @@ RCC (HSI16/HSE/PLL, bus prescalers), FLASH ACR wait states, GPIO A-G (MODER/OTYP
 PUPDR/IDR/ODR/BSRR/AFR), EXTI + SYSCFG, NVIC, SysTick, USART/LPUART, TIM2-TIM4/TIM6/TIM7,
 ADC (later). UI (C2): Processor panel for Cortex-M registers incl. FPU, peripheral register view from the spec, memory / pins / waveform / serial adapted to ARM (quad LQFP drawing, only existing GPIOs). The UI's program counter is in the architecture's native unit everywhere (`pcToBytes` / `bytesToPc`; `BuildInfo.arch`); AVR-only features are disabled for ARM devices.
 
-## Stage D — STM32H7 (Cortex-M7, double FPU): STM32H743 — DONE (Rust side)
+## Stage D — STM32H7 (Cortex-M7, double FPU): STM32H743 — DONE (Rust side and UI)
 STM32H743IIT6 (LQFP176) and STM32H743ZIT6 (LQFP144, Nucleo-H743ZI); see `docs/ROADMAP.md`.
 * Memory: `MemConfig` takes several RAM blocks and RAM aliases; `Bus` dispatches through a page table
   indexed by `addr >> 20` (regions own whole 1 MiB pages; construction panics on overlap). `ArmDeviceSpec`
-  gained `flash_alias`, `extra_ram`, `ram_aliases`; the debugger memory image / session `data` still covers
-  RAM block 0 only (G4: SRAM+CCM, H7: DTCM) -- a protocol/UI follow-up for the other blocks.
+  gained `flash_alias`, `extra_ram`, `ram_aliases`. The session `data` still covers RAM block 0 only (G4:
+  SRAM+CCM, H7: DTCM); the other blocks are streamed through the `watchRam { index }` command (0 = none,
+  k = `extra_ram[k - 1]`) into `MachineState.ramExtra { index, data }`, sent on the first state after the
+  selection / a load and when the bytes changed (cached copy `Dbg.extra_sent`). The memory panel lists
+  each block next to Flash / SRAM and edits them with byte `writeMem`; Device Info lists them in the map.
 * Peripherals: `ArmPeripheralSet.family` (`Stm32G4` / `Stm32H7`) selects the RCC/PWR/FLASH/SYSCFG-EXTI models
   (`periph/h7.rs` for the H7, `SysExti` is parameterised by `ExtiLayout`); GPIO, USART/UART/LPUART and timers
   are the G4 models. `ClockTree` has four APB ratios and explicit timer ratios (cycles of the CPU clock per
