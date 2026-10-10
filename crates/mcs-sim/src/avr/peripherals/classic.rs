@@ -74,6 +74,9 @@ pub struct ClassicSystemConfig {
     /// Power reduction register (None on the ATmega8/16/32).
     pub prr: Option<u16>,
     pub prr_mask: u8,
+    /// Second power reduction register and its writable bits (ATmega1284P, ATmega640/1280/2560).
+    /// `Event::PowerReduction` carries PRR0 in bits 7:0 and PRR1 in bits 15:8.
+    pub prr1: Option<(u16, u8)>,
     pub osccal: u16,
     pub pllcsr: Option<u16>,
     /// CKSEL value -> clock source (values not listed are reserved: internal RC is used).
@@ -117,7 +120,7 @@ impl ClassicSystem {
     pub fn registers(&self) -> Vec<(u16, u8)> {
         let c = &self.c;
         let mut v = vec![(c.mcusr, 0), (c.mcucr, 0)];
-        v.extend(c.clkpr.into_iter().chain(c.prr).chain(c.pllcsr).map(|a| (a, 0)));
+        v.extend(c.clkpr.into_iter().chain(c.prr).chain(c.prr1.map(|p| p.0)).chain(c.pllcsr).map(|a| (a, 0)));
         v
     }
 
@@ -205,6 +208,13 @@ impl ClassicSystem {
         }
     }
 
+    /// Broadcasts PRR0 (low byte) and PRR1 (high byte).
+    fn announce_prr(&self, cx: &mut Cx) {
+        let lo = self.c.prr.map_or(0, |a| cx.cpu.data[a as usize]);
+        let hi = self.c.prr1.map_or(0, |p| cx.cpu.data[p.0 as usize]);
+        cx.sys.events.push_back(Event::PowerReduction(lo as u16 | (hi as u16) << 8));
+    }
+
     fn pll_locked(&self, cx: &Cx) -> bool {
         self.c.pllcsr.is_some_and(|a| cx.cpu.data[a as usize] & PLOCK != 0)
     }
@@ -257,9 +267,11 @@ impl Peripheral for ClassicSystem {
             cx.cpu.data[a] = nv;
             cx.sys.events.push_back(Event::RegWritten(addr));
         } else if Some(addr) == c.prr {
-            let v = v & c.prr_mask;
-            cx.cpu.data[a] = v;
-            cx.sys.events.push_back(Event::PowerReduction(v));
+            cx.cpu.data[a] = v & c.prr_mask;
+            self.announce_prr(cx);
+        } else if c.prr1.is_some_and(|p| p.0 == addr) {
+            cx.cpu.data[a] = v & c.prr1.map_or(0, |p| p.1);
+            self.announce_prr(cx);
         } else if Some(addr) == c.pllcsr {
             let old = cx.cpu.data[a];
             let forced = self.source == ClockSource::Pll16M;

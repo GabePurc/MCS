@@ -230,7 +230,7 @@ function drawWave(canvas: HTMLCanvasElement, names: string[]): void {
     ctx.lineWidth = 1.5;
     ctx.beginPath();
     let i = Math.max(0, trace.indexAt(start));
-    let level = (trace.levelAt(i) >> r) & 1;
+    let level = trace.bitAt(i, r);
     let x = LABEL_W;
     const xEnd = LABEL_W + Math.min(plotW, (Math.min(end, trace.endCycle) - start) / view.cyclesPerPx);
     if (trace.cycleAt(0) > start) x = LABEL_W + (trace.cycleAt(0) - start) / view.cyclesPerPx;
@@ -240,7 +240,7 @@ function drawWave(canvas: HTMLCanvasElement, names: string[]): void {
     for (i = i + 1; i < trace.count; i++) {
       const c = trace.cycleAt(i);
       if (c > end) break;
-      const nl = (trace.levelAt(i) >> r) & 1;
+      const nl = trace.bitAt(i, r);
       if (nl === level) continue;
       const px = Math.round(LABEL_W + (c - start) / view.cyclesPerPx);
       if (px === lastPx) {

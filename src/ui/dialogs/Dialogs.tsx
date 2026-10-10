@@ -203,7 +203,10 @@ function fusePresets(spec: AvrDeviceSpec): [string, number[]][] {
   const out: [string, number[]][] = [['Factory default', spec.fuses.map((f) => f.default)]];
   if (spec.id === 'atmega328p') out.push(['Arduino Uno (16 MHz crystal, boot loader, BOD 2.7 V)', [0xff, 0xde, 0xfd]]);
   if (spec.id === 'atmega168pa') out.push(['Arduino Diecimila (16 MHz crystal, boot loader)', [0xff, 0xdd, 0xf8]]);
-  if (spec.peripheralSet === 'mega-x8') out.push(['Internal 8 MHz (no clock divider)', [0xe2, ...spec.fuses.slice(1).map((f) => f.default)]]);
+  if (spec.peripheralSet === 'mega-x8' || spec.peripheralSet === 'mega-x4' || spec.peripheralSet === 'mega-x0') out.push(['Internal 8 MHz (no clock divider)', [0xe2, ...spec.fuses.slice(1).map((f) => f.default)]]);
+  if (spec.id === 'atmega2560') out.push(['Arduino Mega 2560 (16 MHz crystal, boot loader)', [0xff, 0xd8, 0xfd]]);
+  // 16 MHz crystal (CKSEL = 1111, SUT = 11, no clock divider), JTAG interface disabled, SPIEN programmed.
+  if (spec.peripheralSet === 'mega-x4' || spec.peripheralSet === 'mega-x0') out.push(['16 MHz crystal (JTAG disabled)', [0xff, 0xd9, 0xff]]);
   if (spec.peripheralSet === 'mega-legacy') {
     // CKSEL = 0100 internal 8 MHz; 16 MHz crystal needs CKOPT programmed (CKSEL = 1111, SUT = 11,
     // BOD off): ATmega8 high 0xC9, ATmega16/32 high 0x89 (JTAGEN stays programmed).

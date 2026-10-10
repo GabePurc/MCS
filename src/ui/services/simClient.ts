@@ -96,7 +96,7 @@ function applyState(st: MachineState): void {
   if (st.stop?.reason === 'load' || (st.stop?.reason === 'reset' && st.cycles === 0)) {
     trace.clear();
   }
-  trace.append(st.traceCycles, st.traceLevels, st.cycles, st.hz);
+  trace.append(st.traceCycles, st.traceLevels, st.cycles, st.hz, st.traceWords);
   if (st.stop) {
     patch.lastStop = st.stop;
     patch.revealSeq = cur.revealSeq + 1;

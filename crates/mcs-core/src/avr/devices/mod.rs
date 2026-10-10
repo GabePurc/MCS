@@ -1,7 +1,10 @@
 //! Device registry. Add new device specs here.
 
 mod custom;
+mod mega_big;
 mod mega_legacy;
+mod mega_x0;
+mod mega_x4;
 mod mega_x8;
 mod tiny_13;
 mod tiny_rc;
@@ -17,7 +20,7 @@ pub use custom::{didr_name, port_name, timer_numbers, CustomMcuConfig};
 /// All AVR devices known to the simulator.
 pub fn all() -> &'static [AvrDeviceSpec] {
     static DEVICES: OnceLock<Vec<AvrDeviceSpec>> = OnceLock::new();
-    DEVICES.get_or_init(|| [tiny_rc::devices(), tiny_x5::devices(), tiny_13::devices(), tiny_x4::devices(), tiny_x313::devices(), mega_x8::devices(), mega_legacy::devices()].concat())
+    DEVICES.get_or_init(|| [tiny_rc::devices(), tiny_x5::devices(), tiny_13::devices(), tiny_x4::devices(), tiny_x313::devices(), mega_x8::devices(), mega_legacy::devices(), mega_x4::devices(), mega_x0::devices()].concat())
 }
 
 static CUSTOM: RwLock<Vec<&'static AvrDeviceSpec>> = RwLock::new(Vec::new());
@@ -143,6 +146,33 @@ mod tests {
         assert_eq!((m32.vector("INT2"), m32.vector("TIMER0_COMP"), m32.vector("TIMER0_OVF"), m32.vector_count()), (Some(3), Some(10), Some(11), 21));
         assert_eq!(m32.boot.as_ref().unwrap().sizes_words, [2048, 1024, 512, 256]);
         assert_eq!(id_from_include_name("m32def.inc"), Some("atmega32"));
+        let m164 = get("ATmega164PA").unwrap();
+        assert_eq!((m164.flash_size, m164.sram_size, m164.eeprom_size, m164.signature), (16384, 1024, 512, [0x1e, 0x94, 0x0a]));
+        assert_eq!((m164.reg("UDR1"), m164.reg("PCMSK3"), m164.reg("PRR0"), m164.reg("TCCR1A")), (0xce, 0x73, 0x64, 0x80));
+        assert_eq!((m164.vector("USART1_TX"), m164.vector("PCINT3"), m164.vector_count()), (Some(30), Some(7), 31));
+        assert!(m164.register("TCCR3A").is_none() && m164.register("PRR1").is_none() && m164.register("RAMPZ").is_none());
+        assert_eq!((m164.package.as_str(), m164.pins.len(), m164.gpio_count), ("PDIP-40", 40, 32));
+        assert_eq!(m164.fuse_defaults(), [0x62, 0x99, 0xff]);
+        assert_eq!(id_from_include_name("m164PAdef.inc"), Some("atmega164pa"));
+        assert_eq!(get("atmega324pa").unwrap().signature, [0x1e, 0x95, 0x11]);
+        let m644 = get("atmega644pa").unwrap();
+        assert_eq!((m644.flash_size, m644.sram_size, m644.eeprom_size, m644.vector_count()), (65536, 4096, 2048, 31));
+        assert_eq!(m644.boot.as_ref().unwrap().sizes_words, [4096, 2048, 1024, 512]);
+        let m1284 = get("ATmega1284P").unwrap();
+        assert_eq!((m1284.flash_size, m1284.sram_size, m1284.eeprom_size, m1284.signature), (131072, 16384, 4096, [0x1e, 0x97, 0x05]));
+        assert_eq!((m1284.vector("TIMER3_OVF"), m1284.vector_count(), m1284.reg("TCCR3A"), m1284.reg("TIMSK3"), m1284.reg("PRR1"), m1284.reg("RAMPZ")), (Some(34), 35, 0x90, 0x71, 0x65, 0x5b));
+        assert_eq!(m1284.ram_end(), 0x40ff);
+        assert_eq!(id_from_include_name("m1284Pdef.inc"), Some("atmega1284p"));
+        let m2560 = get("ATmega2560").unwrap();
+        assert_eq!((m2560.flash_size, m2560.sram_size, m2560.eeprom_size, m2560.signature), (262144, 8192, 4096, [0x1e, 0x98, 0x01]));
+        assert_eq!((m2560.package.as_str(), m2560.pins.len(), m2560.gpio_count, m2560.vector_count()), ("TQFP-100", 100, 86, 57));
+        assert_eq!((m2560.reg("PORTL"), m2560.reg("UDR3"), m2560.reg("TCCR5A"), m2560.reg("OCR5CL"), m2560.reg("EIND"), m2560.sram_start), (0x10b, 0x136, 0x120, 0x12c, 0x5c, 0x200));
+        assert_eq!((m2560.vector("TIMER1_COMPC"), m2560.vector("INT7"), m2560.vector("USART3_TX")), (Some(19), Some(8), Some(56)));
+        assert_eq!(m2560.fuse_defaults(), [0x62, 0x99, 0xff]);
+        assert_eq!(m2560.gpio_names()[85], "PL7");
+        assert!(get("atmega1280").unwrap().register("EIND").is_none() && get("atmega640").unwrap().register("RAMPZ").is_some());
+        assert_eq!(get("atmega640").unwrap().signature, [0x1e, 0x96, 0x08]);
+        assert_eq!(id_from_include_name("m2560def.inc"), Some("atmega2560"));
         // Every device: unique register addresses and names, pins cover all GPIOs.
         let customs: Vec<_> = [CustomMcuConfig::default(), CustomMcuConfig::tiny(), CustomMcuConfig::huge()]
             .iter()

@@ -40,6 +40,7 @@ Update this file when work is finished (only list items that are done in the rep
 - [x] ATmega48PA/88PA/168PA/328P and ATtiny25/45/85: specs, generalized timers (8/16-bit, shared flag registers, GTCCR), ATtiny85 PLL Timer1, USART, SPI, TWI (empty bus), USI, EEPROM, 10-bit ADC, comparator ACME/bandgap, INT0/INT1/PCINT groups, classic system control (CKSEL fuses, CLKPR, BOD, BOOTRST/IVSEL), multi-byte fuses, canonical sleep modes
 - [x] ATtiny13A, ATtiny24A/44A/84A and ATtiny2313A/4313 (issue #5): specs from the data sheets, wiring recipes on the existing models (ADLAR-in-ADCSRB option and half-frequency RC clock source added; 64-entry differential/gain ADC table on the x4; non-contiguous SM1:0 sleep field on the 2313A), fuse presets, tests in `crates/mcs-sim/tests/tiny_more.rs`
 - [x] ATmega8/16/32 (issue #5): classic register map (`PeripheralSet::MegaLegacy`): single-register TCCR0/TCCR2 timers with one compare unit, FOC1x in TCCR1A, shared UBRRH/UCSRC (URSEL), SFIOR (ADTS/ACME/PUD/PSR), GICR (INT enables + IVSEL), INT2 one-bit sense, legacy watchdog, CKSEL internal RC 1/2/4/8 MHz, BODEN/BODLEVEL, 8.5 ms EEPROM writes; tests in `crates/mcs-sim/tests/mega_legacy.rs`
+- [x] ATmega164PA/324PA/644PA/1284P and ATmega640/1280/2560 (issue #5): two USARTs / four USARTs, TC3-5, third compare unit (OCnC) in the timer model, ADC/comparator MUX5, PRR1, EIND/RAMPZ on the 2560, multi-word pin trace for devices with more than 32 GPIOs (waveform view), Arduino Mega fuse preset; tests in `crates/mcs-sim/tests/mega_large.rs`
 - [x] Serial Monitor (UART decode/inject on any pin), EEPROM view/edit, fuse dialog with field menus and presets, DIP packages in the Chip View
 
 ### User requests (GitHub issue #3)
@@ -60,7 +61,7 @@ Update this file when work is finished (only list items that are done in the rep
 - [ ] More virtual components on the pin panel (LED, potentiometer, logic probe); serial (UART) stimulus
 - [ ] Waveform: analog traces, protocol decoders (UART, SPI, I²C), export (VCD)
 - [ ] Input synchronizer latency and input-capture noise canceler delay
-- [ ] More devices (issues #1, #5): ATmega164/324/644/1284, ATmega640/1280/2560, ATtiny20/40, then the AVR-0/1 series (new register map)
+- [ ] More devices (issues #1, #5): ATtiny20/40, then the AVR-0/1 series (new register map)
 - [ ] Virtual I²C/SPI devices on the bus (EEPROM, sensors) so TWI/SPI transfers get answers
 - [ ] SPM self-programming, debugWIRE, timer asynchronous (TOSC) mode, USART synchronous / MSPIM modes
 - [ ] ARM Cortex-M (STM32) targets: needs the architecture abstraction below plus a Thumb-2 core, NVIC/SysTick and per-family peripherals

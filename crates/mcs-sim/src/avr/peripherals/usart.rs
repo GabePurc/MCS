@@ -30,7 +30,7 @@ pub struct UsartConfig {
     pub v_rx: u8,
     pub v_udre: u8,
     pub v_tx: u8,
-    pub prr_mask: u8,
+    pub prr_mask: u16,
 }
 
 // UCSRnA

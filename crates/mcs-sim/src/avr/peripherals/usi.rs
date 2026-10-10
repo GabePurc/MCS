@@ -22,7 +22,7 @@ pub struct UsiConfig {
     pub usck_bit: u8,
     pub v_start: u8,
     pub v_ovf: u8,
-    pub prr_mask: u8,
+    pub prr_mask: u16,
 }
 
 const USISIE: u8 = 0x80;

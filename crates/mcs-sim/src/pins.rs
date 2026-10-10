@@ -148,48 +148,75 @@ impl Pin {
     }
 }
 
-/// Ring buffer of pin-level changes: (cycle, bitmask of all pin levels).
+/// Ring buffer of pin-level changes: (cycle, bitmask of all pin levels). Devices with more than
+/// 32 GPIOs (ATmega640/1280/2560: 86, custom devices: up to 248) store `words()` 32-bit words per
+/// entry, pin `i` being bit `i % 32` of word `i / 32`.
 pub struct PinTrace {
     cycles: Vec<u64>,
+    /// `words` consecutive words per entry.
     levels: Vec<u32>,
+    words: usize,
     /// Total number of entries ever written (sequence of the next entry).
     pub seq: u64,
-    last: Option<u32>,
+    last: Vec<u32>,
+    has_last: bool,
 }
 
 impl PinTrace {
-    pub fn new(capacity: usize) -> Self {
-        Self { cycles: vec![0; capacity], levels: vec![0; capacity], seq: 0, last: None }
+    /// A trace of `capacity` entries for a device with `pins` GPIOs.
+    pub fn new(capacity: usize, pins: usize) -> Self {
+        let words = pins.div_ceil(32).max(1);
+        Self { cycles: vec![0; capacity], levels: vec![0; capacity * words], words, seq: 0, last: vec![0; words], has_last: false }
     }
 
+    /// 32-bit words per entry.
+    pub fn words(&self) -> usize {
+        self.words
+    }
+
+    /// Records the levels of all pins (`levels.len() == words()`) unless they equal the last entry.
     #[inline]
-    pub fn record(&mut self, cycle: u64, levels: u32) {
-        if self.last == Some(levels) {
+    pub fn record(&mut self, cycle: u64, levels: &[u32]) {
+        debug_assert_eq!(levels.len(), self.words);
+        if self.has_last && self.last == levels {
             return;
         }
-        self.last = Some(levels);
+        self.last.copy_from_slice(levels);
+        self.has_last = true;
         let i = (self.seq % self.cycles.len() as u64) as usize;
         self.cycles[i] = cycle;
-        self.levels[i] = levels;
+        self.levels[i * self.words..(i + 1) * self.words].copy_from_slice(levels);
         self.seq += 1;
     }
 
     pub fn clear(&mut self) {
         self.seq = 0;
-        self.last = None;
+        self.has_last = false;
     }
 
-    /// Entries with sequence >= `since` (at most `max` of the newest ones).
+    /// Entries with sequence >= `since` (at most `max` of the newest ones), with the levels of
+    /// pins 0..=31 only (one word per entry). See [`PinTrace::read_since_wide`] for devices with
+    /// more GPIOs.
     pub fn read_since(&self, since: u64, max: usize) -> (u64, Vec<u64>, Vec<u32>) {
+        let (from, c, l) = self.read_since_wide(since, max);
+        if self.words == 1 {
+            return (from, c, l);
+        }
+        let low = l.chunks_exact(self.words).map(|e| e[0]).collect();
+        (from, c, low)
+    }
+
+    /// Like [`PinTrace::read_since`] with all `words()` words of each entry, flattened.
+    pub fn read_since_wide(&self, since: u64, max: usize) -> (u64, Vec<u64>, Vec<u32>) {
         let cap = self.cycles.len() as u64;
         let from = since.max(self.seq.saturating_sub(cap)).max(self.seq.saturating_sub(max as u64));
         let n = (self.seq - from) as usize;
         let mut c = Vec::with_capacity(n);
-        let mut l = Vec::with_capacity(n);
+        let mut l = Vec::with_capacity(n * self.words);
         for k in 0..n as u64 {
             let i = ((from + k) % cap) as usize;
             c.push(self.cycles[i]);
-            l.push(self.levels[i]);
+            l.extend_from_slice(&self.levels[i * self.words..(i + 1) * self.words]);
         }
         (from, c, l)
     }

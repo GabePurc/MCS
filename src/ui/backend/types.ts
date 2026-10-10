@@ -256,6 +256,8 @@ export interface RawMachineState {
   speedHz: number;
   traceFrom: number;
   traceCycles: number[];
+  /** 32-bit words per trace entry; `traceLevels` is flattened (pin i = bit i % 32 of word i / 32). */
+  traceWords: number;
   traceLevels: number[];
   /** Instructions executed per word since the previous state (profiling only). */
   execHeat?: number[];

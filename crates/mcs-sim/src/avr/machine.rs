@@ -78,7 +78,7 @@ pub enum Event {
     Analog { pin: u8 },
     Trigger { trigger: Trigger, value: u8, cycle: u64 },
     /// New PRR value.
-    PowerReduction(u8),
+    PowerReduction(u16),
     /// A register shared between peripherals was written by its owner (data address).
     RegWritten(u16),
     ClockChanged,
@@ -100,6 +100,8 @@ pub struct Sys {
     pub pins: Vec<Pin>,
     pub clock: ClockModel,
     pub trace: PinTrace,
+    /// Scratch for `record_levels` (one word per 32 pins).
+    levels_buf: Vec<u32>,
     pub vcc: f64,
     pub events: VecDeque<Event>,
     pub messages: Vec<Message>,
@@ -149,8 +151,14 @@ impl Sys {
         }
     }
 
-    pub fn levels_mask(&self) -> u32 {
-        self.pins.iter().enumerate().fold(0, |m, (i, p)| m | ((p.level as u32) << i))
+    /// Records the current level of every pin in the trace (one bit per pin, 32 per word).
+    pub fn record_levels(&mut self, cycle: u64) {
+        let buf = &mut self.levels_buf;
+        buf.fill(0);
+        for (i, p) in self.pins.iter().enumerate() {
+            buf[i / 32] |= (p.level as u32) << (i % 32);
+        }
+        self.trace.record(cycle, buf);
     }
 
     /// Re-resolves one pin after its MCU-side or external configuration changed.
@@ -166,8 +174,7 @@ impl Sys {
             self.warn_key(cycle, format!("contention-{i}"), msg);
         }
         if changed {
-            let m = self.levels_mask();
-            self.trace.record(cycle, m);
+            self.record_levels(cycle);
             self.events.push_back(Event::Pin { pin: i as u8, level, cycle });
         }
         if volts_changed {
@@ -265,7 +272,7 @@ pub trait Peripheral: Send {
     fn on_pin(&mut self, pin: u8, level: u8, cycle: u64, cx: &mut Cx) {}
     fn on_analog(&mut self, pin: u8, cx: &mut Cx) {}
     fn on_trigger(&mut self, trigger: Trigger, value: u8, cycle: u64, cx: &mut Cx) {}
-    fn on_power_reduction(&mut self, prr: u8, cx: &mut Cx) {}
+    fn on_power_reduction(&mut self, prr: u16, cx: &mut Cx) {}
     /// A shared register owned by another peripheral was written (see `Event::RegWritten`).
     fn on_reg_written(&mut self, addr: u16, cx: &mut Cx) {}
     fn on_clock_change(&mut self, cx: &mut Cx) {}
@@ -303,7 +310,8 @@ pub struct Machine {
 impl Machine {
     pub fn new(spec: &'static AvrDeviceSpec) -> Self {
         let hz = spec.clock.internal_hz / (1u32 << spec.clock.default_prescale_log2) as f64;
-        let pins = spec.gpio_names().into_iter().map(Pin::new).collect();
+        let pins: Vec<Pin> = spec.gpio_names().into_iter().map(Pin::new).collect();
+        let npins = pins.len();
         let mut m = Self {
             spec,
             cpu: Cpu::new(spec),
@@ -311,7 +319,8 @@ impl Machine {
                 sched: Scheduler::new(),
                 pins,
                 clock: ClockModel::new(hz),
-                trace: PinTrace::new(1 << 18),
+                trace: PinTrace::new(1 << 18, npins),
+                levels_buf: vec![0; npins.div_ceil(32).max(1)],
                 vcc: spec.vcc,
                 events: VecDeque::new(),
                 messages: Vec::new(),
@@ -735,8 +744,7 @@ impl Machine {
         self.sys.reset_pin_low = false;
         self.sys.brown_out = false;
         self.reset(ResetSource::PowerOn);
-        let m = self.sys.levels_mask();
-        self.sys.trace.record(0, m);
+        self.sys.record_levels(0);
     }
 
     pub fn reset(&mut self, source: ResetSource) {
