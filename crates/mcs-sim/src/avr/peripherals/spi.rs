@@ -16,7 +16,7 @@ pub struct SpiConfig {
     pub miso_gpio: usize,
     pub sck_gpio: usize,
     pub vector: u8,
-    pub prr_mask: u8,
+    pub prr_mask: u16,
 }
 
 const SPIE: u8 = 0x80;

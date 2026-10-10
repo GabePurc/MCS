@@ -1,7 +1,8 @@
 //! Analog comparator and successive-approximation ADC (8-bit ATtiny10, 10-bit classic AVRs).
 //! Sources: Atmel-8127H sections 13-14, DS40002061B sections 23-24, Atmel-2586Q sections 16-17,
 //! Atmel-2486AA / 2466T / 2503Q (ATmega8: ADFR free running; ATmega16/32: SFIOR trigger select,
-//! always-signed differential channels with 10x / 200x gain).
+//! always-signed differential channels with 10x / 200x gain), Atmel-2549Q (ATmega640/1280/2560:
+//! MUX5 in ADCSRB extends the channel number to 64 codes), Atmel-8272G (ATmega164A..1284P).
 
 use crate::avr::machine::{Cx, Peripheral, Trigger};
 
@@ -17,6 +18,8 @@ pub struct AcmeConfig {
     pub adcsra: u16,
     pub admux: u16,
     pub mux_mask: u8,
+    /// MUX5 bit in `reg` (ADCSRB; 0 = none): selects channels 8.. (ATmega640/1280/2560).
+    pub mux5: u8,
     /// GPIO per multiplexer value (None = not a pin).
     pub channels: Vec<Option<usize>>,
 }
@@ -64,7 +67,7 @@ impl AnalogComparator {
         if let Some(m) = &self.c.acme {
             let d = &cx.cpu.data;
             if d[m.reg as usize] & m.bit != 0 && d[m.adcsra as usize] & 0x80 == 0 {
-                let mux = (d[m.admux as usize] & m.mux_mask) as usize;
+                let mux = (d[m.admux as usize] & m.mux_mask) as usize + if d[m.reg as usize] & m.mux5 != 0 { 8 } else { 0 };
                 if let Some(Some(g)) = m.channels.get(mux) {
                     return (pos, pins[*g].volts, pins[*g].name.clone());
                 }
@@ -213,6 +216,9 @@ pub struct AdcConfig {
     /// ADCH (10-bit converters).
     pub adch: Option<u16>,
     pub mux_mask: u8,
+    /// MUX5 bit in ADCSRB (0 = none): bit 5 of the channel number, so `inputs` has up to 64
+    /// entries (ATmega640/1280/2560).
+    pub mux5: u8,
     /// Input per multiplexer value (None = reserved).
     pub inputs: Vec<Option<AdcInput>>,
     /// Reference selection: (mask in ADMUX, extra mask, reference per combined value).
@@ -235,7 +241,7 @@ pub struct AdcConfig {
     /// Auto trigger source per ADTS value.
     pub triggers: [Option<Trigger>; 8],
     pub vector: u8,
-    pub prr_mask: u8,
+    pub prr_mask: u16,
     /// Announce ADMUX/ADCSRB/ADCSRA writes (the comparator reads ACME and the mux).
     pub notify: bool,
 }
@@ -291,7 +297,11 @@ impl Adc {
     }
 
     fn mux(&self, cx: &Cx) -> usize {
-        (cx.cpu.data[self.c.admux as usize] & self.c.mux_mask) as usize
+        let m = (cx.cpu.data[self.c.admux as usize] & self.c.mux_mask) as usize;
+        match self.c.adcsrb {
+            Some(a) if self.c.mux5 != 0 && cx.cpu.data[a as usize] & self.c.mux5 != 0 => m | 32,
+            _ => m,
+        }
     }
 
     fn reference(&self, cx: &Cx) -> f64 {
@@ -450,7 +460,7 @@ impl Peripheral for Adc {
         }
     }
 
-    fn on_power_reduction(&mut self, prr: u8, cx: &mut Cx) {
+    fn on_power_reduction(&mut self, prr: u16, cx: &mut Cx) {
         self.power_reduced = prr & self.c.prr_mask != 0;
         if self.power_reduced && self.busy {
             self.abort(cx);

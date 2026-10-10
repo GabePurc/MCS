@@ -13,6 +13,8 @@ Supported microcontrollers:
 | megaAVR | ATmega48PA, ATmega88PA, ATmega168PA, ATmega328P (Arduino Uno) | PDIP-28 |
 | megaAVR (classic register map) | ATmega8 | PDIP-28 |
 | megaAVR (classic register map) | ATmega16, ATmega32 | PDIP-40 |
+| megaAVR | ATmega164PA, ATmega324PA, ATmega644PA, ATmega1284P | PDIP-40 |
+| megaAVR | ATmega640, ATmega1280, ATmega2560 (Arduino Mega) | TQFP-100 |
 
 ![MCS stopped at a breakpoint in blink.asm](docs/screenshot.jpg)
 

@@ -180,6 +180,10 @@ pub enum PeripheralSet {
     TinyX313,
     /// ATmega8/16/32.
     MegaLegacy,
+    /// ATmega164PA/324PA/644PA/1284P.
+    MegaX4,
+    /// ATmega640/1280/2560.
+    MegaX0,
     /// User-defined devices (`devices::custom`): wired by register/pin naming convention.
     Custom,
 }

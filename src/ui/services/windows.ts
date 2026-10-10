@@ -300,7 +300,7 @@ export async function initPopoutBridge(panel: PanelId, close: () => void): Promi
       case 'snapshot':
         if (m.spec) handleOutput({ type: 'device', spec: m.spec });
         trace.clear();
-        if (m.trace.cycles.length) trace.append(Float64Array.from(m.trace.cycles), Uint32Array.from(m.trace.levels), m.trace.endCycle, m.trace.hz);
+        if (m.trace.cycles.length) trace.append(Float64Array.from(m.trace.cycles), Uint32Array.from(m.trace.levels), m.trace.endCycle, m.trace.hz, m.trace.words);
         if (m.state) handleOutput({ type: 'state', state: m.state });
         applyWs(m.ws);
         applySettings(m.settings);

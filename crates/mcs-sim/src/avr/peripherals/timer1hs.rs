@@ -32,7 +32,7 @@ pub struct Timer1HsConfig {
     /// OC1A, !OC1A, OC1B, !OC1B GPIOs.
     pub oc: [usize; 4],
     pub prescaler_group: u8,
-    pub prr_mask: u8,
+    pub prr_mask: u16,
 }
 
 const CTC1: u8 = 0x80;
@@ -324,7 +324,7 @@ impl Peripheral for Timer1Hs {
         self.reconfigure(cx);
     }
 
-    fn on_power_reduction(&mut self, prr: u8, cx: &mut Cx) {
+    fn on_power_reduction(&mut self, prr: u16, cx: &mut Cx) {
         self.sync(cx);
         self.power_reduced = prr & self.c.prr_mask != 0;
         self.reconfigure(cx);

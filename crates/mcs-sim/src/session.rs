@@ -490,7 +490,8 @@ impl Session {
         let (sample_t, sample_c, sample_hz) = self.speed_sample;
         let Some(m) = self.machine.as_mut() else { return };
         let data: Vec<u8> = (0..m.cpu.data_end).map(|a| m.peek_data(a)).collect();
-        let (trace_from, trace_cycles, trace_levels) = m.sys.trace.read_since(trace_sent, MAX_TRACE_PER_STATE);
+        let (trace_from, trace_cycles, trace_levels) = m.sys.trace.read_since_wide(trace_sent, MAX_TRACE_PER_STATE);
+        let trace_words = m.sys.trace.words() as u32;
         let new_trace_sent = m.sys.trace.seq;
         let dt = (now - sample_t) / 1000.0;
         let speed = if dt >= 0.25 || !running {
@@ -553,6 +554,7 @@ impl Session {
             speed_hz: speed.map(|s| s.2).unwrap_or(sample_hz),
             trace_from,
             trace_cycles,
+            trace_words,
             trace_levels,
             exec_heat: m.take_exec_counts(),
             messages: m.messages(),

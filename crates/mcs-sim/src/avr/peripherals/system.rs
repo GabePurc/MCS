@@ -117,7 +117,7 @@ impl Peripheral for System {
             cx.cpu.data[a] = self.flags;
         } else if addr == c.prr {
             cx.cpu.data[a] = v & 0x03;
-            cx.sys.events.push_back(Event::PowerReduction(v & 0x03));
+            cx.sys.events.push_back(Event::PowerReduction((v & 0x03) as u16));
         } else if addr == c.vlmcsr {
             cx.cpu.data[a] = v & 0x47;
             self.evaluate_vlm(cx);

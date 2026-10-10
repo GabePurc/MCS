@@ -168,6 +168,8 @@ pub struct MachineState {
     pub speed_hz: f64,
     pub trace_from: u64,
     pub trace_cycles: Vec<u64>,
+    /// 32-bit words per trace entry (`ceil(GPIOs / 32)`); `trace_levels` holds them flattened.
+    pub trace_words: u32,
     pub trace_levels: Vec<u32>,
     /// Instructions executed since the previous state as `[word, count, ...]` pairs for the
     /// words that ran (profiling only).

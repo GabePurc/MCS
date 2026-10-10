@@ -45,7 +45,7 @@ logic is Rust; TypeScript only renders and routes user input.
   when software touches their registers, so idle peripherals cost nothing per instruction.
 * `pins.rs` — electrical model (direction, latch, pull-up, peripheral override, external
   drive incl. analog voltage, Schmitt thresholds, contention detection), the logic-analyzer
-  trace ring buffer and the piecewise clock model (cycles <-> seconds across clock changes).
+  trace ring buffer (`ceil(GPIOs / 32)` words per entry, so the 86-pin ATmega2560 and custom devices trace every pin) and the piecewise clock model (cycles <-> seconds across clock changes).
 * `avr/peripherals/stimulus.rs` — test-bench signal generators (square waves / pulse bursts on
   pins), a peripheral like any other: one scheduled event per edge, timed in seconds.
 * Execution profiling: `Machine::run` is monomorphized over a `PROFILE` const so per-word
