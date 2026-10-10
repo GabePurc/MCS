@@ -5,6 +5,13 @@
 //! FPCAR, FPDSCR, MVFR0-2) and a read-as-zero MPU TYPE; plus the
 //! DWT CTRL/CYCCNT pair (0xE000_1000) many STM32 programs use for cycle counting.
 //!
+//! Cortex-M7 (CPUID part number 0xC27) additionally has the cache maintenance operations (ICIALLU,
+//! DCIMVAC, DCISW, DCCMVAC, ... accepted and ignored: the caches are not modelled, memory is always
+//! coherent), CLIDR / CTR / CCSIDR / CSSELR with the sizes of the STM32H7 caches (16 KiB I + 16 KiB D,
+//! 4-way, 32-byte lines), SCB_CCR.DC/IC/BP stored, ITCMCR / DTCMCR / AHBPCR / CACR / AHBSCR / ABFSR
+//! stored, and the 16-region MPU (TYPE, CTRL, RNR, RBAR / RASR with the three aliases). The MPU
+//! registers are stored and read back but **not enforced**: no access ever faults on a region check.
+//!
 //! References: ARM DDI 0403E.e B3.2 (SCB), Cortex-M4 Devices Generic User Guide (ARM DUI 0553)
 //! chapter 4.
 
@@ -44,8 +51,97 @@ pub const BFSR_BFARVALID: u32 = 1 << 15;
 pub const HFSR_VECTTBL: u32 = 1 << 1;
 pub const HFSR_FORCED: u32 = 1 << 30;
 
+/// Cortex-M7 only registers (see the module documentation).
+#[derive(Default)]
+pub struct M7Regs {
+    pub csselr: u32,
+    pub mpu_ctrl: u32,
+    pub mpu_rnr: u32,
+    pub mpu_rbar: [u32; 16],
+    pub mpu_rasr: [u32; 16],
+    pub itcmcr: u32,
+    pub dtcmcr: u32,
+    pub ahbpcr: u32,
+    pub cacr: u32,
+    pub ahbscr: u32,
+    pub abfsr: u32,
+}
+
+/// CCSIDR of the data cache (CSSELR.InD = 0) and the instruction cache: 16 KiB, 4 ways, 128 sets,
+/// 8-word lines (data: write-back, write-allocate, read-allocate).
+const CCSIDR_DATA: u32 = 0xe00f_e019;
+const CCSIDR_INSN: u32 = 0x200f_e019;
+/// MPU regions of the Cortex-M7 in the STM32H7.
+pub const MPU_REGIONS: u32 = 16;
+
+impl M7Regs {
+    /// Region addressed by the RBAR / RASR register (or alias) at `off`, `base` being the register
+    /// itself: the alias k accesses region (RNR & !3) + k.
+    fn region(&self, base: u32, off: u32) -> u32 {
+        let rnr = self.mpu_rnr & (MPU_REGIONS - 1);
+        match (off - base) >> 3 {
+            0 => rnr,
+            k => (rnr & !3) | k,
+        }
+    }
+
+    fn read(&self, off: u32) -> Option<u32> {
+        Some(match off {
+            0xd78 => 0x0900_0003,
+            0xd7c => 0x8f03_0003,
+            0xd80 => if self.csselr & 1 == 0 { CCSIDR_DATA } else { CCSIDR_INSN },
+            0xd84 => self.csselr,
+            0xd90 => MPU_REGIONS << 8,
+            0xd94 => self.mpu_ctrl,
+            0xd98 => self.mpu_rnr,
+            0xd9c | 0xda4 | 0xdac | 0xdb4 => {
+                let r = self.region(0xd9c, off);
+                self.mpu_rbar[r as usize] | r
+            }
+            0xda0 | 0xda8 | 0xdb0 | 0xdb8 => self.mpu_rasr[self.region(0xda0, off) as usize],
+            0xf90 => self.itcmcr,
+            0xf94 => self.dtcmcr,
+            0xf98 => self.ahbpcr,
+            0xf9c => self.cacr,
+            0xfa0 => self.ahbscr,
+            0xfa8 => self.abfsr,
+            _ => return None,
+        })
+    }
+
+    fn write(&mut self, off: u32, v: u32) {
+        match off {
+            0xd84 => self.csselr = v & 0xf,
+            0xd94 => self.mpu_ctrl = v & 7,
+            0xd98 => self.mpu_rnr = v & 0xff,
+            0xd9c | 0xda4 | 0xdac | 0xdb4 => {
+                let mut r = self.region(0xd9c, off);
+                if off == 0xd9c && v & 0x10 != 0 {
+                    // VALID: the region field selects the region (and updates RNR).
+                    self.mpu_rnr = v & 0xf;
+                    r = v & 0xf;
+                }
+                self.mpu_rbar[r as usize] = v & 0xffff_ffe0;
+            }
+            0xda0 | 0xda8 | 0xdb0 | 0xdb8 => {
+                let r = self.region(0xda0, off);
+                self.mpu_rasr[r as usize] = v & 0x1f07_ff3f;
+            }
+            0xf90 => self.itcmcr = v & 0xf,
+            0xf94 => self.dtcmcr = v & 0xf,
+            0xf98 => self.ahbpcr = v & 0xf,
+            0xf9c => self.cacr = v & 7,
+            0xfa0 => self.ahbscr = v,
+            0xfa8 => self.abfsr &= !v,
+            _ => {} // cache maintenance operations (0xf50-0xf78): accepted, nothing to do
+        }
+    }
+}
+
 pub struct Scb {
     pub cpuid: u32,
+    /// Cortex-M7 cache / MPU / TCM registers (None on the other cores).
+    pub m7: Option<Box<M7Regs>>,
     pub vtor: u32,
     pub scr: u32,
     pub ccr: u32,
@@ -70,6 +166,7 @@ impl Scb {
     pub fn new(cpuid: u32) -> Self {
         Self {
             cpuid,
+            m7: (cpuid >> 4 & 0xfff == 0xc27).then(Box::default),
             vtor: 0,
             scr: 0,
             ccr: CCR_STKALIGN,
@@ -87,6 +184,21 @@ impl Scb {
             fpdscr: 0,
             dwt_ctrl: 0,
             dwt_off: 0,
+        }
+    }
+}
+
+impl Scb {
+    /// Cortex-M7 specific register at SCS offset `off`, if this core has it.
+    #[inline(never)]
+    fn m7_read(&self, off: u32) -> Option<u32> {
+        self.m7.as_ref()?.read(off)
+    }
+
+    #[inline(never)]
+    fn m7_write(&mut self, off: u32, v: u32) {
+        if let Some(m) = self.m7.as_mut() {
+            m.write(off, v);
         }
     }
 }
@@ -175,6 +287,7 @@ impl Machine {
             0xf40 if fpu => self.fp_sysreg(mcs_core::arm::vfp::FPREG_MVFR0),
             0xf44 if fpu => self.fp_sysreg(mcs_core::arm::vfp::FPREG_MVFR1),
             0xf48 if fpu && self.cfg.features.has(mcs_core::arm::thumb::ArmFeatures::FPV5_DP) => self.fp_sysreg(mcs_core::arm::vfp::FPREG_MVFR2),
+            0xd78..=0xdbf | 0xf50..=0xfaf => self.scb.m7_read(off).unwrap_or(0),
             _ => 0,
         })
     }
@@ -253,7 +366,7 @@ impl Machine {
                 }
             }
             0xd10 => self.scb.scr = v & 0x16,
-            0xd14 => self.scb.ccr = (v & 0x31b) | CCR_STKALIGN,
+            0xd14 => self.scb.ccr = (v & if self.scb.m7.is_some() { 0x7_031b } else { 0x31b }) | CCR_STKALIGN,
             0xd18..=0xd23 => {
                 for k in 0..4 {
                     self.nvic.set_sys_prio((4 + off - 0xd18 + k) as u16, (v >> (8 * k)) as u8);
@@ -282,6 +395,7 @@ impl Machine {
             0xf34 if self.cfg.features.has_fpu() => self.scb.fpccr = v & (FPCCR_ASPEN | FPCCR_LSPEN),
             0xf38 if self.cfg.features.has_fpu() => self.scb.fpcar = v & !7,
             0xf3c if self.cfg.features.has_fpu() => self.scb.fpdscr = v & FPDSCR_MASK,
+            0xd78..=0xdbf | 0xf50..=0xfaf => self.scb.m7_write(off, v),
             _ => {}
         }
     }

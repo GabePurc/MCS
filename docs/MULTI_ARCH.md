@@ -55,8 +55,18 @@ RCC (HSI16/HSE/PLL, bus prescalers), FLASH ACR wait states, GPIO A-G (MODER/OTYP
 PUPDR/IDR/ODR/BSRR/AFR), EXTI + SYSCFG, NVIC, SysTick, USART/LPUART, TIM2-TIM4/TIM6/TIM7,
 ADC (later). UI: Processor panel for Cortex-M registers, peripheral register view from the spec.
 
-## Stage D — STM32H7 (Cortex-M7, double FPU): STM32H743
-Large chips like STM32H743IIT6 (LQFP-176): RCC/PWR domains, GPIO A-K, USART, TIM, SysTick.
+## Stage D — STM32H7 (Cortex-M7, double FPU): STM32H743 — DONE (Rust side)
+STM32H743IIT6 (LQFP176) and STM32H743ZIT6 (LQFP144, Nucleo-H743ZI); see `docs/ROADMAP.md`.
+* Memory: `MemConfig` takes several RAM blocks and RAM aliases; `Bus` dispatches through a page table
+  indexed by `addr >> 20` (regions own whole 1 MiB pages; construction panics on overlap). `ArmDeviceSpec`
+  gained `flash_alias`, `extra_ram`, `ram_aliases`; the debugger memory image / session `data` still covers
+  RAM block 0 only (G4: SRAM+CCM, H7: DTCM) -- a protocol/UI follow-up for the other blocks.
+* Peripherals: `ArmPeripheralSet.family` (`Stm32G4` / `Stm32H7`) selects the RCC/PWR/FLASH/SYSCFG-EXTI models
+  (`periph/h7.rs` for the H7, `SysExti` is parameterised by `ExtiLayout`); GPIO, USART/UART/LPUART and timers
+  are the G4 models. `ClockTree` has four APB ratios and explicit timer ratios (cycles of the CPU clock per
+  PCLKn / timer kernel tick); the cycle counter counts CPU clock cycles (sys_ck / D1CPRE).
+* Simplifications: immediate oscillator/PLL lock and voltage scaling, no kernel-clock muxes (CCIPR), caches
+  and MPU are register-level only, limits (VOS frequencies, wait states, PLL ranges) are advisory warnings.
 
 ## Stage E — ESP32
 ESP32-C3 (RISC-V RV32IMC) first (simpler core, same seam), then the classic ESP32 (Xtensa LX6)

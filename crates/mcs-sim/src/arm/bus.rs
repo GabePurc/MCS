@@ -1,11 +1,14 @@
 //! ARMv7-M memory map: code (flash), SRAM, memory-mapped peripherals and the private peripheral
 //! bus (System Control Space).
 //!
-//! Regions are selected by the top address byte (`top` table), so a RAM or flash access costs one
-//! table lookup plus a bounds check; peripherals are found by binary search over their (sorted)
-//! address ranges with a one-entry cache. Region sizes and bases come from [`MemConfig`] so the
-//! STM32 device descriptions can configure them. Regions must lie in distinct 16 MiB windows
-//! (`addr >> 24`), which holds for STM32 (flash 0x0800_0000, SRAM 0x2000_0000, CCM/SRAM2 windows).
+//! Regions are selected by a page table indexed by `addr >> 20` (4096 one-byte entries, 4 KiB), so a
+//! RAM or flash access costs one table lookup plus a bounds check no matter how many regions a device
+//! has; peripherals are found by binary search over their (sorted) address ranges with a one-entry
+//! cache. Region sizes and bases come from [`MemConfig`] so the STM32 device descriptions can
+//! configure them. Every region owns whole 1 MiB pages (no two regions may share one; `Bus::new`
+//! panics otherwise), which holds for STM32 (G4: flash 0x0800_0000, SRAM 0x2000_0000, CCM 0x1000_0000;
+//! H7: ITCM 0, flash 0x0800_0000, DTCM 0x2000_0000, AXI SRAM 0x2400_0000, SRAM1-3 0x3000_0000 and its
+//! 0x1000_0000 alias, SRAM4 0x3800_0000, backup SRAM 0x3880_0000).
 //!
 //! Reference: ARM DDI 0403E.e B3.1 (system address map).
 
@@ -23,8 +26,9 @@ pub struct MemConfig {
     pub flash_alias: bool,
     /// RAM regions `(base, size)`.
     pub ram: Vec<(u32, u32)>,
-    /// Part of a RAM region that is also visible in a window of its own (STM32 CCM SRAM).
-    pub ram_alias: Option<RamAlias>,
+    /// Parts of RAM regions that are also visible in a window of their own (STM32G4 CCM SRAM, STM32H7
+    /// SRAM1-3 at 0x1000_0000). At most 8.
+    pub ram_alias: Vec<RamAlias>,
 }
 
 /// A second address window onto `size` bytes of RAM region `ram`, starting at offset `off`.
@@ -39,7 +43,7 @@ pub struct RamAlias {
 impl Default for MemConfig {
     /// STM32G4-like defaults: 128 KiB flash at 0x0800_0000 (aliased at 0), 32 KiB SRAM.
     fn default() -> Self {
-        Self { flash_base: 0x0800_0000, flash_size: 128 * 1024, flash_alias: true, ram: vec![(0x2000_0000, 32 * 1024)], ram_alias: None }
+        Self { flash_base: 0x0800_0000, flash_size: 128 * 1024, flash_alias: true, ram: vec![(0x2000_0000, 32 * 1024)], ram_alias: Vec::new() }
     }
 }
 
@@ -124,9 +128,13 @@ pub(crate) const T_FLASH: u8 = 1;
 pub(crate) const T_ALIAS: u8 = 2;
 pub(crate) const T_PERIPH: u8 = 3;
 pub(crate) const T_PPB: u8 = 4;
-pub(crate) const T_RALIAS: u8 = 5;
+/// RAM aliases are `T_RALIAS + index` (index < 8).
+pub(crate) const T_RALIAS: u8 = 8;
 /// RAM regions are `T_RAM + index`.
-pub(crate) const T_RAM: u8 = 8;
+pub(crate) const T_RAM: u8 = 16;
+/// log2 of the page size of the region table.
+const PAGE_SHIFT: u32 = 20;
+const PAGES: usize = 1 << (32 - PAGE_SHIFT);
 
 pub struct Ram {
     pub base: u32,
@@ -145,8 +153,9 @@ pub struct Bus {
     pub flash_size: u32,
     pub flash_alias: bool,
     pub ram: Vec<Ram>,
-    pub ram_alias: Option<RamAlias>,
-    pub(crate) top: [u8; 256],
+    pub ram_alias: Vec<RamAlias>,
+    /// Region code of every 1 MiB page of the address space.
+    top: [u8; PAGES],
     ranges: Vec<PeriphEntry>,
     pub(crate) devs: Vec<Box<dyn Mmio>>,
     last: usize,
@@ -154,20 +163,29 @@ pub struct Bus {
 
 impl Bus {
     pub fn new(cfg: &MemConfig) -> Self {
-        let mut top = [T_NONE; 256];
-        top[0x40..0x60].fill(T_PERIPH);
-        top[0xe0] = T_PPB;
+        assert!(cfg.ram.len() < (256 - T_RAM as usize) && cfg.ram_alias.len() <= (T_RAM - T_RALIAS) as usize, "too many memory regions");
+        let mut top = [T_NONE; PAGES];
+        // Peripheral window 0x4000_0000-0x5FFF_FFFF and the whole private peripheral bus window.
+        top[0x400..0x600].fill(T_PERIPH);
+        top[0xe00..0xf00].fill(T_PPB);
+        let mut claim = |base: u32, size: u32, code: u8| {
+            let (first, last) = ((base >> PAGE_SHIFT) as usize, (base.wrapping_add(size.max(1) - 1) >> PAGE_SHIFT) as usize);
+            for (page, entry) in top.iter_mut().enumerate().take(last + 1).skip(first) {
+                assert_eq!(*entry, T_NONE, "memory regions overlap in the 1 MiB page at {:#010x}", (page as u32) << PAGE_SHIFT);
+                *entry = code;
+            }
+        };
         let mut ram = Vec::new();
         for (k, &(base, size)) in cfg.ram.iter().enumerate() {
-            top[(base >> 24) as usize] = T_RAM + k as u8;
+            claim(base, size, T_RAM + k as u8);
             ram.push(Ram { base, data: vec![0; size as usize] });
         }
-        if let Some(a) = cfg.ram_alias {
-            top[(a.base >> 24) as usize] = T_RALIAS;
+        for (k, a) in cfg.ram_alias.iter().enumerate() {
+            claim(a.base, a.size, T_RALIAS + k as u8);
         }
-        top[(cfg.flash_base >> 24) as usize] = T_FLASH;
-        if cfg.flash_alias && cfg.flash_base >> 24 != 0 {
-            top[0] = T_ALIAS;
+        claim(cfg.flash_base, cfg.flash_size, T_FLASH);
+        if cfg.flash_alias && cfg.flash_base >> PAGE_SHIFT != 0 {
+            claim(0, cfg.flash_size, T_ALIAS);
         }
         Self {
             flash: vec![0xff; cfg.flash_size as usize],
@@ -175,12 +193,18 @@ impl Bus {
             flash_size: cfg.flash_size,
             flash_alias: cfg.flash_alias,
             ram,
-            ram_alias: cfg.ram_alias,
+            ram_alias: cfg.ram_alias.clone(),
             top,
             ranges: Vec::new(),
             devs: Vec::new(),
             last: 0,
         }
+    }
+
+    /// Region code (`T_*`) of the page containing `addr`.
+    #[inline]
+    pub(crate) fn kind(&self, addr: u32) -> u8 {
+        self.top[(addr >> PAGE_SHIFT) as usize]
     }
 
     /// Maps `dev` over `[base, base + size)`; returns the device (event owner) index.
@@ -217,18 +241,18 @@ impl Bus {
     /// Reads plain memory (flash / RAM). `None` for peripheral, PPB or unmapped addresses.
     #[inline]
     pub fn read_mem(&self, addr: u32, size: u32) -> Option<u32> {
-        let t = self.top[(addr >> 24) as usize];
+        let t = self.kind(addr);
         let (data, off): (&[u8], u32) = match t {
             T_FLASH => (&self.flash, addr.wrapping_sub(self.flash_base)),
             T_ALIAS => (&self.flash, addr),
-            T_RALIAS => {
-                let a = self.ram_alias.as_ref()?;
-                let d = &self.ram.get(a.ram)?.data;
-                (d.get(a.off as usize..(a.off + a.size) as usize)?, addr.wrapping_sub(a.base))
-            }
             t if t >= T_RAM => {
                 let r = &self.ram[(t - T_RAM) as usize];
                 (&r.data, addr.wrapping_sub(r.base))
+            }
+            t if t >= T_RALIAS => {
+                let a = self.ram_alias.get((t - T_RALIAS) as usize)?;
+                let d = &self.ram.get(a.ram)?.data;
+                (d.get(a.off as usize..(a.off + a.size) as usize)?, addr.wrapping_sub(a.base))
             }
             _ => return None,
         };
@@ -243,9 +267,9 @@ impl Bus {
     /// Writes RAM. Returns false for flash, peripherals and unmapped addresses.
     #[inline]
     pub fn write_ram(&mut self, addr: u32, size: u32, value: u32) -> bool {
-        let t = self.top[(addr >> 24) as usize];
+        let t = self.kind(addr);
         if t < T_RAM {
-            return t == T_RALIAS && self.write_alias(addr, size, value);
+            return t >= T_RALIAS && self.write_alias(t - T_RALIAS, addr, size, value);
         }
         let r = &mut self.ram[(t - T_RAM) as usize];
         let o = addr.wrapping_sub(r.base) as usize;
@@ -275,8 +299,8 @@ impl Bus {
     }
 
     #[cold]
-    fn write_alias(&mut self, addr: u32, size: u32, value: u32) -> bool {
-        let Some(a) = self.ram_alias else { return false };
+    fn write_alias(&mut self, idx: u8, addr: u32, size: u32, value: u32) -> bool {
+        let Some(&a) = self.ram_alias.get(idx as usize) else { return false };
         let o = addr.wrapping_sub(a.base);
         if o.saturating_add(size) > a.size {
             return false;
@@ -308,10 +332,10 @@ impl Bus {
 
     /// Byte slice of RAM starting at `addr` (for instruction fetch from RAM).
     pub fn ram_slice(&self, addr: u32, len: usize) -> Option<&[u8]> {
-        let t = self.top[(addr >> 24) as usize];
+        let t = self.kind(addr);
         if t < T_RAM {
-            if t == T_RALIAS {
-                let a = self.ram_alias.as_ref()?;
+            if t >= T_RALIAS {
+                let a = self.ram_alias.get((t - T_RALIAS) as usize)?;
                 let o = (addr.wrapping_sub(a.base) + a.off) as usize;
                 return self.ram.get(a.ram)?.data.get(o..o + len);
             }

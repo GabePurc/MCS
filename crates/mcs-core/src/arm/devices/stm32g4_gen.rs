@@ -2,30 +2,7 @@
 // and STM32_open_pin_data (package pins, alternate functions); do not edit by hand.
 #![allow(clippy::all)]
 
-pub struct BitDef {
-    pub name: &'static str,
-    pub mask: u32,
-    pub desc: &'static str,
-}
-
-pub struct RegDef {
-    pub name: &'static str,
-    pub off: u32,
-    pub reset: u32,
-    pub access: &'static str,
-    pub desc: &'static str,
-    pub bits: &'static [BitDef],
-}
-
-pub struct PinDef {
-    pub number: u8,
-    pub name: &'static str,
-    /// 0 I/O, 1 supply, 2 ground, 3 reference.
-    pub kind: u8,
-    /// GPIO index (port * 16 + bit), -1 when the pin is not a GPIO.
-    pub gpio: i16,
-    pub functions: &'static [&'static str],
-}
+pub use super::gen_types::{BitDef, PinDef, RegDef};
 
 pub const RCC: &[RegDef] = &[
     RegDef { name: "CR", off: 0x0, reset: 0x00000500, access: "rw", desc: "RCC clock control register", bits: &[BitDef { name: "HSION", mask: 0x00000100, desc: "Internal High Speed oscillator (HSI16) clock enable" }, BitDef { name: "HSIKERON", mask: 0x00000200, desc: "Internal High Speed oscillator (HSI16) clock enable for some IPs Kernel" }, BitDef { name: "HSIRDY", mask: 0x00000400, desc: "Internal High Speed oscillator (HSI16) clock ready flag" }, BitDef { name: "HSEON", mask: 0x00010000, desc: "External High Speed oscillator (HSE) clock enable" }, BitDef { name: "HSERDY", mask: 0x00020000, desc: "External High Speed oscillator (HSE) clock ready" }, BitDef { name: "HSEBYP", mask: 0x00040000, desc: "External High Speed oscillator (HSE) clock bypass" }, BitDef { name: "CSSON", mask: 0x00080000, desc: "HSE Clock Security System enable" }, BitDef { name: "PLLON", mask: 0x01000000, desc: "System PLL clock enable" }, BitDef { name: "PLLRDY", mask: 0x02000000, desc: "System PLL clock ready" }] },

@@ -155,7 +155,7 @@ impl Rcc {
         let hdiv = if hpre < 8 { 1 } else { [2, 4, 8, 16, 64, 128, 256, 512][(hpre - 8) as usize] };
         let ppre = |v: u32| if v < 4 { 1 } else { 1u32 << (v - 3) };
         let hclk = sysclk / hdiv as f64;
-        let tree = ClockTree { sysclk_hz: sysclk, hclk_hz: hclk, ppre1: ppre(self.r[CFGR] >> 8 & 7), ppre2: ppre(self.r[CFGR] >> 11 & 7) };
+        let tree = ClockTree::with_apb_prescalers(sysclk, hclk, ppre(self.r[CFGR] >> 8 & 7), ppre(self.r[CFGR] >> 11 & 7));
         let cycles = cx.cycles;
         cx.sys.set_clock_tree(tree, cycles);
         self.check_limits(hclk, cx);
