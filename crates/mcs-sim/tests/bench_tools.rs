@@ -108,10 +108,10 @@ fn profiling_counts_executed_words() {
     m.set_profiling(true);
     m.run(m.cpu.cycles + 200);
     let c = m.take_exec_counts();
-    assert_eq!(c.len(), 512);
-    assert!(c[1] >= 99 && c[1] <= 101, "{}", c[1]);
-    assert_eq!(c[2], 0);
-    assert!(m.take_exec_counts().iter().all(|&n| n == 0));
+    let count = |w: u32| c.chunks(2).find(|p| p[0] == w).map_or(0, |p| p[1]);
+    assert!((99..=101).contains(&count(1)), "{}", count(1));
+    assert_eq!(count(2), 0);
+    assert!(m.take_exec_counts().is_empty());
 }
 
 #[test]

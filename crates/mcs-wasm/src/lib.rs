@@ -37,6 +37,9 @@ enum Request {
     InstructionSet { device_id: String },
     DefInclude { device_id: String },
     ToIntelHex { flash: Vec<u8>, used: usize },
+    RegisterCustomDevices { configs: Vec<mcs_api::CustomMcuConfig> },
+    CustomDevicePreview { config: mcs_api::CustomMcuConfig },
+    CustomDeviceDefaults,
 }
 
 fn dispatch(req: Request) -> Value {
@@ -63,6 +66,12 @@ fn dispatch(req: Request) -> Value {
         Request::InstructionSet { device_id } => json!(mcs_api::instruction_set(&device_id)),
         Request::DefInclude { device_id } => json!(mcs_api::def_include(&device_id)),
         Request::ToIntelHex { flash, used } => json!(mcs_api::to_intel_hex(&flash, used)),
+        Request::RegisterCustomDevices { configs } => json!(mcs_api::register_custom_devices(&configs)),
+        Request::CustomDevicePreview { config } => match mcs_api::custom_device_preview(&config) {
+            Ok(p) => json!({ "ok": p }),
+            Err(e) => json!({ "error": e }),
+        },
+        Request::CustomDeviceDefaults => json!(mcs_api::custom_device_defaults()),
     }
 }
 

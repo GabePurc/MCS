@@ -9,7 +9,7 @@ import { editorApi } from '../editor/editorApi';
 import { isPanelOpen, useLayout, type PanelId } from '../state/layout';
 import { useSettings } from '../state/settings';
 import { useSim } from '../state/sim';
-import { activeDoc, clearBreakpoints, docKey, toggleSourceBreakpoint, useWorkspace } from '../state/workspace';
+import { activeDoc, clearBreakpoints, clearOutput, docKey, toggleSourceBreakpoint, useWorkspace } from '../state/workspace';
 import { openDialog } from '../state/dialogs';
 import { buildActive, importHexOrElf, isBuildStale, openProgramAsMachineCode } from './build';
 import { closeDocument, confirmQuit, newFile, openFileDialog, saveAll, saveDoc } from './files';
@@ -178,6 +178,8 @@ const list: CommandDef[] = [
     keys: ['F5'],
     run: async () => {
       if (running()) return;
+      // A run from reset is a fresh run; Continue keeps the output.
+      if (useSettings.getState().clearOutputOnRun && !needsBuild() && (useSim.getState().state?.cycles ?? 0) === 0) clearOutput();
       if (await ensureProgram()) sim({ type: 'run' });
     },
     enabled: () => !running() && (hasDoc() || hasProgram()),
@@ -219,6 +221,12 @@ const list: CommandDef[] = [
     run: () => useSettings.getState().set({ sourceStepping: !useSettings.getState().sourceStepping }),
     checked: () => useSettings.getState().sourceStepping,
   },
+  {
+    id: 'build.clearOutputOnRun',
+    label: 'Clear Output on Build / Run',
+    run: () => useSettings.getState().set({ clearOutputOnRun: !useSettings.getState().clearOutputOnRun }),
+    checked: () => useSettings.getState().clearOutputOnRun,
+  },
   ...SPEEDS.map(([label, factor, mode]): CommandDef => ({
     id: `speed.${mode}.${factor}`,
     label,
@@ -231,6 +239,7 @@ const list: CommandDef[] = [
   { id: 'speed.custom', label: 'Custom Speed...', icon: 'Settings', run: () => openDialog('speed') },
 
   // Device / tools / help
+  { id: 'device.custom', label: 'Custom Microcontroller...', icon: 'Chip3D', run: () => openDialog('customDevice') },
   { id: 'device.fuses', label: 'Fuses & Lock Bits...', icon: 'Fuse', run: () => openDialog('fuses') },
   { id: 'device.supply', label: 'Supply & Clock...', icon: 'Settings', run: () => openDialog('supply') },
   { id: 'tools.toolchain', label: 'Toolchain Options...', icon: 'Settings', run: () => openDialog('toolchain') },

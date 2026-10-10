@@ -4,13 +4,13 @@
  * hover info for registers/symbols and assembly completion.
  */
 import { useEffect, useRef, type JSX } from 'react';
-import { Compartment, EditorState, RangeSet, StateEffect, StateField, type Extension } from '@codemirror/state';
+import { Compartment, EditorSelection, EditorState, RangeSet, StateEffect, StateField, type Extension } from '@codemirror/state';
 import {
   Decoration, EditorView, GutterMarker, crosshairCursor, drawSelection, dropCursor, gutter, highlightActiveLine, highlightActiveLineGutter,
   highlightSpecialChars, hoverTooltip, keymap, lineNumbers, rectangularSelection, type DecorationSet,
 } from '@codemirror/view';
-import { defaultKeymap, history, historyKeymap, indentWithTab, redo, selectAll, undo } from '@codemirror/commands';
-import { bracketMatching, indentOnInput, indentUnit, syntaxHighlighting } from '@codemirror/language';
+import { defaultKeymap, history, historyKeymap, indentLess, indentMore, redo, selectAll, undo } from '@codemirror/commands';
+import { bracketMatching, getIndentUnit, indentOnInput, indentUnit, syntaxHighlighting } from '@codemirror/language';
 import { gotoLine, highlightSelectionMatches, openSearchPanel, search, searchKeymap } from '@codemirror/search';
 import { autocompletion, closeBrackets, closeBracketsKeymap, completionKeymap } from '@codemirror/autocomplete';
 import { lintGutter, setDiagnostics, type Diagnostic as CmDiagnostic } from '@codemirror/lint';
@@ -25,6 +25,23 @@ import { docKey, toggleSourceBreakpoint, useWorkspace, type Doc } from '../state
 import { useSim } from '../state/sim';
 import { useSettings } from '../state/settings';
 import { hex } from '../format';
+import { instructionSet } from '../backend/api';
+import type { InsnInfo } from '../backend/types';
+
+/** Tab: pads with spaces to the next tab stop at the cursor; with a selection, indents the lines. */
+const softTab = (view: EditorView): boolean => {
+  const { state } = view;
+  if (state.selection.ranges.some((r) => !r.empty)) return indentMore(view);
+  const unit = getIndentUnit(state);
+  view.dispatch(state.changeByRange((r) => {
+    const line = state.doc.lineAt(r.head);
+    let col = 0;
+    for (let i = line.from; i < r.head; i++) col = line.text.charCodeAt(i - line.from) === 9 ? col + state.tabSize - (col % state.tabSize) : col + 1;
+    const pad = ' '.repeat(unit - (col % unit));
+    return { changes: { from: r.head, insert: pad }, range: EditorSelection.cursor(r.head + pad.length) };
+  }), { scrollIntoView: true, userEvent: 'input' });
+  return true;
+};
 
 // ------------------------------------------------------------------ breakpoint + exec margin
 
@@ -111,6 +128,49 @@ const bpGutter = gutter({
 
 // ------------------------------------------------------------------ hover info
 
+// Instruction reference per device (lower-case mnemonic -> its operand forms), loaded on demand.
+let insnHelpDevice = '';
+let insnHelp = new Map<string, InsnInfo[]>();
+function instructionHelp(deviceId: string): Map<string, InsnInfo[]> {
+  if (insnHelpDevice !== deviceId) {
+    insnHelpDevice = deviceId;
+    insnHelp = new Map();
+    instructionSet(deviceId)
+      .then((rows) => {
+        if (insnHelpDevice !== deviceId) return;
+        const m = new Map<string, InsnInfo[]>();
+        for (const r of rows) {
+          const k = r.mnemonic.toLowerCase();
+          const list = m.get(k);
+          if (list) list.push(r);
+          else m.set(k, [r]);
+        }
+        insnHelp = m;
+      })
+      .catch(() => {});
+  }
+  return insnHelp;
+}
+
+function insnHoverDom(forms: InsnInfo[]): HTMLElement {
+  const f = forms[0];
+  const dom = document.createElement('div');
+  dom.className = 'cm-hover-info cm-hover-insn';
+  const add = (tag: string, text: string, cls?: string) => {
+    const el = document.createElement(tag);
+    el.textContent = text;
+    if (cls) el.className = cls;
+    dom.appendChild(el);
+  };
+  add('b', `${f.mnemonic} — ${f.summary}${f.aliasOf ? ` (alias of ${f.aliasOf})` : ''}`);
+  add('div', forms.map((x) => `${x.mnemonic} ${x.operands}`.trim() + `    ${x.operation}`).join('\n'), 'mono');
+  const cyc = [...new Set(forms.map((x) => x.cycles))].join('/');
+  add('div', `Flags: ${f.flags || '-'}   Cycles: ${cyc}   Words: ${[...new Set(forms.map((x) => x.words))].join('/')}`, 'dim');
+  if (f.usage) add('div', f.usage, 'insn-usage');
+  if (f.example) add('pre', f.example, 'mono insn-example');
+  return dom;
+}
+
 const hoverInfo = hoverTooltip((view, pos) => {
   const line = view.state.doc.lineAt(pos);
   const text = line.text;
@@ -124,6 +184,11 @@ const hoverInfo = hoverTooltip((view, pos) => {
   const spec = sim.spec;
   const st = sim.state;
   let info: string | null = null;
+  // Instruction mnemonic: first word of the statement (after an optional label).
+  if (spec && /^\s*(?:[A-Za-z_.]\w*:\s*)?$/.test(text.slice(0, s))) {
+    const forms = instructionHelp(spec.id).get(word.toLowerCase());
+    if (forms) return { pos: line.from + s, end: line.from + e, above: true, create: () => ({ dom: insnHoverDom(forms) }) };
+  }
   const reg = /^r(\d{1,2})$/i.exec(word);
   if (reg && Number(reg[1]) < 32) {
     info = st ? `${word.toUpperCase()} = ${hex(st.regs[Number(reg[1])])} (${st.regs[Number(reg[1])]})` : `Register ${word}`;
@@ -224,7 +289,7 @@ function createState(doc: Doc, text: string): EditorState {
       hoverInfo,
       languageConf.of(languageFor(doc)),
       fontConf.of([]),
-      keymap.of([...closeBracketsKeymap, ...defaultKeymap, ...searchKeymap, ...historyKeymap, ...completionKeymap, indentWithTab]),
+      keymap.of([...closeBracketsKeymap, ...defaultKeymap, ...searchKeymap, ...historyKeymap, ...completionKeymap, { key: 'Tab', run: softTab, shift: indentLess }]),
       theme,
       EditorView.updateListener.of((u) => {
         if (u.docChanged && currentDocId) {

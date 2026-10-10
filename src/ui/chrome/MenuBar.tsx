@@ -44,7 +44,7 @@ const MENUS: TopMenu[] = [
     mnemonic: 0,
     items: () => [cmd('view.startPage'), sep, ...PANEL_COMMAND_IDS.map((id) => cmd(id)), sep, cmd('view.resetLayout')],
   },
-  { title: 'Build', mnemonic: 0, items: () => [cmd('build.build'), sep, cmd('build.toMachineCode'), sep, cmd('build.options')] },
+  { title: 'Build', mnemonic: 0, items: () => [cmd('build.build'), sep, cmd('build.toMachineCode'), sep, cmd('build.clearOutputOnRun'), cmd('build.options')] },
   {
     title: 'Debug',
     mnemonic: 0,
@@ -69,6 +69,7 @@ const MENUS: TopMenu[] = [
           label: fam,
           items: () => devs.filter((d) => d.family === fam).map((d): MenuItem => ({ kind: 'action', label: `${d.name}  (${d.flashSize >= 1024 ? `${d.flashSize / 1024} KB` : `${d.flashSize} B`} flash, ${d.sramSize} B SRAM, ${d.package})`, checked: d.id === cur, run: () => selectDevice(d.id) })),
         })),
+        sep, cmd('device.custom'),
         sep, cmd('device.info'), cmd('device.chip'),
         sep, cmd('device.fuses'), cmd('device.supply'),
       ];

@@ -4,11 +4,18 @@
  * smooth, pacing slices like the native simulation thread does.
  */
 import { instantiateCore, type WasmCore } from './wasmHost';
-import type { SimCommand, SimOutput } from './types';
+import type { CustomMcuConfig, SimCommand, SimOutput } from './types';
 
 const ctx = self as unknown as DedicatedWorkerGlobalScope;
 let core: WasmCore | null = null;
-const pending: SimCommand[] = [];
+/** Messages that arrived before the core was ready (kept in order). */
+const pending: Msg[] = [];
+
+interface Msg {
+  init?: string;
+  cmd?: SimCommand;
+  register?: CustomMcuConfig[];
+}
 let timer: ReturnType<typeof setTimeout> | null = null;
 
 // Zero-delay yields (setTimeout(0) is clamped to >= 4 ms when nested).
@@ -45,14 +52,18 @@ function run(cmd: SimCommand): void {
   schedule(r.idleMs);
 }
 
-ctx.onmessage = async (e: MessageEvent<{ init?: string; cmd?: SimCommand }>) => {
+function handle(m: Msg): void {
+  // Custom devices must exist in this WASM instance before a session uses them.
+  if (m.register) core!.call({ method: 'registerCustomDevices', configs: m.register });
+  if (m.cmd) run(m.cmd);
+}
+
+ctx.onmessage = async (e: MessageEvent<Msg>) => {
   if (e.data.init) {
     core = await instantiateCore(e.data.init);
-    for (const c of pending.splice(0)) run(c);
+    for (const m of pending.splice(0)) handle(m);
     return;
   }
-  if (e.data.cmd) {
-    if (core) run(e.data.cmd);
-    else pending.push(e.data.cmd);
-  }
+  if (core) handle(e.data);
+  else pending.push(e.data);
 };

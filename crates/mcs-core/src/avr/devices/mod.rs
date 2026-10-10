@@ -1,11 +1,14 @@
 //! Device registry. Add new device specs here.
 
+mod custom;
 mod mega_x8;
 mod tiny_rc;
 mod tiny_x5;
 
 use super::device::AvrDeviceSpec;
-use std::sync::OnceLock;
+use std::sync::{OnceLock, RwLock};
+
+pub use custom::{didr_name, port_name, timer_numbers, CustomMcuConfig};
 
 /// All AVR devices known to the simulator.
 pub fn all() -> &'static [AvrDeviceSpec] {
@@ -13,14 +16,48 @@ pub fn all() -> &'static [AvrDeviceSpec] {
     DEVICES.get_or_init(|| [tiny_rc::devices(), tiny_x5::devices(), mega_x8::devices()].concat())
 }
 
+static CUSTOM: RwLock<Vec<&'static AvrDeviceSpec>> = RwLock::new(Vec::new());
+
+/// Registers (or replaces, by id) a user-defined device and returns its spec. Specs are leaked
+/// (`'static` is required by machines); replacing an id leaks the previous spec, which is
+/// acceptable because a spec is a few KB and replacements are user-driven.
+pub fn register_custom(cfg: &CustomMcuConfig) -> Result<&'static AvrDeviceSpec, String> {
+    let id = cfg.id.to_ascii_lowercase();
+    if all().iter().any(|d| d.id.eq_ignore_ascii_case(&id)) {
+        return Err(format!("Device id '{id}' is a built-in device"));
+    }
+    let mut cfg = cfg.clone();
+    cfg.id = id;
+    let spec: &'static AvrDeviceSpec = Box::leak(Box::new(cfg.build()?));
+    let mut list = CUSTOM.write().unwrap_or_else(|e| e.into_inner());
+    match list.iter_mut().find(|d| d.id == spec.id) {
+        Some(slot) => *slot = spec,
+        None => list.push(spec),
+    }
+    Ok(spec)
+}
+
+/// Built-in devices followed by the registered custom devices.
+pub fn list() -> Vec<&'static AvrDeviceSpec> {
+    let mut v: Vec<&'static AvrDeviceSpec> = all().iter().collect();
+    v.extend(CUSTOM.read().unwrap_or_else(|e| e.into_inner()).iter().copied());
+    v
+}
+
 pub fn get(id: &str) -> Option<&'static AvrDeviceSpec> {
-    all().iter().find(|d| d.id.eq_ignore_ascii_case(id))
+    all()
+        .iter()
+        .find(|d| d.id.eq_ignore_ascii_case(id))
+        .or_else(|| CUSTOM.read().unwrap_or_else(|e| e.into_inner()).iter().copied().find(|d| d.id.eq_ignore_ascii_case(id)))
 }
 
 /// Maps an avrasm2 include name ("tn10def.inc") to a known device id ("attiny10").
 pub fn id_from_include_name(name: &str) -> Option<&'static str> {
     let n = name.trim().to_ascii_lowercase();
     let stem = n.strip_suffix("def.inc")?;
+    if stem.starts_with("custom-") {
+        return get(stem).map(|d| d.id.as_str());
+    }
     let (prefix, rest) = [("tn", "attiny"), ("m", "atmega"), ("usb", "at90usb"), ("can", "at90can"), ("pwm", "at90pwm"), ("x", "atxmega")]
         .iter()
         .find_map(|(p, full)| stem.strip_prefix(p).map(|r| (*full, r)))?;
@@ -56,7 +93,15 @@ mod tests {
         assert_eq!(t.vector("USI_OVF"), Some(14));
         assert_eq!(id_from_include_name("tn85def.inc"), Some("attiny85"));
         // Every device: unique register addresses and names, pins cover all GPIOs.
-        for d in all() {
+        let customs: Vec<_> = [CustomMcuConfig::default(), CustomMcuConfig::tiny(), CustomMcuConfig::huge()]
+            .iter()
+            .map(|c| register_custom(c).unwrap())
+            .collect();
+        assert_eq!(get("CUSTOM-tiny").unwrap().id, "custom-tiny");
+        assert_eq!(id_from_include_name("custom-tinydef.inc"), Some("custom-tiny"));
+        assert!(register_custom(&CustomMcuConfig { id: "custom-bad".into(), ports: 0, ..Default::default() }).is_err());
+        assert!(list().len() >= all().len() + 3);
+        for d in all().iter().chain(customs) {
             let mut addrs: Vec<u16> = d.registers.iter().map(|r| r.addr).collect();
             addrs.sort_unstable();
             addrs.dedup();

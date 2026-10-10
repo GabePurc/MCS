@@ -169,7 +169,8 @@ pub struct MachineState {
     pub trace_from: u64,
     pub trace_cycles: Vec<u64>,
     pub trace_levels: Vec<u32>,
-    /// Instructions executed per word address since the previous state (profiling only).
+    /// Instructions executed since the previous state as `[word, count, ...]` pairs for the
+    /// words that ran (profiling only).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub exec_heat: Vec<u32>,
     pub messages: Vec<Message>,

@@ -20,10 +20,13 @@ import { hex } from '../format';
 import { EmptyHint } from '../panels/common';
 import { buildFloorplan, type Block, type Pad } from './floorplan';
 import { BlockLayers, Die2D, LiveModel, layerResolution, type Hover } from './engine';
+import type { LiveData } from './dieArt';
 import { Chip3D, type Shell } from './scene3d';
 
 type Mode = '3d' | '2d';
 const KEY = 'mcs.chip.v1';
+
+const MEMORY = new Set<Block['kind']>(['flash', 'sram', 'eeprom']);
 
 const OPEN: Partial<Record<Block['kind'], PanelId>> = {
   flash: 'disasm', decoder: 'disasm', sram: 'memory', eeprom: 'memory', regs: 'processor', alu: 'processor', control: 'processor',
@@ -49,7 +52,8 @@ function describe(h: Hover['hit']): { title: string; lines: string[] } | null {
     if (b.kind === 'control') lines.push(`${st.cycles.toLocaleString()} cycles, ${st.instructions.toLocaleString()} instructions`);
   }
   const target = b.kind === 'clock' ? 'Supply & Clock' : OPEN[b.kind] ? { disasm: 'Disassembly', memory: 'Memory', processor: 'Processor', io: 'I/O View' }[OPEN[b.kind] as string] : null;
-  if (target) lines.push(`Click: ${target}`);
+  if (MEMORY.has(b.kind)) lines.push('Click: zoom in to the individual bytes (wheel zooms further)');
+  else if (target) lines.push(`Click: ${target}`);
   return { title: b.label, lines };
 }
 
@@ -65,6 +69,10 @@ export function ChipView(): JSX.Element {
   const [error, setError] = useState<string | null>(null);
   const host = useRef<HTMLDivElement>(null);
   const view = useRef<Chip3D | Die2D | null>(null);
+  /** Latest live data handed to the renderers. */
+  const lastLive = useRef<LiveData | null>(null);
+  /** Memory block to zoom onto once the flat view exists. */
+  const pendingFocus = useRef<string | null>(null);
   const setMode = (m: Mode) => {
     setModeState(m);
     saveJson(KEY, { mode: m, shell, shading });
@@ -98,8 +106,12 @@ export function ChipView(): JSX.Element {
     const feed = () => {
       const s = useSim.getState();
       if (!s.state) return;
-      layers.update(model.data(s.state, s.running), model.heatVersion);
-      view.current?.setState(s.state, s.state.vcc);
+      const data = model.data(s.state, s.running);
+      lastLive.current = data;
+      layers.update(data, model.heatVersion);
+      const v = view.current;
+      if (v instanceof Die2D) v.setState(s.state, s.state.vcc, data);
+      else v?.setState(s.state, s.state.vcc);
     };
     const loadDisasm = () => {
       const flash = useSim.getState().flash;
@@ -116,6 +128,7 @@ export function ChipView(): JSX.Element {
         .catch(() => {});
     };
     model.flash = useSim.getState().flash;
+    model.eeprom = useSim.getState().eeprom;
     const st0 = useSim.getState().state;
     if (st0) model.update(st0);
     loadDisasm();
@@ -124,6 +137,10 @@ export function ChipView(): JSX.Element {
       if (s.flash !== p.flash) {
         model.flash = s.flash;
         loadDisasm();
+      }
+      if (s.eeprom !== p.eeprom) {
+        model.eeprom = s.eeprom;
+        if (s.state === p.state) feed();
       }
       if (s.state && s.state !== p.state) {
         model.update(s.state);
@@ -137,7 +154,15 @@ export function ChipView(): JSX.Element {
     const el = host.current;
     if (!el || !spec || !plan || !live) return;
     const click = (h: Hover) => {
-      if (h.hit?.pad) useLayout.getState().show('pins');
+      const b = h.hit?.block;
+      if (b && MEMORY.has(b.kind)) {
+        // Expand: zoom onto the array in the flat view, where every byte is readable.
+        if (view.current instanceof Die2D) view.current.focus(b);
+        else {
+          pendingFocus.current = b.id;
+          setMode('2d');
+        }
+      } else if (h.hit?.pad) useLayout.getState().show('pins');
       else if (h.hit?.block?.kind === 'clock') openDialog('supply');
       else if (h.hit?.block && OPEN[h.hit.block.kind]) useLayout.getState().show(OPEN[h.hit.block.kind]!);
     };
@@ -160,7 +185,13 @@ export function ChipView(): JSX.Element {
     // Every layer must reach the new renderer's textures.
     for (const l of live.layers.layers) l.dirty = true;
     const st = useSim.getState().state;
-    if (st) v.setState(st, st.vcc);
+    if (v instanceof Die2D) {
+      if (st) v.setState(st, st.vcc, lastLive.current ?? undefined);
+      const id = pendingFocus.current;
+      pendingFocus.current = null;
+      const fb = id ? plan.blocks.find((x) => x.id === id) : undefined;
+      if (fb) requestAnimationFrame(() => (view.current as Die2D | null)?.focus(fb));
+    } else if (st) v.setState(st, st.vcc);
     return () => {
       view.current = null;
       v.dispose();

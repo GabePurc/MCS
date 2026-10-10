@@ -242,7 +242,7 @@ impl Session {
     }
 
     fn build_line_map(&mut self) {
-        let words = self.m().cpu.flash_words as usize;
+        let words = self.m().cpu.pc_mask as usize + 1;
         let mut key = vec![-1i32; words];
         if let Some(p) = &self.program {
             // Several statement rows can share an address (`for(;;)` + its first statement,

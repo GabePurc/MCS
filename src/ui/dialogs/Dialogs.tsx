@@ -8,6 +8,7 @@ import type { AvrDeviceSpec, FuseBitSpec, SpeedMode, ToolchainInfo } from '../ba
 import { sim } from '../services/simClient';
 import { setSpeed, speedLabel } from '../services/commands';
 import { formatHz, hex, parseHz } from '../format';
+import { CustomDeviceDialog } from './CustomDeviceDialog';
 import { APP_VERSION, checkForUpdates, installUpdate, useUpdates } from '../services/updater';
 
 /** Aero-framed modal dialog with a Windows 7 TaskDialog-style button area. */
@@ -55,6 +56,7 @@ export function DialogHost(): JSX.Element | null {
     case 'speed': return <SpeedDialog />;
     case 'update': return <UpdateDialog />;
     case 'include': return <IncludeDialog />;
+    case 'customDevice': return <CustomDeviceDialog />;
     default: return null;
   }
 }

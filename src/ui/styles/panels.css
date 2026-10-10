@@ -240,3 +240,8 @@ a.link:hover { text-decoration: underline; }
 .fuse-hex { width: 52px; height: 20px; padding: 0 4px; font-size: 12px; }
 
 .dev-badge { margin-left: 6px; padding: 0 4px; border-radius: 2px; font-size: 9.5px; font-weight: 600; color: #fff; background: linear-gradient(#7c9cc4, #4a6c99); vertical-align: 1px; }
+.isa-example { margin: 0; padding: 3px 6px; background: #fff; border: 1px solid var(--border-soft); white-space: pre; }
+.cm-hover-insn { max-width: 520px; }
+.cm-hover-insn .mono { white-space: pre; margin: 3px 0; font-size: 11px; }
+.cm-hover-insn .insn-usage { margin-top: 4px; }
+.cm-hover-insn .insn-example { margin: 4px 0 0; padding: 3px 6px; background: #f6f8fb; border: 1px solid #e0e6ef; white-space: pre; }
