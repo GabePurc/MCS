@@ -1,4 +1,5 @@
 import { useMemo, useRef, useState, type JSX } from 'react';
+import { avrCore } from '../backend/types';
 import { useSim } from '../state/sim';
 import { useWorkspace } from '../state/workspace';
 import { sim } from '../services/simClient';
@@ -82,17 +83,18 @@ export function MemoryPanel(): JSX.Element {
   const first = Math.max(0, Math.floor(scroll / ROW_H) - 2);
   const last = Math.min(rowsN, first + Math.ceil(height / ROW_H) + 4);
   const addrDigits = total > 0x10000 ? 6 : 4;
-  const pcByte = st.pc * 2;
+  const pcByte = st.pcBytes;
+  const sp = avrCore(st).sp;
   const markClass = (a: number) => {
-    if (space === 'data' && a === st.sp) return ' mark-sp';
-    if (space === 'data' && a > st.sp && a < spec.sramStart + spec.sramSize) return ' mark-stack';
+    if (space === 'data' && a === sp) return ' mark-sp';
+    if (space === 'data' && a > sp && a < spec.sramStart + spec.sramSize) return ' mark-stack';
     if (space === 'flash' && (a === pcByte || a === pcByte + 1)) return ' mark-pc';
     return '';
   };
   const tipFor = (a: number) => {
     const n = space === 'data' ? names.get(a) : undefined;
     const region = space === 'flash' ? 'Flash' : space === 'eeprom' ? 'EEPROM' : a < spec.sramStart ? 'I/O' : 'SRAM';
-    return `${region} ${hex(a, addrDigits)}${n ? ` - ${n}` : ''} = ${hex(bytes[a])} (${bytes[a]})${a === st.sp && space === 'data' ? '\n<- SP' : ''}\nDouble-click to edit`;
+    return `${region} ${hex(a, addrDigits)}${n ? ` - ${n}` : ''} = ${hex(bytes[a])} (${bytes[a]})${a === sp && space === 'data' ? '\n<- SP' : ''}\nDouble-click to edit`;
   };
   const commit = (a: number, v: number) => {
     if (space === 'data') sim({ type: 'writeData', addr: a, value: v });

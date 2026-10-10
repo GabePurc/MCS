@@ -5,7 +5,7 @@
  * outputs through the window bridge and forward their commands to it.
  */
 import { simAttach, simCommand } from '../backend/api';
-import type { AvrDeviceSpec, MachineState, RawMachineState, SimCommand, SimOutput } from '../backend/types';
+import type { DeviceSpec, MachineState, RawMachineState, SimCommand, SimOutput } from '../backend/types';
 import { useSim } from '../state/sim';
 import { trace } from '../state/trace';
 import { appendOutput } from '../state/workspace';
@@ -20,7 +20,7 @@ export const outputTaps = new Set<(o: SimOutput) => void>();
 export const serialTaps = new Set<(bytes: number[]) => void>();
 
 /** Latest device spec and raw state (for pop-out snapshots). */
-export const latest: { spec: AvrDeviceSpec | null; state: RawMachineState | null } = { spec: null, state: null };
+export const latest: { spec: DeviceSpec | null; state: RawMachineState | null } = { spec: null, state: null };
 
 /** Connects to the backend once; commands issued before the connection is ready are queued. */
 export function connectSim(): Promise<void> {
@@ -75,7 +75,7 @@ export function handleOutput(o: SimOutput): void {
 function convert(r: RawMachineState): MachineState {
   return {
     ...r,
-    regs: Uint8Array.from(r.regs),
+    core: { ...r.core, regs: Uint8Array.from(r.core.regs) },
     data: Uint8Array.from(r.data),
     flash: r.flash ? Uint8Array.from(r.flash) : undefined,
     traceCycles: Float64Array.from(r.traceCycles),

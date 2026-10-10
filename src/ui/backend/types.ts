@@ -99,6 +99,7 @@ export interface FuseByteSpec {
 export type SleepKind = 'idle' | 'adc-noise-reduction' | 'power-down' | 'power-save' | 'standby' | 'extended-standby';
 
 export interface AvrDeviceSpec {
+  arch: 'avr';
   id: string;
   name: string;
   family: string;
@@ -224,12 +225,24 @@ export interface SimMessage {
   text: string;
 }
 
+/** Any supported device spec; discriminated by `arch` (more architectures are added to the union). */
+export type DeviceSpec = AvrDeviceSpec;
+export type Arch = DeviceSpec['arch'];
+
+/** Architecture-specific CPU state as received from Rust. */
+export type RawCoreState = { arch: 'avr'; sp: number; sreg: number; regs: number[] };
+/** CPU state as used by the UI (typed arrays). */
+export type CoreState = { arch: 'avr'; sp: number; sreg: number; regs: Uint8Array };
+export type AvrCore = Extract<CoreState, { arch: 'avr' }>;
+
 /** Raw state as received from Rust. */
 export interface RawMachineState {
   running: boolean;
+  /** Program counter in the architecture's native unit (AVR: word address). */
   pc: number;
-  sp: number;
-  sreg: number;
+  /** Program counter as a byte address. */
+  pcBytes: number;
+  core: RawCoreState;
   cycles: number;
   instructions: number;
   timeSec: number;
@@ -238,7 +251,6 @@ export interface RawMachineState {
   sleeping: boolean;
   sleepMode: number;
   resetHeld: boolean;
-  regs: number[];
   data: number[];
   flash?: number[];
   flashVersion: number;
@@ -266,9 +278,9 @@ export interface RawMachineState {
 }
 
 /** State as used by the UI (typed arrays). */
-export interface MachineState extends Omit<RawMachineState, 'regs' | 'data' | 'flash' | 'traceCycles' | 'traceLevels' | 'execHeat' | 'eeprom'> {
+export interface MachineState extends Omit<RawMachineState, 'core' | 'data' | 'flash' | 'traceCycles' | 'traceLevels' | 'execHeat' | 'eeprom'> {
   eeprom?: Uint8Array;
-  regs: Uint8Array;
+  core: CoreState;
   data: Uint8Array;
   flash?: Uint8Array;
   traceCycles: Float64Array;
@@ -276,8 +288,14 @@ export interface MachineState extends Omit<RawMachineState, 'regs' | 'data' | 'f
   execHeat?: Uint32Array;
 }
 
+/** AVR CPU state of a snapshot (the only architecture so far; throws for others). */
+export function avrCore(st: MachineState): AvrCore {
+  if (st.core.arch !== 'avr') throw new Error(`Expected an AVR state, got ${(st.core as { arch: string }).arch}`);
+  return st.core;
+}
+
 export type SimOutput =
-  | { type: 'device'; spec: AvrDeviceSpec }
+  | { type: 'device'; spec: DeviceSpec }
   | { type: 'state'; state: RawMachineState }
   | { type: 'error'; message: string };
 
@@ -292,6 +310,7 @@ export interface BuildOutcome {
 }
 
 export interface DeviceSummary {
+  arch: Arch;
   id: string;
   name: string;
   family: string;
@@ -382,6 +401,7 @@ export interface CustomPreview {
 }
 
 export interface CustomRegistration {
+  arch: Arch;
   id: string;
   error: string | null;
 }

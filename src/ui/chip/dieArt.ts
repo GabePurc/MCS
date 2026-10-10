@@ -5,7 +5,7 @@
  * activity, pin levels). Used by the Device Info diagram (static) and the Chip View (2D and as
  * 3D textures). Pure 2D canvas code: no three.js here.
  */
-import type { AvrDeviceSpec, MachineState } from '../backend/types';
+import type { AvrCore, AvrDeviceSpec, MachineState } from '../backend/types';
 import type { Block, BlockKind, Floorplan, Pad } from './floorplan';
 
 const FONT = 'Selawik, "Segoe UI", sans-serif';
@@ -242,6 +242,8 @@ export function drawDieLabels(ctx: CanvasRenderingContext2D, plan: Floorplan): v
 export interface LiveData {
   spec: AvrDeviceSpec;
   st: MachineState;
+  /** AVR CPU state of `st`. */
+  core: AvrCore;
   running: boolean;
   /** Decayed execution heat per flash word (0..1). */
   heat: Float32Array;
@@ -380,7 +382,7 @@ function byteImage(b: Block, d: LiveData, g: MemGrid): HTMLCanvasElement {
     let r: number, gg: number, bb: number;
     if (wr > 0.03) [r, gg, bb] = [255, 170 - 40 * wr, 40];
     else if (eep) [r, gg, bb] = [40 + v / 4, 40 + v / 3, 70 + v / 3];
-    else if (a > st.sp) [r, gg, bb] = [30 + v / 4, 70 + v / 3, 120 + v / 3];
+    else if (a > d.core.sp) [r, gg, bb] = [30 + v / 4, 70 + v / 3, 120 + v / 3];
     else [r, gg, bb] = [30 + v / 3, 50 + v / 2.2, 80 + v / 2];
     px[i] = 0xff000000 | (bb << 16) | (gg << 8) | r;
   }
@@ -402,7 +404,7 @@ function memCell(b: Block, d: LiveData, i: number): { v: number; fill: string } 
   const a = d.spec.sramStart + i;
   const v = d.st.data[a] ?? 0;
   const wr = d.writes[a] ?? 0;
-  const fill = wr > 0.03 ? `rgba(255,170,40,${0.4 + 0.6 * wr})` : a > d.st.sp ? `rgb(${30 + v / 4},${70 + v / 3},${120 + v / 3})` : `rgb(${30 + v / 3},${50 + v / 2.2},${80 + v / 2})`;
+  const fill = wr > 0.03 ? `rgba(255,170,40,${0.4 + 0.6 * wr})` : a > d.core.sp ? `rgb(${30 + v / 4},${70 + v / 3},${120 + v / 3})` : `rgb(${30 + v / 3},${50 + v / 2.2},${80 + v / 2})`;
   return { v, fill };
 }
 
@@ -432,7 +434,7 @@ export function drawMemoryDetail(
   const showAsm = flash && ch >= 44 && cw >= 70;
   const fsA = Math.min(ch * 0.2, cw / 6.5);
   const pc = d.st.pc;
-  const sp = d.st.sp;
+  const sp = d.core.sp;
   ctx.save();
   ctx.beginPath();
   ctx.rect(ox, y0, g.cols * cw, rows * ch);
@@ -528,7 +530,7 @@ export function drawBlockLive(ctx: CanvasRenderingContext2D, w: number, h: numbe
     case 'eeprom': {
       const base = b.kind === 'sram' ? spec.sramStart : 0;
       const n = memCells(b, spec);
-      const top = header(ctx, w, b.label, b.kind === 'sram' ? `SP 0x${hex4(st.sp)}` : b.sub, fs);
+      const top = header(ctx, w, b.label, b.kind === 'sram' ? `SP 0x${hex4(d.core.sp)}` : b.sub, fs);
       if (!n) return;
       const g = memoryGrid(b, spec, w, h);
       if (!g) {
@@ -539,10 +541,10 @@ export function drawBlockLive(ctx: CanvasRenderingContext2D, w: number, h: numbe
           const eep = b.kind === 'eeprom';
           const v = eep ? d.eeprom?.[i] ?? 0xff : st.data[a] ?? 0;
           const wr = eep ? 0 : d.writes[a] ?? 0;
-          const stack = !eep && a > st.sp;
+          const stack = !eep && a > d.core.sp;
           ctx.fillStyle = wr > 0.03 ? `rgba(255,${Math.round(150 + 60 * (1 - wr))},40,${0.35 + 0.55 * wr})` : stack ? 'rgba(80,160,230,0.32)' : 'rgba(10,20,30,0.42)';
           ctx.fillRect(x + 1, y + 1, cw - 2, ch - 2);
-          if (!eep && a === st.sp) {
+          if (!eep && a === d.core.sp) {
             ctx.strokeStyle = '#7ff0ff';
             ctx.lineWidth = 2;
             ctx.strokeRect(x + 1, y + 1, cw - 2, ch - 2);
@@ -579,7 +581,7 @@ export function drawBlockLive(ctx: CanvasRenderingContext2D, w: number, h: numbe
       const top = header(ctx, w, b.label, b.sub, fs);
       cellGrid(0, top, w, h - top, n, n === 16 ? 4 : 8, (i, x, y, cw, ch) => {
         const r = first + i;
-        const v = st.regs[r];
+        const v = d.core.regs[r];
         const wr = d.regWrites[r] ?? 0;
         ctx.fillStyle = wr > 0.03 ? `rgba(255,170,40,${0.35 + 0.55 * wr})` : 'rgba(10,30,32,0.45)';
         ctx.fillRect(x + 1, y + 1, cw - 2, ch - 2);
@@ -614,7 +616,7 @@ export function drawBlockLive(ctx: CanvasRenderingContext2D, w: number, h: numbe
       const top = header(ctx, w, b.label, 'SREG', fs);
       const names = 'ITHSVNZC';
       cellGrid(fs * 0.3, top + fs * 0.3, w - fs * 0.6, h - top - fs * 0.6, 8, 4, (i, x, y, cw, ch) => {
-        const on = (st.sreg >> (7 - i)) & 1;
+        const on = (d.core.sreg >> (7 - i)) & 1;
         ctx.fillStyle = on ? '#3fd06a' : 'rgba(10,20,15,0.55)';
         ctx.fillRect(x + 2, y + 2, cw - 4, ch - 4);
         ctx.fillStyle = on ? '#0b2a12' : '#9fb7a5';
@@ -629,7 +631,7 @@ export function drawBlockLive(ctx: CanvasRenderingContext2D, w: number, h: numbe
     case 'control': {
       const status = st.resetHeld ? 'RESET' : st.sleeping ? 'SLEEP' : d.running ? 'RUN' : 'HALT';
       const top = header(ctx, w, b.label, status, fs, d.running && !st.sleeping ? 0.6 : 0);
-      const lines = [`PC   0x${hex4(st.pc * 2)}`, `SP   0x${hex4(st.sp)}`, `CYC  ${st.cycles.toLocaleString()}`];
+      const lines = [`PC   0x${hex4(st.pc * 2)}`, `SP   0x${hex4(d.core.sp)}`, `CYC  ${st.cycles.toLocaleString()}`];
       ctx.fillStyle = '#ffffff';
       const lh = (h - top) / 3.3;
       ctx.font = `${Math.min(lh * 0.62, fs * 1.1)}px ${MONO}`;
@@ -639,7 +641,7 @@ export function drawBlockLive(ctx: CanvasRenderingContext2D, w: number, h: numbe
     }
     case 'iobus': {
       const irqDepth = st.callStack.filter((f) => f.vector >= 0).length;
-      const top = header(ctx, w, 'I/O & IRQ', `I=${(st.sreg >> 7) & 1}`, fs, d.activity.get('*io') ?? 0);
+      const top = header(ctx, w, 'I/O & IRQ', `I=${(d.core.sreg >> 7) & 1}`, fs, d.activity.get('*io') ?? 0);
       const lh = (h - top) / 3;
       ctx.fillStyle = '#ffffff';
       ctx.font = `${Math.min(lh * 0.55, fs)}px ${FONT}`;
@@ -715,7 +717,7 @@ export function blockSignature(b: Block, d: LiveData, heatVersion: number): stri
       return `${st.pc}|${heatVersion}`;
     case 'sram': {
       // Numeric hash: SRAM can be tens of KB (a string per byte would be far slower).
-      let hsh = st.sp;
+      let hsh = d.core.sp;
       for (let a = spec.sramStart; a < spec.sramStart + spec.sramSize; a++) hsh = (Math.imul(hsh, 31) + st.data[a] * 16 + q(d.writes[a])) | 0;
       return `${hsh}`;
     }
@@ -728,17 +730,17 @@ export function blockSignature(b: Block, d: LiveData, heatVersion: number): stri
     }
     case 'regs': {
       let s = '';
-      for (let r = 0; r < 32; r++) s += `${st.regs[r]},${q(d.regWrites[r])};`;
+      for (let r = 0; r < 32; r++) s += `${d.core.regs[r]},${q(d.regWrites[r])};`;
       return s;
     }
     case 'decoder':
       return `${st.pc}|${d.disasm.get(st.pc) ?? ''}|${d.flash ? d.flash[st.pc * 2] | (d.flash[st.pc * 2 + 1] << 8) : 0}`;
     case 'alu':
-      return `${st.sreg}`;
+      return `${d.core.sreg}`;
     case 'control':
-      return `${st.pc}|${st.sp}|${st.cycles}|${st.sleeping}|${st.resetHeld}|${d.running}`;
+      return `${st.pc}|${d.core.sp}|${st.cycles}|${st.sleeping}|${st.resetHeld}|${d.running}`;
     case 'iobus':
-      return `${st.sreg >> 7}|${st.callStack.length}|${st.callStack[st.callStack.length - 1]?.vector}|${q(d.activity.get('*io'))}`;
+      return `${d.core.sreg >> 7}|${st.callStack.length}|${st.callStack[st.callStack.length - 1]?.vector}|${q(d.activity.get('*io'))}`;
     default: {
       const pins = /^PORT/.test(b.group ?? '') ? st.pins.map((p) => `${p.level}${p.dir}`).join('') : '';
       return `${q(d.activity.get(b.group ?? ''))}|${pins}|${peripheralLines(b, d).join('|')}`;

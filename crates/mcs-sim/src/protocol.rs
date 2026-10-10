@@ -1,6 +1,6 @@
 //! Messages between the UI and the simulation session (serialized as camelCase JSON).
 
-use mcs_core::avr::device::AvrDeviceSpec;
+use mcs_core::device::DeviceRef;
 use mcs_core::program::LoadedProgram;
 use serde::{Deserialize, Serialize};
 
@@ -115,7 +115,7 @@ pub enum StopKind {
 #[serde(rename_all = "camelCase")]
 pub struct StopInfo {
     pub reason: StopKind,
-    /// Word address.
+    /// Program counter in the architecture's native unit (AVR: word address).
     pub pc: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
@@ -128,13 +128,22 @@ pub struct PeripheralInfo {
     pub values: Vec<(String, String)>,
 }
 
+/// Architecture-specific CPU state (tagged by `arch` in JSON).
+#[derive(Clone, Debug, Serialize)]
+#[serde(tag = "arch", rename_all = "lowercase")]
+pub enum CoreState {
+    Avr { sp: u16, sreg: u8, regs: Vec<u8> },
+}
+
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MachineState {
     pub running: bool,
+    /// Program counter in the architecture's native unit (AVR: word address).
     pub pc: u32,
-    pub sp: u16,
-    pub sreg: u8,
+    /// Program counter as a byte address.
+    pub pc_bytes: u64,
+    pub core: CoreState,
     pub cycles: u64,
     pub instructions: u64,
     pub time_sec: f64,
@@ -142,15 +151,16 @@ pub struct MachineState {
     /// Frequency assumed for the external clock input.
     pub ext_clock_hz: f64,
     pub sleeping: bool,
+    /// AVR sleep mode (0 on other architectures).
     pub sleep_mode: u8,
     pub reset_held: bool,
-    pub regs: Vec<u8>,
     /// Data space (I/O + SRAM) as seen by the CPU, including live peripheral register values.
     pub data: Vec<u8>,
     /// Present only when program memory changed since the last state.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub flash: Option<Vec<u8>>,
     pub flash_version: u64,
+    /// Fuse bytes and lock bits (AVR; empty / 0 on architectures without them).
     pub fuses: Vec<u8>,
     pub lock: u8,
     /// EEPROM contents, present only when they changed since the last state.
@@ -183,7 +193,7 @@ pub struct MachineState {
 #[derive(Clone, Debug, Serialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum Output {
-    Device { spec: Box<AvrDeviceSpec> },
+    Device { spec: DeviceRef },
     State { state: Box<MachineState> },
     Error { message: String },
 }

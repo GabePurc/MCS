@@ -7,6 +7,7 @@
  */
 import { useEffect, useMemo, useRef, useState, type JSX } from 'react';
 import { disassemble } from '../backend/api';
+import { avrCore } from '../backend/types';
 import { Icons } from '../icons';
 import { useSim } from '../state/sim';
 import { useSettings } from '../state/settings';
@@ -48,7 +49,7 @@ function describe(h: Hover['hit']): { title: string; lines: string[] } | null {
   const lines = [b.sub];
   if (st) {
     if (b.kind === 'flash') lines.push(`PC = ${hex(st.pc * 2, 4)} (word ${st.pc}). Bright cells ran recently.`);
-    if (b.kind === 'sram') lines.push(`SP = ${hex(st.sp, 4)}. Orange = just written, blue = stack.`);
+    if (b.kind === 'sram') lines.push(`SP = ${hex(avrCore(st).sp, 4)}. Orange = just written, blue = stack.`);
     if (b.kind === 'control') lines.push(`${st.cycles.toLocaleString()} cycles, ${st.instructions.toLocaleString()} instructions`);
   }
   const target = b.kind === 'clock' ? 'Supply & Clock' : OPEN[b.kind] ? { disasm: 'Disassembly', memory: 'Memory', processor: 'Processor', io: 'I/O View' }[OPEN[b.kind] as string] : null;

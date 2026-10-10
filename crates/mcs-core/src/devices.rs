@@ -1,0 +1,33 @@
+//! Device registry across every architecture. Per-architecture registries (e.g.
+//! [`crate::avr::devices`]) keep their typed lookups; this module is the neutral entry point.
+
+use crate::avr::devices as avr;
+use crate::device::DeviceRef;
+
+/// Finds a device of any architecture by id (case-insensitive).
+pub fn get_any(id: &str) -> Option<DeviceRef> {
+    avr::get(id).map(DeviceRef::Avr)
+}
+
+/// All devices: built-ins of every architecture followed by the registered custom devices.
+pub fn list_any() -> Vec<DeviceRef> {
+    avr::list().into_iter().map(DeviceRef::Avr).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::device::Arch;
+
+    #[test]
+    fn neutral_registry() {
+        let d = get_any("ATtiny10").unwrap();
+        assert_eq!((d.id(), d.arch(), d.flash_size()), ("attiny10", Arch::Avr, 1024));
+        assert!(d.as_avr().is_some() && d.same_as(&get_any("attiny10").unwrap()));
+        assert!(get_any("nope").is_none());
+        assert_eq!(list_any().len(), avr::list().len());
+        let json = serde_json::to_value(d).unwrap();
+        assert_eq!(json["arch"], "avr");
+        assert_eq!(json["id"], "attiny10");
+    }
+}

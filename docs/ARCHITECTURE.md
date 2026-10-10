@@ -27,6 +27,11 @@ logic is Rust; TypeScript only renders and routes user input.
   bit fields and reset values, vectors, pins/package, fuses, clock, and the name of the
   peripheral wiring recipe. The UI's I/O view, pin diagram and the assembler's generated
   `tnXXdef.inc` all come from the spec.
+* `device.rs` / `devices.rs` — architecture-neutral device handle: `Arch`, `DeviceRef`
+  (`Avr(&'static AvrDeviceSpec)`, serialized as the spec plus an `"arch"` tag) and the
+  registry `devices::get_any` / `list_any` across all architectures. Neutral code (session, API)
+  uses these; AVR-only code (assembler, disassembler, definition files, ISA tables) takes the
+  spec through `DeviceRef::as_avr()` or `avr::devices` directly.
 * `program.rs` — `LoadedProgram`: flash image + symbols + line table + diagnostics. Every
   front-end (assembler, ELF, HEX) produces it; the simulator and UI consume it.
 
@@ -50,9 +55,22 @@ logic is Rust; TypeScript only renders and routes user input.
   pins), a peripheral like any other: one scheduled event per edge, timed in seconds.
 * Execution profiling: `Machine::run` is monomorphized over a `PROFILE` const so per-word
   execution counting (Chip View heat map) costs nothing while disabled.
-* `session.rs` — debugger session: real-time / fixed-rate (cycles per second, down to 1 Hz) / max speed in time slices, breakpoints,
-  run-to, source- or instruction-level stepping (via a per-instruction predicate), state
-  snapshots (`protocol.rs`). `session::spawn` runs it on a thread for the desktop app.
+* `target.rs` — the architecture seam: the object-safe `Target` trait (run to a cycle target,
+  reset / power cycle, breakpoints, run-to and step plans, pin / VCC / clock / serial /
+  stimulus commands, debugger writes, `snapshot`). `avr::Machine` implements it in
+  `avr/target.rs`, which also owns the AVR-only parts (step predicates, source-line map, fuse /
+  EEPROM / register writes, snapshot building). Debugger writes that only exist on some
+  architectures have defaults that return an error.
+* `session.rs` — debugger session over a `Box<dyn Target>` created from a `DeviceRef`:
+  real-time / fixed-rate (cycles per second, down to 1 Hz) / max speed in time slices,
+  breakpoints, run-to, source- or instruction-level stepping (the target arms the stop
+  condition), state snapshots (`protocol.rs`). It makes at most one dynamic call per time
+  slice, command or state publish, never per instruction: the executor loop stays inside the
+  concrete machine. `Session::avr_machine()` downcasts for tests. `session::spawn` runs it on a
+  thread for the desktop app.
+* `protocol.rs` — `MachineState` is architecture-neutral (`pc` in the native unit plus
+  `pcBytes`, memories, pins, trace) and carries the CPU registers in `core: CoreState`
+  (`{arch: "avr", sp, sreg, regs}`). `Output::Device` sends the spec with its `arch` tag.
 
 ## Adding a microcontroller
 
@@ -72,11 +90,16 @@ logic is Rust; TypeScript only renders and routes user input.
    `PeripheralSet::Custom` wires it by register/vector/pin-function names. The UI keeps the
    configurations in local storage and registers them with every backend instance at start-up
    (Tauri process; browser main thread + simulation worker).
-2. **New architecture (e.g. ARM Cortex-M0, PIC):** add `mcs_core::<arch>` (ISA + device
-   descriptions) and `mcs_sim::<arch>` (machine). The session/protocol layer is the seam: give
-   the session a machine abstraction (trait) and keep `MachineState` architecture-neutral
-   (registers already travel as a byte array; add a register-description list to the device
-   spec so the Processor panel can render any register file).
+2. **New architecture (e.g. ARM Cortex-M, ESP32):** the seam already exists (see
+   `docs/MULTI_ARCH.md`). Add `mcs_core::<arch>` (ISA + device descriptions) and
+   `mcs_sim::<arch>` (machine), then:
+   * add a `DeviceRef::<Arch>(&'static ...Spec)` variant (`mcs_core::device`) and search the new
+     registry in `mcs_core::devices::get_any` / `list_any`; the spec serializes with an `arch`
+     tag, the UI's `DeviceSpec` union grows a matching member;
+   * implement `mcs_sim::target::Target` for the machine and return it from
+     `target::new_target`; the session, protocol and API layers need no changes;
+   * add a `CoreState::<Arch>` variant (register file in the architecture's own shape) and the
+     UI's matching `CoreState` member plus its processor/memory views.
 
 ## UI
 

@@ -1,4 +1,5 @@
 import type { JSX } from 'react';
+import { avrCore } from '../backend/types';
 import { useSim, resetStopwatch } from '../state/sim';
 import { sim } from '../services/simClient';
 import { useWorkspace } from '../state/workspace';
@@ -24,6 +25,8 @@ export function ProcessorPanel(): JSX.Element {
   const firstReg = rc ? 16 : 0;
   const changed = (a: number, b: number | null | undefined) => (b !== undefined && b !== null && a !== b ? "changed" : "");
   const ptr = (r: Uint8Array, lo: number) => r[lo] | (r[lo + 1] << 8);
+  const core = avrCore(st);
+  const baseCore = base ? avrCore(base) : null;
   const swCycles = st.cycles - stopwatch.cycles;
   const swTime = st.timeSec - stopwatch.time;
   const rows: [string, JSX.Element | string, string?][] = [
@@ -32,10 +35,10 @@ export function ProcessorPanel(): JSX.Element {
       <EditableValue value={st.pc * 2} display={hex(st.pc * 2, 4)} max={spec.flashSize - 2} title="Byte address (double-click to edit)" className={changed(st.pc, base?.pc)} onCommit={(v) => sim({ type: 'writeCpu', field: 'pc', value: v & ~1 })} />,
       symbols?.describeCode(st.pc * 2),
     ],
-    ['Stack Pointer', <EditableValue value={st.sp} display={hex(st.sp, 4)} max={0xffff} className={changed(st.sp, base?.sp)} onCommit={(v) => sim({ type: 'writeCpu', field: 'sp', value: v })} />],
-    ['X Register', <span className={`mono ${changed(ptr(st.regs, 26), base && ptr(base.regs, 26))}`}>{hex(ptr(st.regs, 26), 4)}</span>],
-    ['Y Register', <span className={`mono ${changed(ptr(st.regs, 28), base && ptr(base.regs, 28))}`}>{hex(ptr(st.regs, 28), 4)}</span>],
-    ['Z Register', <span className={`mono ${changed(ptr(st.regs, 30), base && ptr(base.regs, 30))}`}>{hex(ptr(st.regs, 30), 4)}</span>],
+    ['Stack Pointer', <EditableValue value={core.sp} display={hex(core.sp, 4)} max={0xffff} className={changed(core.sp, baseCore?.sp)} onCommit={(v) => sim({ type: 'writeCpu', field: 'sp', value: v })} />],
+    ['X Register', <span className={`mono ${changed(ptr(core.regs, 26), baseCore && ptr(baseCore.regs, 26))}`}>{hex(ptr(core.regs, 26), 4)}</span>],
+    ['Y Register', <span className={`mono ${changed(ptr(core.regs, 28), baseCore && ptr(baseCore.regs, 28))}`}>{hex(ptr(core.regs, 28), 4)}</span>],
+    ['Z Register', <span className={`mono ${changed(ptr(core.regs, 30), baseCore && ptr(baseCore.regs, 30))}`}>{hex(ptr(core.regs, 30), 4)}</span>],
     ['Cycle Counter', <span className="mono">{st.cycles.toLocaleString()}</span>],
     ['Instructions', <span className="mono">{st.instructions.toLocaleString()}</span>],
     ['Frequency', formatHz(st.hz)],
@@ -77,32 +80,32 @@ export function ProcessorPanel(): JSX.Element {
           <div className="sreg-row">
             {FLAGS.map((f, i) => {
               const bit = 7 - i;
-              const on = (st.sreg >> bit) & 1;
-              const was = base ? (base.sreg >> bit) & 1 : on;
+              const on = (core.sreg >> bit) & 1;
+              const was = baseCore ? (baseCore.sreg >> bit) & 1 : on;
               return (
                 <button
                   key={f}
                   className={`flag-box${on ? ' on' : ''}${on !== was ? ' changed' : ''}`}
                   data-tip={`${f}: ${FLAG_DESC[f]} (click to toggle)`}
-                  onClick={() => sim({ type: 'writeCpu', field: 'sreg', value: st.sreg ^ (1 << bit) })}
+                  onClick={() => sim({ type: 'writeCpu', field: 'sreg', value: core.sreg ^ (1 << bit) })}
                 >
                   <span className="flag-name">{f}</span>
                   <span className="flag-led" />
                 </button>
               );
             })}
-            <span className="mono sreg-hex">{hex(st.sreg)}</span>
+            <span className="mono sreg-hex">{hex(core.sreg)}</span>
           </div>
         </Section>
         <Section title="Registers">
           <div className="reg-grid">
             {Array.from({ length: 32 - firstReg }, (_, k) => {
               const r = firstReg + k;
-              const v = st.regs[r];
+              const v = core.regs[r];
               return (
                 <div key={r} className="reg-cell">
                   <span className="reg-name">R{r}</span>
-                  <EditableValue value={v} display={hex(v)} title={`R${r} = ${v} (${(v << 24) >> 24} signed)`} className={changed(v, base?.regs[r])} onCommit={(nv) => sim({ type: 'writeReg', reg: r, value: nv })} />
+                  <EditableValue value={v} display={hex(v)} title={`R${r} = ${v} (${(v << 24) >> 24} signed)`} className={changed(v, baseCore?.regs[r])} onCommit={(nv) => sim({ type: 'writeReg', reg: r, value: nv })} />
                 </div>
               );
             })}

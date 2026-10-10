@@ -7,6 +7,7 @@ use std::collections::HashMap;
 use mcs_core::avr::device::AvrDeviceSpec;
 use mcs_core::avr::devices;
 pub use mcs_core::avr::devices::CustomMcuConfig;
+use mcs_core::device::{Arch, DeviceRef};
 use mcs_core::avr::isa::{self, DisasmContext};
 use mcs_core::avr::{isa_docs, isa_usage};
 use mcs_core::program::{Diagnostic, LoadedProgram};
@@ -15,6 +16,7 @@ use serde::Serialize;
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DeviceSummary {
+    pub arch: Arch,
     pub id: String,
     pub name: String,
     pub family: String,
@@ -67,12 +69,25 @@ pub struct InsnInfo {
     pub alias_of: String,
 }
 
-pub fn list_devices() -> Vec<DeviceSummary> {
-    devices::list().into_iter().map(summary).collect()
+/// The AVR spec for `device_id`; None for unknown ids and for other architectures (the
+/// disassembler, instruction set and definition files are AVR-only for now).
+fn avr_spec(device_id: &str) -> Option<&'static AvrDeviceSpec> {
+    mcs_core::devices::get_any(device_id)?.as_avr()
 }
 
-fn summary(d: &AvrDeviceSpec) -> DeviceSummary {
+pub fn list_devices() -> Vec<DeviceSummary> {
+    mcs_core::devices::list_any().into_iter().map(summary).collect()
+}
+
+fn summary(d: DeviceRef) -> DeviceSummary {
+    match d {
+        DeviceRef::Avr(s) => avr_summary(s),
+    }
+}
+
+fn avr_summary(d: &AvrDeviceSpec) -> DeviceSummary {
     DeviceSummary {
+        arch: Arch::Avr,
         id: d.id.clone(),
         name: d.name.clone(),
         family: d.family.clone(),
@@ -87,13 +102,14 @@ fn summary(d: &AvrDeviceSpec) -> DeviceSummary {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CustomRegistration {
+    pub arch: Arch,
     pub id: String,
     pub error: Option<String>,
 }
 
 /// Registers (or replaces) user-defined devices in this process.
 pub fn register_custom_devices(configs: &[CustomMcuConfig]) -> Vec<CustomRegistration> {
-    configs.iter().map(|c| CustomRegistration { id: c.id.clone(), error: devices::register_custom(c).err() }).collect()
+    configs.iter().map(|c| CustomRegistration { arch: Arch::Avr, id: c.id.clone(), error: devices::register_custom(c).err() }).collect()
 }
 
 /// What a custom configuration turns into (for the editor's live summary).
@@ -139,15 +155,15 @@ pub fn build_asm(source: &str, file_name: &str, device_id: &str, includes: &Hash
 
 /// Parses an ELF or Intel HEX image. The device embedded in an ELF wins when known.
 pub fn import_program(bytes: &[u8], file_name: &str, device_id: &str) -> BuildOutcome {
-    let flash = devices::get(device_id).map(|s| s.flash_size as usize).unwrap_or(1024);
+    let flash = mcs_core::devices::get_any(device_id).map(|s| s.flash_size() as usize).unwrap_or(1024);
     let program = mcs_formats::load_program_file(bytes, file_name, flash);
-    let device = program.device.clone().filter(|d| devices::get(d).is_some()).unwrap_or_else(|| device_id.to_string());
+    let device = program.device.clone().filter(|d| mcs_core::devices::get_any(d).is_some()).unwrap_or_else(|| device_id.to_string());
     BuildOutcome { ok: !program.has_errors(), diagnostics: program.diagnostics.clone(), program: Some(program), output: String::new(), listing: None, device_id: device }
 }
 
 /// Parses the ELF produced by an external compiler (C builds).
 pub fn program_from_elf(elf: &[u8], file_name: &str, device_id: &str, extra: Vec<Diagnostic>, output: String) -> BuildOutcome {
-    let flash = devices::get(device_id).map(|s| s.flash_size as usize).unwrap_or(1024);
+    let flash = mcs_core::devices::get_any(device_id).map(|s| s.flash_size() as usize).unwrap_or(1024);
     let mut program = mcs_formats::parse_elf(elf, flash, file_name);
     program.diagnostics.extend(extra);
     BuildOutcome { ok: !program.has_errors(), diagnostics: program.diagnostics.clone(), program: Some(program), output, listing: None, device_id: device_id.to_string() }
@@ -175,7 +191,7 @@ pub fn machine_code_hints(source: &str, device_id: &str) -> McAnnotations {
 /// Renders a program image as an editable machine-code source: one instruction per line with
 /// its disassembly as a comment, labels as comment lines.
 pub fn program_to_machine_code(device_id: &str, flash: &[u8], used: usize, labels: &HashMap<u32, String>, title: &str) -> String {
-    let name = devices::get(device_id).map(|d| d.name.as_str()).unwrap_or(device_id);
+    let name = mcs_core::devices::get_any(device_id).map(|d| d.name()).unwrap_or(device_id);
     let mut out = format!(
         "; Machine code for {name}{}\n; One instruction per line as 16-bit words in hex (two words for 32-bit instructions).\n; Edit the words and build (F7) to run them. '@0x0010' moves to a byte address.\n\n@0x0000\n",
         if title.is_empty() { String::new() } else { format!(" - generated from {title}") },
@@ -205,7 +221,7 @@ pub fn program_to_machine_code(device_id: &str, flash: &[u8], used: usize, label
 
 /// Disassembles a whole program image. `labels` maps code byte addresses to names.
 pub fn disassemble(device_id: &str, flash: &[u8], labels: &HashMap<u32, String>) -> Vec<DisasmLine> {
-    let Some(spec) = devices::get(device_id) else { return Vec::new() };
+    let Some(spec) = avr_spec(device_id) else { return Vec::new() };
     let table = isa::decode_table(spec.features);
     let io_names: HashMap<u32, String> = spec.registers.iter().rev().filter_map(|r| spec.data_to_io(r.addr).map(|io| (io as u32, r.name.clone()))).collect();
     let data_names: HashMap<u32, String> = spec.registers.iter().rev().map(|r| (r.addr as u32, r.name.clone())).collect();
@@ -227,7 +243,7 @@ pub fn disassemble(device_id: &str, flash: &[u8], labels: &HashMap<u32, String>)
 }
 
 pub fn instruction_set(device_id: &str) -> Vec<InsnInfo> {
-    let Some(spec) = devices::get(device_id) else { return Vec::new() };
+    let Some(spec) = avr_spec(device_id) else { return Vec::new() };
     let rc = spec.features & isa::feature::RC != 0;
     let mut out: Vec<InsnInfo> = isa::insns()
         .iter()
@@ -289,7 +305,7 @@ fn operand_label(k: isa::OperandKind) -> String {
 
 /// (include file name, generated avrasm2 definitions) for a device.
 pub fn def_include(device_id: &str) -> Option<(String, String)> {
-    devices::get(device_id).map(|s| (mcs_asm::def_include_name(s), mcs_asm::generate_def_include(s)))
+    avr_spec(device_id).map(|s| (mcs_asm::def_include_name(s), mcs_asm::generate_def_include(s)))
 }
 
 /// `.include` names referenced by a source that are not built-in device definitions.

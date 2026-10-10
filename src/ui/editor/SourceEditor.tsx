@@ -27,7 +27,7 @@ import { useSim } from '../state/sim';
 import { useSettings } from '../state/settings';
 import { hex } from '../format';
 import { instructionSet } from '../backend/api';
-import type { InsnInfo } from '../backend/types';
+import { avrCore, type InsnInfo } from '../backend/types';
 
 /** Tab: pads with spaces to the next tab stop at the cursor; with a selection, indents the lines. */
 const softTab = (view: EditorView): boolean => {
@@ -192,7 +192,7 @@ const hoverInfo = hoverTooltip((view, pos) => {
   }
   const reg = /^r(\d{1,2})$/i.exec(word);
   if (reg && Number(reg[1]) < 32) {
-    info = st ? `${word.toUpperCase()} = ${hex(st.regs[Number(reg[1])])} (${st.regs[Number(reg[1])]})` : `Register ${word}`;
+    info = st ? `${word.toUpperCase()} = ${hex(avrCore(st).regs[Number(reg[1])])} (${avrCore(st).regs[Number(reg[1])]})` : `Register ${word}`;
   } else if (spec) {
     const r = spec.registers.find((x) => x.name === word.toUpperCase());
     if (r) {

@@ -4,7 +4,7 @@ MCS was AVR-only. Supporting ARM Cortex-M (STM32) and later ESP32 needs a seam b
 architecture-neutral layers (session, protocol, API, most of the UI) and per-architecture
 cores, devices and peripherals. Work is staged so every stage ships with all tests green.
 
-## Stage A — architecture seam (no new targets)
+## Stage A — architecture seam (no new targets) — DONE
 * `mcs_core::device::{Arch, DeviceRef}`: `DeviceRef::Avr(&'static AvrDeviceSpec)` (later
   `Arm(..)`); `devices::get_any(id)` / `list_any()` search every architecture. Specs serialize
   with an `arch` tag (`"avr"`) so the UI can branch.
@@ -14,6 +14,11 @@ cores, devices and peripherals. Work is staged so every stage ships with all tes
 * `MachineState`: architecture-specific CPU state moves into `core: CoreState`
   (`Avr { sp, sreg, regs }`); `pc` stays in the architecture's native unit and the state adds
   `pc_bytes` (byte address) for neutral consumers. Memory travels as before for AVR.
+* Implemented: `mcs_core::{device, devices}`, `mcs_sim::target::Target` (+ `avr/target.rs`),
+  `CoreState`, the UI's `DeviceSpec` / `CoreState` types and `avrCore(state)` accessor. AVR-only
+  state that is not part of `core` (`fuses`, `lock`, `eeprom`, `sleepMode`) stays at the top
+  level of `MachineState` (empty / 0 on other architectures) until a second architecture needs
+  a different shape.
 * UI: `DeviceSpec = AvrDeviceSpec | ...` discriminated by `arch`; AVR-only panels (fuses,
   I/O view, Chip View, ISA, definitions) check `arch === 'avr'`.
 

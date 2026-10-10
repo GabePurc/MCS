@@ -331,7 +331,7 @@ mod c_tests {
                 s.slice();
             }
             assert!(!s.is_running(), "step did not finish");
-            let pc = s.machine().unwrap().cpu.pc * 2;
+            let pc = s.avr_machine().unwrap().cpu.pc * 2;
             // First row at the closest address <= pc (the call site wins over inlined rows).
             let best = p.lines.iter().filter(|r| r.address <= pc).map(|r| r.address).max().unwrap();
             let at: Vec<_> = p.lines.iter().filter(|r| r.address == best && r.is_stmt).collect();

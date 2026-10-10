@@ -3,6 +3,7 @@
 pub mod cpu;
 pub mod machine;
 pub mod peripherals;
+mod target;
 
 pub use cpu::{CallFrame, Cpu, StopReason};
 pub use machine::{Cx, Event, Machine, Message, Peripheral, ResetSource, Sys, Trigger};

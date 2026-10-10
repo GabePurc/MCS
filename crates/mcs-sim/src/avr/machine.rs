@@ -305,6 +305,10 @@ pub struct Machine {
     pub(crate) serial: Option<u8>,
     /// Optional per-instruction predicate used for stepping; returns true to stop before executing.
     pub step_predicate: Option<StepPredicate>,
+    /// (file << 20 | line) per word address at statement starts, -1 elsewhere (`Target` stepping).
+    pub(crate) line_key: Vec<i32>,
+    /// The loaded program has line information (source-level stepping is possible).
+    pub(crate) has_lines: bool,
 }
 
 impl Machine {
@@ -340,6 +344,8 @@ impl Machine {
             stimulus: None,
             serial: None,
             step_predicate: None,
+            line_key: Vec::new(),
+            has_lines: false,
         };
         let sreg = spec.reg("SREG");
         m.cpu.io_owner[sreg as usize] = IO_SREG;

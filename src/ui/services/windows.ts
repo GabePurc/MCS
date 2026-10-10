@@ -9,7 +9,7 @@
  * navigation), settings edits, UI commands (F5, F10...), show-panel requests, bye.
  */
 import { inTauri } from '../backend/api';
-import type { AvrDeviceSpec, Diagnostic, LoadedProgram, RawMachineState, SimCommand, SimOutput } from '../backend/types';
+import type { DeviceSpec, Diagnostic, LoadedProgram, RawMachineState, SimCommand, SimOutput } from '../backend/types';
 import { useLayout, windowHooks, type PanelId } from '../state/layout';
 import { useSettings, type Settings } from '../state/settings';
 import { useSim } from '../state/sim';
@@ -52,7 +52,7 @@ type SettingsPatch = Partial<Settings>;
 
 type Msg =
   | { k: 'hello'; panel: PanelId }
-  | { k: 'snapshot'; spec: AvrDeviceSpec | null; state: RawMachineState | null; trace: ReturnType<typeof trace.export>; ws: WsPatch; settings: SettingsPatch }
+  | { k: 'snapshot'; spec: DeviceSpec | null; state: RawMachineState | null; trace: ReturnType<typeof trace.export>; ws: WsPatch; settings: SettingsPatch }
   | { k: 'out'; o: SimOutput }
   | { k: 'ws'; patch: WsPatch }
   | { k: 'settings'; patch: SettingsPatch }

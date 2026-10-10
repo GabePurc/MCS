@@ -120,7 +120,7 @@ fn session_load_run_and_step() {
             s.slice();
         }
     }
-    let pc = s.machine().unwrap().cpu.pc;
+    let pc = s.avr_machine().unwrap().cpu.pc;
     assert!(pc < 16, "pc {pc}");
     let json = serde_json::to_string(&s.handle(Command::RequestState)).unwrap();
     assert!(json.contains("\"traceCycles\""));
