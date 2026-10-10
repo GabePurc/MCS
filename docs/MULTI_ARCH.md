@@ -72,7 +72,41 @@ STM32H743IIT6 (LQFP176) and STM32H743ZIT6 (LQFP144, Nucleo-H743ZI); see `docs/RO
 ESP32-C3 (RISC-V RV32IMC) first (simpler core, same seam), then the classic ESP32 (Xtensa LX6)
 if wanted.
 
+* **E1 (done): standalone RV32IMC core**, mirroring Stage B1; not wired into the session yet.
+  * `mcs_core::riscv`: `decode` turns the first 16/32 bits into a 12-byte `Insn { imm, op, rd, rs1, rs2, len }`
+    (RV32I + M + C + Zicsr + Zifencei + `mret`/`wfi`; compressed forms expand to their base `Op`, `len` stays
+    2/4; everything else, incl. FP/atomics/RV64-only C forms/`sret`, is `Op::Illegal` with the raw bits in `imm`).
+    `disassemble`/`format_insn` reproduce `llvm-objdump` (pseudo-instructions `li mv j ret nop neg not seqz ...`,
+    `rdcycle`-style CSR aliases, hex immediates, `c.`-form for compressed HINTs, `lpad`/`prefetch.*`/`ntl.*` hints,
+    CSR names generated into `csr_names.rs`). Reference vectors come from the rustc `llvm-objdump`
+    (`tests/riscv_decode/gen_vectors.py`; `--full` + `RISCV_FULL=<file>` checks all 16-bit encodings and 180k words).
+  * `mcs_sim::riscv`: `Cpu` (x0-x31, pc, cycle/instret counters, CSR file in `cpu.rs`), `Bus` (`bus.rs`: 4 KiB
+    page table over aliasing windows with R/W/X permissions, `Mmio` trait with a `Cx` to raise/lower interrupt
+    lines, lazily pre-decoded code pages cleared by every store/`Bus::load`/DMA write so self-modifying code and
+    IRAM loads need no `fence.i`), `Machine` (`machine.rs`: allocation-free run loop, traps, interrupts, `wfi`).
+    Interrupt lines 1-31 map to `mip` bits; priority MEI(11) > MSI(3) > MTI(7) > highest line number; vectored
+    mode enters at `base + 4 * cause`, exceptions always at `base`.
+  * Cycle model (approximation; the TRM publishes no instruction timing): ALU/CSR/store/fence 1, load 2, mul 1,
+    div/rem 33, `jal` 2, taken branch and `jalr` 3, not-taken branch 1, trap entry and `mret` 3; no cache/flash wait
+    states or load-use stalls. `mcycle` counts these cycles (also those added by `Machine::idle`).
+  * Simplifications: M-mode only (no U-mode/PMP; MPP reads as 3), `time`/`mcountinhibit`/hpm counters absent or
+    read-as-zero, misaligned loads/stores trap (like the ESP32-C3 core), `ebreak` can be a host breakpoint
+    (`halt_on_ebreak`), `mtval` holds the instruction bits for illegal instructions and the pc for `ebreak`.
+* **E2 (planned): ESP32-C3 device + Target.** `Esp32c3` device description (memory map from the TRM, IO MUX/GPIO
+  matrix pins, `DeviceRef::Riscv`), interrupt matrix + the ESP32-C3 INTC (CPU interrupts 1-31 with priorities,
+  thresholds and edge/level types driving `Machine::set_irq_pending`), SYSTEM/clock, GPIO, UART0/1, TIMG0/1,
+  SYSTIMER; `riscv::target` implementing `Target` (registers, breakpoints, step over/out, disassembly through
+  `mcs_api`), ELF `EM_RISCV` + flash image loading (`esptool`-style app images), custom CSR hook for the C3
+  GPIO/performance-counter CSRs.
+* **E3 (planned): UI + more peripherals.** RISC-V Processor panel (x0-x31 with ABI names, pc, mstatus/mie/mip/
+  mtvec/mcause), ESP32-C3 pin diagram, serial/waveform adapted; then SPI/I2C/LEDC/ADC and the classic ESP32
+  (Xtensa LX6) if wanted.
+
 ## Toolchains
+RISC-V: rustc's `riscv32imc-unknown-none-elf` target assembles test programs (`global_asm!`, `.insn` for raw
+encodings) and its `llvm-tools` (`llvm-objdump`, `llvm-objcopy`, `llvm-nm`) give the reference output; no
+riscv-gcc is needed.
+
 No arm-none-eabi-gcc locally; Apple clang compiles/assembles for `thumbv7em-none-eabi`. Desktop
 builds use arm-none-eabi-gcc when installed (toolchain detection like avr-gcc); an ARM/GNU
 assembler in `mcs-asm` is a later item.

@@ -3,6 +3,7 @@
 //! * [`program`] — architecture-neutral program images + debug info (symbols, line table).
 //! * [`avr`] — AVR instruction set table and declarative device descriptions.
 //! * [`arm`] — ARMv7-M Thumb/Thumb-2 decoder and disassembler.
+//! * [`riscv`] — RV32IMC (+ Zicsr, Zifencei) decoder and disassembler.
 //!
 //! * [`device`] / [`devices`] — architecture-neutral device handle and registry (`DeviceRef`, `get_any`).
 //!
@@ -14,3 +15,4 @@ pub mod avr;
 pub mod device;
 pub mod devices;
 pub mod program;
+pub mod riscv;
