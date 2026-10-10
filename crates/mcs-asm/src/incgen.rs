@@ -63,7 +63,8 @@ fn legacy_vector_name(name: &str) -> Option<String> {
         if let Some(p) = rest.find("_COMP") {
             let (n, tail) = (&rest[..p], &rest[p + 5..]);
             let tb = tail.as_bytes();
-            if !n.is_empty() && n.bytes().all(|c| c.is_ascii_digit()) && tb.len() == 1 && tb[0].is_ascii_uppercase() {
+            // TIMER0_COMP (ATmega8/16/32) -> OC0; TIMER1_COMPA -> OC1A.
+            if !n.is_empty() && n.bytes().all(|c| c.is_ascii_digit()) && (tail.is_empty() || (tb.len() == 1 && tb[0].is_ascii_uppercase())) {
                 return Some(format!("OC{n}{tail}"));
             }
         }
@@ -73,9 +74,9 @@ fn legacy_vector_name(name: &str) -> Option<String> {
         "ADC" => Some("ADCC".into()),
         "EE_RDY" | "EE_READY" => Some("ERDY".into()),
         "SPI_STC" => Some("SPI".into()),
-        "USART_RX" => Some("URXC".into()),
+        "USART_RX" | "USART_RXC" => Some("URXC".into()),
         "USART_UDRE" => Some("UDRE".into()),
-        "USART_TX" => Some("UTXC".into()),
+        "USART_TX" | "USART_TXC" => Some("UTXC".into()),
         "SPM_READY" | "SPM_RDY" => Some("SPMR".into()),
         _ => None,
     }

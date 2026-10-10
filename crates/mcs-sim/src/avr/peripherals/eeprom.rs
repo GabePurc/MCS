@@ -3,7 +3,8 @@
 //! The contents live in `Cpu::eeprom` (non-volatile across resets and power cycles).
 //!
 //! Sources: DS40002061B section 8.4 (EEPROM data memory, table 8-2 programming times);
-//! Atmel-2586Q section 5.3.
+//! Atmel-2586Q section 5.3; Atmel-2466T / 2503Q / 2486AA "EEPROM Data Memory" (EEMWE / EEWE,
+//! 8.5 ms self-timed write).
 
 use crate::avr::machine::{Cx, Peripheral};
 
@@ -13,6 +14,10 @@ pub struct EepromConfig {
     pub eearl: u16,
     pub eearh: Option<u16>,
     pub vector: u8,
+    /// Parts without EEPM bits (ATmega8/16/32: EECR holds EERIE/EEMWE/EEWE/EERE only): always
+    /// atomic erase+write taking this many seconds (8.5 ms typical). None: EEPM selects the
+    /// mode and `PROG_TIME` applies.
+    pub write_time_s: Option<f64>,
 }
 
 const EERE: u8 = 0x01;
@@ -86,7 +91,7 @@ impl Peripheral for Eeprom {
         let now = cx.now();
         let old = cx.cpu.data[a];
         // EEPM can only be changed while no write is in progress.
-        let eepm = if busy { old & EEPM } else { v & EEPM };
+        let eepm = if self.c.write_time_s.is_some() { 0 } else if busy { old & EEPM } else { v & EEPM };
         cx.cpu.data[a] = (old & EEPE) | eepm | (v & EERIE);
         if v & EEMPE != 0 && v & EEPE == 0 {
             self.mempe_until = now + 4;
@@ -101,7 +106,8 @@ impl Peripheral for Eeprom {
                 self.mempe_until = 0;
                 // The CPU is halted for two cycles when EEPE is set.
                 cx.cpu.cycles += 2;
-                let at = cx.sys.clock.cycle_at(cx.time_seconds() + PROG_TIME[mode as usize]).max(cx.now() + 1);
+                let time = self.c.write_time_s.unwrap_or(PROG_TIME[mode as usize]);
+                let at = cx.sys.clock.cycle_at(cx.time_seconds() + time).max(cx.now() + 1);
                 cx.schedule(EV_DONE, at);
             } else {
                 cx.warn("eeprom-eempe", "EECR.EEPE written without EEMPE in the preceding 4 cycles: EEPROM write ignored");

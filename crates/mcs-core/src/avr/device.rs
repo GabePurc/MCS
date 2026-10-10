@@ -178,6 +178,8 @@ pub enum PeripheralSet {
     TinyX4,
     /// ATtiny2313A/4313.
     TinyX313,
+    /// ATmega8/16/32.
+    MegaLegacy,
     /// User-defined devices (`devices::custom`): wired by register/pin naming convention.
     Custom,
 }

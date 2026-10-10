@@ -6,7 +6,9 @@
 //! Sources: DS40002061B sections 9 (clock), 11 (power), 12 (reset, BOD), 12.9 (MCUSR),
 //! 13.1 (IVSEL); Atmel-2586Q sections 6 (clock, PLL), 7 (power), 8 (reset); Atmel-8126F
 //! (ATtiny13A), Atmel-8183F (ATtiny24A/44A/84A) and Atmel-8246B (ATtiny2313A/4313) clock and
-//! power sections (same structure, other CKSEL tables and clock frequencies).
+//! power sections (same structure, other CKSEL tables and clock frequencies); Atmel-2486AA
+//! (ATmega8), Atmel-2466T (ATmega16), Atmel-2503Q (ATmega32): internal RC at 1/2/4/8 MHz, BODEN +
+//! one-bit BODLEVEL fuses, MCUCSR, GICR (IVSEL/IVCE), no CLKPR and no PRR.
 
 use crate::avr::machine::{Cx, Event, Peripheral, ResetSource};
 
@@ -29,6 +31,8 @@ pub enum ClockSource {
     Rc6M4,
     /// Internal RC at half the nominal frequency (ATtiny13A 4.8 MHz, ATtiny2313A/4313 4 MHz).
     RcHalf,
+    /// Internal RC oscillator calibrated for this frequency in Hz (ATmega8/16/32: 1/2/4/8 MHz).
+    Rc(u32),
 }
 
 impl ClockSource {
@@ -42,21 +46,33 @@ impl ClockSource {
             Self::Pll16M => "PLL (16 MHz)",
             Self::Rc6M4 => "ATtiny15 mode (6.4 MHz)",
             Self::RcHalf => "Internal RC (half frequency)",
+            Self::Rc(1_000_000) => "Internal RC oscillator (1 MHz)",
+            Self::Rc(2_000_000) => "Internal RC oscillator (2 MHz)",
+            Self::Rc(4_000_000) => "Internal RC oscillator (4 MHz)",
+            Self::Rc(8_000_000) => "Internal RC oscillator (8 MHz)",
+            Self::Rc(_) => "Internal RC oscillator",
         }
     }
 }
 
 pub struct ClassicSystemConfig {
-    pub clkpr: u16,
+    /// Clock prescaler register (None on the ATmega8/16/32).
+    pub clkpr: Option<u16>,
     pub mcusr: u16,
+    /// Register holding IVSEL/IVCE (MCUCR; GICR on the ATmega8/16/32).
     pub mcucr: u16,
-    /// Plain MCUCR bits (PUD, and SE/SM/ISC0 on the ATtiny85).
+    /// Plain `mcucr` bits (PUD, and SE/SM/ISC0 on the ATtiny85; the INTn enables in GICR),
+    /// announced with `Event::RegWritten`.
     pub mcucr_plain: u8,
+    /// Bits of MCUSR/MCUCSR that are plain read/write (ATmega16/32: JTD, ISC2), announced with
+    /// `Event::RegWritten`.
+    pub mcusr_plain: u8,
     /// (IVSEL, IVCE) when the device can move the vector table to the boot section.
     pub ivsel: Option<(u8, u8)>,
     /// (BODS, BODSE): BOD disable during sleep.
     pub bods: Option<(u8, u8)>,
-    pub prr: u16,
+    /// Power reduction register (None on the ATmega8/16/32).
+    pub prr: Option<u16>,
     pub prr_mask: u8,
     pub osccal: u16,
     pub pllcsr: Option<u16>,
@@ -65,6 +81,9 @@ pub struct ClassicSystemConfig {
     /// XTAL1/CLKI and XTAL2 GPIOs.
     pub xtal1: Option<usize>,
     pub xtal2: Option<usize>,
+    /// Name of the BOD enable fuse (BODEN: programmed = enabled) for parts where BODLEVEL only
+    /// selects the threshold; None when the BODLEVEL value itself switches the BOD off.
+    pub bod_enable: Option<&'static str>,
     /// BODLEVEL value -> threshold (V); values not listed disable the BOD.
     pub bod_levels: Vec<(u8, f64)>,
 }
@@ -97,8 +116,8 @@ impl ClassicSystem {
 
     pub fn registers(&self) -> Vec<(u16, u8)> {
         let c = &self.c;
-        let mut v = vec![(c.clkpr, 0), (c.mcusr, 0), (c.mcucr, 0), (c.prr, 0)];
-        v.extend(c.pllcsr.map(|a| (a, 0)));
+        let mut v = vec![(c.mcusr, 0), (c.mcucr, 0)];
+        v.extend(c.clkpr.into_iter().chain(c.prr).chain(c.pllcsr).map(|a| (a, 0)));
         v
     }
 
@@ -112,11 +131,12 @@ impl ClassicSystem {
             ClockSource::Pll16M => 16e6,
             ClockSource::Rc6M4 => 6.4e6,
             ClockSource::RcHalf => spec.clock.internal_hz / 2.0,
+            ClockSource::Rc(hz) => hz as f64,
         }
     }
 
     fn update_clock(&self, cx: &mut Cx) {
-        let ps = (cx.cpu.data[self.c.clkpr as usize] & 0x0f).min(8);
+        let ps = self.c.clkpr.map_or(0, |a| (cx.cpu.data[a as usize] & 0x0f).min(8));
         let hz = self.base_hz(cx) / (1u32 << ps) as f64;
         let now = cx.now();
         if cx.sys.clock.set_hz(hz, now) {
@@ -125,6 +145,9 @@ impl ClassicSystem {
     }
 
     fn bod_threshold(&self, cx: &Cx) -> Option<f64> {
+        if self.c.bod_enable.is_some_and(|f| !cx.fuse_programmed(f)) {
+            return None;
+        }
         let lvl = cx.cpu.fuse_value("BODLEVEL")?;
         self.c.bod_levels.iter().find(|l| l.0 == lvl).map(|l| l.1)
     }
@@ -196,7 +219,7 @@ impl Peripheral for ClassicSystem {
         let c = &self.c;
         let a = addr as usize;
         let now = cx.now();
-        if addr == c.clkpr {
+        if Some(addr) == c.clkpr {
             if v == CLKPCE {
                 self.clkpce_until = now + 4;
             } else if now <= self.clkpce_until && v & CLKPCE == 0 {
@@ -208,7 +231,12 @@ impl Peripheral for ClassicSystem {
             }
         } else if addr == c.mcusr {
             self.flags &= v & 0x0f; // flags are cleared by writing 0
-            cx.cpu.data[a] = self.flags;
+            let plain = v & c.mcusr_plain;
+            let changed = (cx.cpu.data[a] ^ plain) & c.mcusr_plain != 0;
+            cx.cpu.data[a] = self.flags | plain;
+            if changed {
+                cx.sys.events.push_back(Event::RegWritten(addr));
+            }
         } else if addr == c.mcucr {
             let old = cx.cpu.data[a];
             let mut nv = (old & !c.mcucr_plain) | (v & c.mcucr_plain);
@@ -228,7 +256,7 @@ impl Peripheral for ClassicSystem {
             }
             cx.cpu.data[a] = nv;
             cx.sys.events.push_back(Event::RegWritten(addr));
-        } else if addr == c.prr {
+        } else if Some(addr) == c.prr {
             let v = v & c.prr_mask;
             cx.cpu.data[a] = v;
             cx.sys.events.push_back(Event::PowerReduction(v));
@@ -285,7 +313,9 @@ impl Peripheral for ClassicSystem {
         cx.cpu.data[self.c.osccal as usize] = cx.cpu.spec.calibration;
         let cksel = cx.cpu.fuse_value("CKSEL").unwrap_or(2);
         self.source = self.c.cksel.iter().find(|e| e.0 == cksel).map(|e| e.1).unwrap_or(ClockSource::Rc8M);
-        cx.cpu.data[self.c.clkpr as usize] = if cx.fuse_programmed("CKDIV8") { 3 } else { 0 };
+        if let Some(a) = self.c.clkpr {
+            cx.cpu.data[a as usize] = if cx.fuse_programmed("CKDIV8") { 3 } else { 0 };
+        }
         self.clkpce_until = 0;
         self.ivce_until = 0;
         if let Some(a) = self.c.pllcsr {
@@ -299,15 +329,17 @@ impl Peripheral for ClassicSystem {
 
     fn inspect(&mut self, cx: &mut Cx) -> Vec<(String, String)> {
         let hz = cx.sys.clock.hz;
-        let ps = cx.cpu.data[self.c.clkpr as usize] & 0x0f;
+        let ps = self.c.clkpr.map_or(0, |a| cx.cpu.data[a as usize] & 0x0f);
         let mut v = vec![
             ("CPU clock".into(), if hz >= 1e6 { format!("{} MHz", hz / 1e6) } else { format!("{} kHz", hz / 1e3) }),
             ("Clock source".into(), self.source.label().into()),
-            ("Prescaler".into(), format!("/{}", 1u32 << ps.min(8))),
             ("VCC (V)".into(), format!("{:.2}", cx.sys.vcc)),
             ("Brown-out level".into(), self.bod_threshold(cx).map(|t| format!("{t:.1} V")).unwrap_or_else(|| "Disabled".into())),
             ("Last reset".into(), cx.sys.last_reset.label().into()),
         ];
+        if self.c.clkpr.is_some() {
+            v.insert(2, ("Prescaler".into(), format!("/{}", 1u32 << ps.min(8))));
+        }
         if self.c.pllcsr.is_some() {
             v.push(("PLL".into(), if self.pll_locked(cx) { "Locked (64 MHz)" } else { "Off" }.into()));
         }

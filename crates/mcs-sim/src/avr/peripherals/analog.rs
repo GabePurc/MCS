@@ -1,5 +1,7 @@
 //! Analog comparator and successive-approximation ADC (8-bit ATtiny10, 10-bit classic AVRs).
-//! Sources: Atmel-8127H sections 13-14, DS40002061B sections 23-24, Atmel-2586Q sections 16-17.
+//! Sources: Atmel-8127H sections 13-14, DS40002061B sections 23-24, Atmel-2586Q sections 16-17,
+//! Atmel-2486AA / 2466T / 2503Q (ATmega8: ADFR free running; ATmega16/32: SFIOR trigger select,
+//! always-signed differential channels with 10x / 200x gain).
 
 use crate::avr::machine::{Cx, Peripheral, Trigger};
 
@@ -24,6 +26,8 @@ pub struct AcConfig {
     pub ain0_gpio: u8,
     pub ain1_gpio: u8,
     pub vector: u8,
+    /// Bandgap reference voltage (V) used when ACBG selects it as the positive input.
+    pub bandgap_v: f64,
     /// ACBG selects the bandgap as the positive input.
     pub acbg: bool,
     /// ACIC routes the output to Timer1 input capture.
@@ -56,7 +60,7 @@ impl AnalogComparator {
     /// (positive, negative) input voltages and the negative input's name.
     fn inputs(&self, cx: &Cx) -> (f64, f64, String) {
         let pins = &cx.sys.pins;
-        let pos = if self.c.acbg && self.acsr & ACBG != 0 { BANDGAP_V } else { pins[self.c.ain0_gpio as usize].volts };
+        let pos = if self.c.acbg && self.acsr & ACBG != 0 { self.c.bandgap_v } else { pins[self.c.ain0_gpio as usize].volts };
         if let Some(m) = &self.c.acme {
             let d = &cx.cpu.data;
             if d[m.reg as usize] & m.bit != 0 && d[m.adcsra as usize] & 0x80 == 0 {
@@ -196,7 +200,14 @@ pub enum AdcRef {
 
 pub struct AdcConfig {
     pub adcsra: u16,
-    pub adcsrb: u16,
+    /// Register holding the auto trigger source field ADTS (ADCSRB; SFIOR on the ATmega16/32).
+    /// None: no trigger select (ATmega8): ADATE/ADFR starts free running mode.
+    pub adcsrb: Option<u16>,
+    /// Bit position of the ADTS field in `adcsrb` (0 in ADCSRB, 5 in SFIOR).
+    pub adts_shift: u8,
+    /// False when another model owns `adcsrb` (SFIOR is owned by `Gtccr`): the ADC then neither
+    /// claims nor writes it, it only reads the trigger field.
+    pub adcsrb_owned: bool,
     pub admux: u16,
     pub adcl: u16,
     /// ADCH (10-bit converters).
@@ -218,6 +229,9 @@ pub struct AdcConfig {
     pub adcsrb_mask: u8,
     /// Bipolar input mode bit in ADCSRB (ATtiny85 BIN).
     pub bin: u8,
+    /// Differential conversions are always two's complement (-512..511 at 512 / VREF per unit,
+    /// ATmega16/32).
+    pub diff_signed: bool,
     /// Auto trigger source per ADTS value.
     pub triggers: [Option<Trigger>; 8],
     pub vector: u8,
@@ -259,13 +273,21 @@ impl Adc {
     }
 
     pub fn registers(&self) -> Vec<(u16, u8)> {
-        let mut v = vec![(self.c.adcsra, ADIF), (self.c.adcsrb, 0), (self.c.admux, 0), (self.c.adcl, 0)];
+        let mut v = vec![(self.c.adcsra, ADIF), (self.c.admux, 0), (self.c.adcl, 0)];
+        if let (Some(a), true) = (self.c.adcsrb, self.c.adcsrb_owned) {
+            v.push((a, 0));
+        }
         v.extend(self.c.adch.map(|a| (a, 0)));
         v
     }
 
     fn sra(&self, cx: &Cx) -> u8 {
         cx.cpu.data[self.c.adcsra as usize]
+    }
+
+    /// ADTS field (0 = free running; also when there is no trigger select register).
+    fn trigger_select(&self, cx: &Cx) -> usize {
+        self.c.adcsrb.map_or(0, |a| ((cx.cpu.data[a as usize] >> self.c.adts_shift) & 7) as usize)
     }
 
     fn mux(&self, cx: &Cx) -> usize {
@@ -328,7 +350,7 @@ impl Adc {
         if self.c.adch.is_none() {
             return ((self.sample * 256.0) / vref).floor().clamp(0.0, 255.0) as u16;
         }
-        let bipolar = self.diff && self.c.bin != 0 && cx.cpu.data[self.c.adcsrb as usize] & self.c.bin != 0;
+        let bipolar = self.diff && (self.c.diff_signed || self.c.bin != 0 && self.c.adcsrb.is_some_and(|a| cx.cpu.data[a as usize] & self.c.bin != 0));
         if bipolar {
             let v = ((self.sample * 512.0) / vref).floor().clamp(-512.0, 511.0) as i32;
             (v as u16) & 0x3ff
@@ -363,7 +385,7 @@ impl Peripheral for Adc {
         if addr == self.c.adcl || Some(addr) == self.c.adch {
             return; // read-only result
         }
-        if addr == self.c.admux || addr == self.c.adcsrb {
+        if addr == self.c.admux || (Some(addr) == self.c.adcsrb && self.c.adcsrb_owned) {
             let mask = if addr == self.c.admux { self.c.admux_mask } else { self.c.adcsrb_mask };
             cx.cpu.data[a] = v & mask;
             if self.c.notify {
@@ -391,7 +413,7 @@ impl Peripheral for Adc {
     fn on_event(&mut self, _tag: u8, _cycle: u64, cx: &mut Cx) {
         let result = self.convert(cx);
         if !self.locked {
-            let adlar_reg = if self.c.adlar_srb { self.c.adcsrb } else { self.c.admux };
+            let adlar_reg = if self.c.adlar_srb { self.c.adcsrb.unwrap_or(self.c.admux) } else { self.c.admux };
             let left = self.c.adlar != 0 && cx.cpu.data[adlar_reg as usize] & self.c.adlar != 0;
             match self.c.adch {
                 None => cx.cpu.data[self.c.adcl as usize] = result as u8,
@@ -405,7 +427,7 @@ impl Peripheral for Adc {
         cx.cpu.data[self.c.adcsra as usize] |= ADIF;
         self.busy = false;
         let sra = self.sra(cx);
-        let free_running = sra & ADATE != 0 && cx.cpu.data[self.c.adcsrb as usize] & 7 == 0 && sra & ADEN != 0;
+        let free_running = sra & ADATE != 0 && self.trigger_select(cx) == 0 && sra & ADEN != 0;
         if free_running {
             self.start(cx);
         }
@@ -422,8 +444,8 @@ impl Peripheral for Adc {
         if sra & (ADEN | ADATE) != ADEN | ADATE || self.busy {
             return;
         }
-        let ts = (cx.cpu.data[self.c.adcsrb as usize] & 7) as usize;
-        if ts != 0 && self.c.triggers[ts] == Some(trigger) {
+        let ts = self.trigger_select(cx);
+        if self.c.adcsrb.is_some() && ts != 0 && self.c.triggers[ts] == Some(trigger) {
             self.start(cx);
         }
     }

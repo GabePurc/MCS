@@ -204,6 +204,13 @@ function fusePresets(spec: AvrDeviceSpec): [string, number[]][] {
   if (spec.id === 'atmega328p') out.push(['Arduino Uno (16 MHz crystal, boot loader, BOD 2.7 V)', [0xff, 0xde, 0xfd]]);
   if (spec.id === 'atmega168pa') out.push(['Arduino Diecimila (16 MHz crystal, boot loader)', [0xff, 0xdd, 0xf8]]);
   if (spec.peripheralSet === 'mega-x8') out.push(['Internal 8 MHz (no clock divider)', [0xe2, ...spec.fuses.slice(1).map((f) => f.default)]]);
+  if (spec.peripheralSet === 'mega-legacy') {
+    // CKSEL = 0100 internal 8 MHz; 16 MHz crystal needs CKOPT programmed (CKSEL = 1111, SUT = 11,
+    // BOD off): ATmega8 high 0xC9, ATmega16/32 high 0x89 (JTAGEN stays programmed).
+    const high = spec.fuses[1]?.default ?? 0xff;
+    out.push(['Internal 8 MHz RC', [0xe4, high]]);
+    out.push(['16 MHz crystal (CKOPT programmed)', [0xff, high & ~0x10]]);
+  }
   if (spec.peripheralSet === 'tiny13') out.push(['Internal 9.6 MHz (no clock divider)', [0x7a, ...spec.fuses.slice(1).map((f) => f.default)]]);
   if (spec.peripheralSet === 'tiny-x4') out.push(['Internal 8 MHz (no clock divider)', [0xe2, ...spec.fuses.slice(1).map((f) => f.default)]]);
   if (spec.peripheralSet === 'tiny-x313') out.push(['Internal 8 MHz (no clock divider)', [0xe4, ...spec.fuses.slice(1).map((f) => f.default)]]);
