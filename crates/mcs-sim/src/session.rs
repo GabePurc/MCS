@@ -125,12 +125,14 @@ impl Session {
             }
             Command::Reset => {
                 self.m().debugger_reset();
-                self.stop(StopInfo { reason: StopKind::Reset, pc: 0, message: None });
+                let pc = self.m().pc();
+                self.stop(StopInfo { reason: StopKind::Reset, pc, message: None });
             }
             Command::PowerCycle => {
                 self.m().power_cycle();
                 self.sent.trace = 0;
-                self.stop(StopInfo { reason: StopKind::Reset, pc: 0, message: None });
+                let pc = self.m().pc();
+                self.stop(StopInfo { reason: StopKind::Reset, pc, message: None });
             }
             Command::Step { kind, source } => self.step(kind, source),
             Command::RunTo { pc } => {
@@ -198,7 +200,8 @@ impl Session {
             }
             Command::WriteFuse { index, value } => {
                 self.m().write_fuse(index, value)?;
-                self.stop(StopInfo { reason: StopKind::Reset, pc: 0, message: None });
+                let pc = self.m().pc();
+                self.stop(StopInfo { reason: StopKind::Reset, pc, message: None });
             }
             Command::RequestState => self.publish(),
             Command::Init { .. } | Command::Load { .. } | Command::Shutdown => unreachable!(),
@@ -222,7 +225,8 @@ impl Session {
         self.sent = Sent { trace: 0, eeprom: u64::MAX };
         self.flash_version += 1;
         self.apply_breakpoints();
-        self.stop(StopInfo { reason: StopKind::Load, pc: 0, message: None });
+        let pc = self.m().pc();
+        self.stop(StopInfo { reason: StopKind::Load, pc, message: None });
         Ok(())
     }
 
@@ -342,6 +346,7 @@ impl Session {
             StopReason::Breakpoint => StopInfo { reason: StopKind::Breakpoint, pc, message: None },
             StopReason::BreakInsn => StopInfo { reason: StopKind::Break, pc, message: Some("BREAK instruction executed".into()) },
             StopReason::InvalidOpcode => StopInfo { reason: StopKind::Invalid, pc, message: Some("Invalid opcode".into()) },
+            StopReason::Lockup => StopInfo { reason: StopKind::Invalid, pc, message: Some("CPU locked up (fault while handling a fault)".into()) },
             _ => StopInfo { reason: if self.run_to.is_some() { StopKind::RunTo } else { StopKind::Step }, pc, message: None },
         }
     }

@@ -102,6 +102,10 @@ pub struct LoadedProgram {
     pub flash: Vec<u8>,
     /// Number of meaningful bytes from the start of `flash` (highest programmed address + 1).
     pub flash_used: u32,
+    /// Address of `flash[0]` in the device's address space (0 for AVR; 0x0800_0000 for STM32).
+    /// Symbol, line-table and entry addresses are absolute byte addresses in that space.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub flash_base: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub eeprom: Option<Vec<u8>>,
     /// Fuse bytes (index = fuse number).
@@ -127,6 +131,7 @@ impl LoadedProgram {
             format,
             flash: vec![0xff; flash_size],
             flash_used: 0,
+            flash_base: 0,
             eeprom: None,
             fuses: None,
             lock: None,
@@ -142,4 +147,8 @@ impl LoadedProgram {
     pub fn has_errors(&self) -> bool {
         self.diagnostics.iter().any(|d| d.severity == Severity::Error)
     }
+}
+
+fn is_zero(v: &u32) -> bool {
+    *v == 0
 }

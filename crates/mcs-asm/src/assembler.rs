@@ -488,6 +488,7 @@ impl<'a> Assembler<'a> {
             format: ProgramFormat::Asm,
             flash: std::mem::take(&mut self.flash),
             flash_used: self.flash_used,
+            flash_base: 0,
             eeprom,
             fuses: None,
             lock: None,

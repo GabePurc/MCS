@@ -196,8 +196,8 @@ impl Target for Machine {
         Machine::serial_send(self, bytes);
     }
 
-    fn write_data(&mut self, addr: u16, value: u8) -> Result<(), String> {
-        self.poke_data(addr, value);
+    fn write_data(&mut self, addr: u32, value: u8) -> Result<(), String> {
+        self.poke_data(addr as u16, value);
         Ok(())
     }
 
@@ -206,8 +206,8 @@ impl Target for Machine {
         Ok(())
     }
 
-    fn write_reg(&mut self, reg: usize, value: u8) -> Result<(), String> {
-        self.cpu.r[reg & 31] = value;
+    fn write_reg(&mut self, reg: usize, value: u32) -> Result<(), String> {
+        self.cpu.r[reg & 31] = value as u8;
         Ok(())
     }
 
@@ -216,6 +216,7 @@ impl Target for Machine {
             CpuField::Pc => self.cpu.pc = (value >> 1) & self.cpu.pc_mask,
             CpuField::Sp => self.cpu.sp = value as u16,
             CpuField::Sreg => self.cpu.sreg = value as u8,
+            CpuField::Xpsr | CpuField::Msp | CpuField::Psp | CpuField::Lr => return Err("This CPU field does not exist on AVR".into()),
         }
         Ok(())
     }
@@ -262,6 +263,7 @@ impl Target for Machine {
                 dir: p.effective_dir(),
                 out: p.out,
                 pullup: p.pullup,
+                pulldown: p.pulldown,
                 ov_enable: p.ov_enable,
                 ext: p.ext,
                 ext_volts: p.ext_volts,
@@ -287,6 +289,7 @@ impl Target for Machine {
             sleep_mode: m.cpu.sleep_mode,
             reset_held: m.sys.reset_held,
             data,
+            io: Vec::new(),
             flash,
             flash_version: 0,
             fuses: m.cpu.fuses.clone(),

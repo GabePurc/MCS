@@ -16,8 +16,8 @@ pub mod dwarf;
 pub mod elf;
 pub mod ihex;
 
-pub use elf::{parse_elf, EM_AVR};
-pub use ihex::{parse_intel_hex, to_intel_hex};
+pub use elf::{parse_elf, parse_elf_at, EM_ARM, EM_AVR};
+pub use ihex::{parse_intel_hex, parse_intel_hex_at, to_intel_hex};
 
 const ELF_MAGIC: &[u8; 4] = b"\x7fELF";
 
@@ -29,10 +29,16 @@ const ELF_EXTENSIONS: [&str; 5] = ["elf", "o", "obj", "out", "axf"];
 /// magic number (or a file named `*.elf`, `*.o`, `*.obj`, `*.out`, `*.axf`) goes to [`parse_elf`],
 /// anything else is decoded as (lossy UTF-8) Intel HEX text by [`parse_intel_hex`].
 pub fn load_program_file(bytes: &[u8], file_name: &str, flash_size: usize) -> LoadedProgram {
+    load_program_file_at(bytes, file_name, flash_size, 0)
+}
+
+/// [`load_program_file`] for a device whose flash starts at `flash_base` (0 for AVR, 0x0800_0000
+/// for STM32): ELF segments and Intel HEX addresses are placed relative to it.
+pub fn load_program_file_at(bytes: &[u8], file_name: &str, flash_size: usize, flash_base: u32) -> LoadedProgram {
     if bytes.starts_with(ELF_MAGIC) || has_elf_extension(file_name) {
-        parse_elf(bytes, flash_size, file_name)
+        parse_elf_at(bytes, flash_size, file_name, (flash_base != 0).then_some(flash_base))
     } else {
-        parse_intel_hex(&String::from_utf8_lossy(bytes), flash_size, file_name)
+        parse_intel_hex_at(&String::from_utf8_lossy(bytes), flash_size, file_name, flash_base)
     }
 }
 

@@ -32,6 +32,8 @@ pub enum StopReason {
     Breakpoint,
     BreakInsn,
     InvalidOpcode,
+    /// ARM: the core locked up (fault inside a fault handler).
+    Lockup,
     /// A step predicate or `request_stop` asked to stop.
     Requested,
 }
@@ -46,7 +48,7 @@ pub struct CallFrame {
     /// Interrupt vector number, or -1 for a regular call.
     pub vector: i16,
     /// SP after pushing the return address.
-    pub sp: u16,
+    pub sp: u32,
 }
 
 const MAX_SHADOW_STACK: usize = 512;
@@ -304,12 +306,12 @@ impl Cpu {
         if self.shadow_stack.len() >= MAX_SHADOW_STACK {
             self.shadow_stack.remove(0);
         }
-        self.shadow_stack.push(CallFrame { return_pc, target_pc, vector, sp: self.sp });
+        self.shadow_stack.push(CallFrame { return_pc, target_pc, vector, sp: self.sp as u32 });
     }
 
     pub(crate) fn pop_frame(&mut self) {
         // Discard frames whose stack slot was unwound (handles manual stack manipulation).
-        while self.shadow_stack.last().is_some_and(|f| (f.sp as u32 + 2 + self.pc3 as u32) < self.sp as u32) {
+        while self.shadow_stack.last().is_some_and(|f| (f.sp + 2 + self.pc3 as u32) < self.sp as u32) {
             self.shadow_stack.pop();
         }
         self.shadow_stack.pop();

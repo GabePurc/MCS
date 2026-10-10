@@ -6,18 +6,23 @@
 //! * [`machine`] — run loop, exception entry/return, fault escalation.
 //! * [`nvic`], [`scb`], [`systick`] — interrupt controller, system control block, SysTick.
 //!
-//! This module is standalone for now: the session / protocol layers do not use it yet.
+//! [`Machine::from_spec`] builds a complete microcontroller (STM32G4) from a device description;
+//! [`target`] adapts it to the session's `Target` trait.
 //!
 //! References: ARM DDI 0403E.e (ARMv7-M ARM), ARM DDI 0439B (Cortex-M4 TRM, cycle counts),
 //! ARM DUI 0553 (Cortex-M4 Devices Generic User Guide, NVIC/SCB/SysTick registers).
 
 pub mod bus;
 pub mod cpu;
+pub mod debug;
 pub mod exec;
 pub mod machine;
 pub mod nvic;
+pub mod periph;
 pub mod scb;
+pub mod sys;
 pub mod systick;
+pub mod target;
 
 pub use bus::{Bus, Cx, MemConfig, Mmio};
 pub use cpu::{Cpu, StopReason};

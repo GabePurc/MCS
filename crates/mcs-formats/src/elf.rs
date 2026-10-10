@@ -5,6 +5,11 @@
 //! AVR (`e_machine` 83) physical address conventions used by avr-ld:
 //!   0x000000 flash, 0x800000 SRAM (data space), 0x810000 EEPROM, 0x820000 fuses,
 //!   0x830000 lock bits, 0x840000 signature.
+//!
+//! ARM (`e_machine` 40, Cortex-M): loadable segments are placed by physical address into flash
+//! (`flash_base`, 0x0800_0000 unless the caller says otherwise; a device with a boot alias also
+//! accepts addresses below the flash size). Symbol, line-table and entry addresses stay absolute;
+//! the Thumb bit is cleared from function symbols and the entry point.
 
 use std::collections::HashMap;
 use std::fmt;
@@ -18,6 +23,11 @@ use crate::dwarf::{parse_debug_line, DebugLineOptions, DebugLineRow};
 use crate::{decode_utf8, sat_u32, strip_bom};
 
 pub const EM_AVR: u16 = 83;
+pub const EM_ARM: u16 = 40;
+
+/// Default load address of the flash of an STM32 when the caller does not know the device.
+const ARM_DEFAULT_FLASH_BASE: u32 = 0x0800_0000;
+const SHF_EXECINSTR: u64 = 0x4;
 
 const AVR_DATA_BASE: u64 = 0x80_0000;
 const AVR_EEPROM_BASE: u64 = 0x81_0000;
@@ -335,6 +345,12 @@ fn report(diagnostics: &mut Vec<Diagnostic>, file: &str, severity: Severity, mes
 /// Load an ELF executable or object. Never panics: problems are reported in `diagnostics`
 /// (errors for unusable images, warnings for missing/bad optional information).
 pub fn parse_elf(bytes: &[u8], flash_size: usize, file_name: &str) -> LoadedProgram {
+    parse_elf_at(bytes, flash_size, file_name, None)
+}
+
+/// Like [`parse_elf`]; `flash_base` is the address of the start of flash for ARM images (None: the
+/// STM32 default 0x0800_0000). Ignored for other machines.
+pub fn parse_elf_at(bytes: &[u8], flash_size: usize, file_name: &str, flash_base: Option<u32>) -> LoadedProgram {
     let mut program = LoadedProgram::empty(ProgramFormat::Elf, flash_size);
 
     let elf = match read_elf(bytes) {
@@ -351,8 +367,10 @@ pub fn parse_elf(bytes: &[u8], flash_size: usize, file_name: &str) -> LoadedProg
 
     let diagnostics = &mut program.diagnostics;
     let is_avr = elf.machine == EM_AVR;
-    if !is_avr {
-        let msg = format!("ELF machine type {} is not AVR ({EM_AVR}); loading anyway", elf.machine);
+    let is_arm = elf.machine == EM_ARM;
+    let arm_base = if is_arm { u64::from(flash_base.filter(|&b| b != 0).unwrap_or(ARM_DEFAULT_FLASH_BASE)) } else { 0 };
+    if !is_avr && !is_arm {
+        let msg = format!("ELF machine type {} is neither AVR ({EM_AVR}) nor ARM ({EM_ARM}); loading anyway", elf.machine);
         report(diagnostics, file_name, Severity::Warning, msg);
     }
     if elf.e_type == ET_REL {
@@ -360,16 +378,19 @@ pub fn parse_elf(bytes: &[u8], flash_size: usize, file_name: &str) -> LoadedProg
         report(diagnostics, file_name, Severity::Warning, msg);
     }
     match u32::try_from(elf.entry) {
-        Ok(entry) => program.entry = entry,
+        Ok(entry) => program.entry = if is_arm { entry & !1 } else { entry },
         Err(_) => {
             let msg = format!("Entry point 0x{:x} does not fit in 32 bits; using 0", elf.entry);
             report(diagnostics, file_name, Severity::Warning, msg);
         }
     }
 
-    load_image(&elf, &mut program, is_avr, file_name);
+    load_image(&elf, &mut program, is_avr, is_arm.then_some(arm_base), file_name);
+    if is_arm {
+        program.flash_base = arm_base as u32;
+    }
 
-    match read_symbols(&elf, is_avr) {
+    match read_symbols(&elf, is_avr, is_arm) {
         Ok((symbols, skipped)) => {
             program.symbols = symbols;
             if skipped > 0 {
@@ -465,6 +486,8 @@ struct ImageLoader<'p, 'a> {
     diagnostics: &'p mut Vec<Diagnostic>,
     file: &'p str,
     is_avr: bool,
+    /// ARM: address of the start of flash.
+    arm_base: Option<u64>,
     used: usize,
     eeprom: SparseImage<'a>,
     fuses: SparseImage<'a>,
@@ -498,7 +521,18 @@ impl<'a> ImageLoader<'_, 'a> {
         if data.is_empty() {
             return;
         }
-        if !self.is_avr || lma < AVR_DATA_BASE {
+        if let Some(base) = self.arm_base {
+            let flash_len = self.flash.len() as u64;
+            if lma >= base && lma < base + flash_len.max(1) {
+                self.write_flash(lma - base, data, what);
+            } else if lma < flash_len {
+                self.write_flash(lma, data, what); // linked for the boot alias at address 0
+            } else if !(0x1000_0000..0x6000_0000).contains(&lma) {
+                let msg = format!("{what} at 0x{lma:x} is outside the flash and RAM and was ignored");
+                self.report(Severity::Warning, msg);
+            }
+            // RAM load addresses carry run-time images whose initial values load from flash.
+        } else if !self.is_avr || lma < AVR_DATA_BASE {
             self.write_flash(lma, data, what);
         } else if lma < AVR_EEPROM_BASE {
             // SRAM run-time image; its initial values load from flash.
@@ -525,12 +559,13 @@ impl fmt::Display for SegmentLabel {
     }
 }
 
-fn load_image(elf: &ElfFile<'_>, program: &mut LoadedProgram, is_avr: bool, file: &str) {
+fn load_image(elf: &ElfFile<'_>, program: &mut LoadedProgram, is_avr: bool, arm_base: Option<u64>, file: &str) {
     let mut loader = ImageLoader {
         flash: &mut program.flash,
         diagnostics: &mut program.diagnostics,
         file,
         is_avr,
+        arm_base,
         used: 0,
         eeprom: SparseImage::default(),
         fuses: SparseImage::default(),
@@ -581,7 +616,7 @@ fn space_order(space: SymbolSpace) -> u8 {
 
 /// Symbols from `.symtab` (or `.dynsym`), sorted by space then address. Also returns how many
 /// symbols were dropped because their address does not fit in 32 bits.
-fn read_symbols(elf: &ElfFile<'_>, is_avr: bool) -> Result<(Vec<ProgramSymbol>, usize), String> {
+fn read_symbols(elf: &ElfFile<'_>, is_avr: bool, is_arm: bool) -> Result<(Vec<ProgramSymbol>, usize), String> {
     let symtab = elf
         .sections
         .iter()
@@ -639,6 +674,11 @@ fn read_symbols(elf: &ElfFile<'_>, is_avr: bool) -> Result<(Vec<ProgramSymbol>, 
             }
         }
 
+        let in_exec_section = shndx < SHN_LORESERVE && elf.sections.get(shndx as usize).is_some_and(|s| s.flags & SHF_EXECINSTR != 0);
+        let mut value = value;
+        if is_arm && (st_type == STT_FUNC || (st_type == STT_NOTYPE && in_exec_section)) {
+            value &= !1; // Thumb bit
+        }
         let mut kind = match st_type {
             STT_FUNC => SymbolKind::Func,
             STT_OBJECT | STT_COMMON => SymbolKind::Object,
@@ -650,6 +690,10 @@ fn read_symbols(elf: &ElfFile<'_>, is_avr: bool) -> Result<(Vec<ProgramSymbol>, 
         if is_abs {
             space = SymbolSpace::None;
             kind = SymbolKind::Const;
+        } else if is_arm && ((0x1000_0000..0x1800_0000).contains(&value) || (0x2000_0000..0x4000_0000).contains(&value)) {
+            space = SymbolSpace::Data; // CCM SRAM / SRAM: absolute addresses
+        } else if is_arm && value >= 0x4000_0000 {
+            space = SymbolSpace::None; // peripheral / system addresses
         } else if is_avr && value >= AVR_DATA_BASE {
             if value < AVR_EEPROM_BASE {
                 space = SymbolSpace::Data;

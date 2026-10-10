@@ -35,6 +35,7 @@ cores, devices and peripherals. Work is staged so every stage ships with all tes
 * FPU: FPv4-SP (M4) then FPv5-D16 (M7, double precision).
 
 ## Stage C — STM32G4 (Cortex-M4F): STM32G431/G474
+C1 (Rust side: devices, peripherals, `Target`, loaders, tests) is DONE; see `docs/ROADMAP.md`. Remaining: ADC, UI (C2).
 RCC (HSI16/HSE/PLL, bus prescalers), FLASH ACR wait states, GPIO A-G (MODER/OTYPER/OSPEEDR/
 PUPDR/IDR/ODR/BSRR/AFR), EXTI + SYSCFG, NVIC, SysTick, USART/LPUART, TIM2-TIM4/TIM6/TIM7,
 ADC (later). UI: Processor panel for Cortex-M registers, peripheral register view from the spec.

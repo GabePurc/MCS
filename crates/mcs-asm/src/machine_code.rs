@@ -55,6 +55,13 @@ struct Line {
 
 /// Builds a program from machine-code text for `device_id`.
 pub fn assemble_machine_code(source: &str, file_name: &str, device_id: &str) -> MachineCodeResult {
+    if let Some(name) = crate::non_avr_device(device_id) {
+        let d = Diagnostic::error(crate::non_avr_message(&name), file_name, 0, 0);
+        let mut program = LoadedProgram::empty(ProgramFormat::MachineCode, 0);
+        program.files.push(file_name.to_string());
+        program.diagnostics.push(d.clone());
+        return MachineCodeResult { ok: false, program, device_id: device_id.to_string(), listing: String::new(), diagnostics: vec![d], hints: Vec::new() };
+    }
     let spec = devices::get(device_id).or_else(|| devices::get("attiny10")).expect("device registry is never empty");
     let mut diags = Vec::new();
     let words_max = spec.flash_words();
@@ -166,6 +173,7 @@ pub fn assemble_machine_code(source: &str, file_name: &str, device_id: &str) -> 
         format: ProgramFormat::MachineCode,
         flash,
         flash_used: used,
+        flash_base: 0,
         eeprom: None,
         fuses: None,
         lock: None,

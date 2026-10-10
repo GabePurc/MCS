@@ -77,6 +77,9 @@ pub struct AssembleResult {
 /// Assembles `source` for `opts.device_id` (unless the source selects another device).
 /// Never panics on malformed input: all problems are reported in `diagnostics`.
 pub fn assemble(source: &str, opts: &AssembleOptions) -> AssembleResult {
+    if let Some(name) = non_avr_device(opts.device_id) {
+        return refuse(opts.file_name, opts.device_id, &name);
+    }
     let requested = devices::get(opts.device_id);
     let fallback = requested.or_else(|| devices::get("attiny10")).or_else(|| devices::all().first());
     match fallback {
@@ -110,6 +113,23 @@ fn run<'a>(
         asm.internal_error(&msg);
     }
     asm.finish()
+}
+
+/// Name of the registered non-AVR device `id`, if it is one (the assembler only knows AVR).
+pub(crate) fn non_avr_device(id: &str) -> Option<String> {
+    mcs_core::arm::devices::get(id).map(|d| d.name.clone())
+}
+
+pub(crate) fn non_avr_message(name: &str) -> String {
+    format!("The built-in assembler supports AVR devices only; {name} is an ARM Cortex-M device. Build it with arm-none-eabi-gcc or clang and load the ELF or Intel HEX file")
+}
+
+fn refuse(file: &str, device_id: &str, name: &str) -> AssembleResult {
+    let d = Diagnostic::error(non_avr_message(name), file, 0, 0);
+    let mut program = LoadedProgram::empty(ProgramFormat::Asm, 0);
+    program.files.push(file.to_string());
+    program.diagnostics.push(d.clone());
+    AssembleResult { ok: false, program, device_id: device_id.to_string(), listing: String::new(), diagnostics: vec![d] }
 }
 
 fn no_device(opts: &AssembleOptions) -> AssembleResult {

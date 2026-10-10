@@ -86,12 +86,12 @@ pub trait Target: Send {
     fn serial_send(&mut self, bytes: &[u8]);
 
     // ---- debugger writes (architecture-specific ones default to an error)
-    fn write_data(&mut self, addr: u16, value: u8) -> Result<(), String>;
+    fn write_data(&mut self, addr: u32, value: u8) -> Result<(), String>;
     fn write_flash(&mut self, addr: u32, value: u8) -> Result<(), String> {
         let _ = (addr, value);
         unsupported("Writing program memory")
     }
-    fn write_reg(&mut self, reg: usize, value: u8) -> Result<(), String> {
+    fn write_reg(&mut self, reg: usize, value: u32) -> Result<(), String> {
         let _ = (reg, value);
         unsupported("Writing CPU registers")
     }
@@ -124,5 +124,6 @@ pub trait Target: Send {
 pub fn new_target(device: DeviceRef) -> Box<dyn Target> {
     match device {
         DeviceRef::Avr(spec) => Box::new(Machine::new(spec)),
+        DeviceRef::Arm(spec) => Box::new(crate::arm::Machine::from_spec(spec)),
     }
 }

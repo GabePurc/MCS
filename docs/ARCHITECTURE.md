@@ -49,7 +49,7 @@ logic is Rust; TypeScript only renders and routes user input.
 * `scheduler.rs` — cycle-stamped events. Peripherals schedule the exact cycle where something
   observable happens (e.g. the timer's next compare match/TOP/BOTTOM tick) and advance lazily
   when software touches their registers, so idle peripherals cost nothing per instruction.
-* `arm/` — standalone ARMv7-M machine (not yet behind the session): `cpu.rs` registers/xPSR/SP banking, `bus.rs` memory map + `Mmio` peripheral trait (event-driven via `Cx::schedule`), `exec.rs` dense-`match` executor with Cortex-M4 cycle counts, `machine.rs` run loop + exception entry/return/tail-chaining/fault escalation, `nvic.rs`, `scb.rs` (System Control Space registers), `systick.rs`.
+* `arm/` — ARMv7-M machine (STM32G4 devices via `Machine::from_spec`, behind the session through `target.rs`; peripherals in `periph/`, pins and clock tree in `sys.rs`, debugger state in `debug.rs`): `cpu.rs` registers/xPSR/SP banking, `bus.rs` memory map + `Mmio` peripheral trait (event-driven via `Cx::schedule`), `exec.rs` dense-`match` executor with Cortex-M4 cycle counts, `machine.rs` run loop + exception entry/return/tail-chaining/fault escalation, `nvic.rs`, `scb.rs` (System Control Space registers), `systick.rs`.
 * `pins.rs` — electrical model (direction, latch, pull-up, peripheral override, external
   drive incl. analog voltage, Schmitt thresholds, contention detection), the logic-analyzer
   trace ring buffer (`ceil(GPIOs / 32)` words per entry, so the 86-pin ATmega2560 and custom devices trace every pin) and the piecewise clock model (cycles <-> seconds across clock changes).

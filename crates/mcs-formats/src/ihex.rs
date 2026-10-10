@@ -60,7 +60,14 @@ fn utf16_len(bytes: &[u8]) -> usize {
 /// Parse Intel HEX text into a flash image of `flash_size` bytes (unprogrammed bytes are 0xFF).
 /// Errors and warnings are reported in `diagnostics`; the function itself never panics.
 pub fn parse_intel_hex(text: &str, flash_size: usize, file_name: &str) -> LoadedProgram {
+    parse_intel_hex_at(text, flash_size, file_name, 0)
+}
+
+/// Like [`parse_intel_hex`] for a device whose flash starts at `flash_base` (STM32: 0x0800_0000):
+/// record addresses at or above it are placed relative to it, lower ones are taken as they are.
+pub fn parse_intel_hex_at(text: &str, flash_size: usize, file_name: &str, flash_base: u32) -> LoadedProgram {
     let mut program = LoadedProgram::empty(ProgramFormat::Hex, flash_size);
+    program.flash_base = flash_base;
     let mut diagnostics = Vec::new();
     let flash = &mut program.flash[..];
     let flash_len = flash.len() as u64;
@@ -148,7 +155,10 @@ pub fn parse_intel_hex(text: &str, flash_size: usize, file_name: &str) -> Loaded
         let rec_type = rec[3];
         match rec_type {
             REC_DATA => {
-                let addr = base + offset;
+                let mut addr = base + offset;
+                if flash_base != 0 && addr >= u64::from(flash_base) {
+                    addr -= u64::from(flash_base);
+                }
                 let rec_end = addr + u64::from(count);
                 if addr < flash_len {
                     let stop = rec_end.min(flash_len);

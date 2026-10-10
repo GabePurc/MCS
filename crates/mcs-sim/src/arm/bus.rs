@@ -12,6 +12,7 @@
 use crate::scheduler::{EventKey, Scheduler};
 
 use super::nvic::Nvic;
+use super::sys::ArmSys;
 
 /// Memory sizes and bases of one device.
 #[derive(Clone, Debug)]
@@ -22,12 +23,23 @@ pub struct MemConfig {
     pub flash_alias: bool,
     /// RAM regions `(base, size)`.
     pub ram: Vec<(u32, u32)>,
+    /// Part of a RAM region that is also visible in a window of its own (STM32 CCM SRAM).
+    pub ram_alias: Option<RamAlias>,
+}
+
+/// A second address window onto `size` bytes of RAM region `ram`, starting at offset `off`.
+#[derive(Clone, Copy, Debug)]
+pub struct RamAlias {
+    pub base: u32,
+    pub size: u32,
+    pub ram: usize,
+    pub off: u32,
 }
 
 impl Default for MemConfig {
     /// STM32G4-like defaults: 128 KiB flash at 0x0800_0000 (aliased at 0), 32 KiB SRAM.
     fn default() -> Self {
-        Self { flash_base: 0x0800_0000, flash_size: 128 * 1024, flash_alias: true, ram: vec![(0x2000_0000, 32 * 1024)] }
+        Self { flash_base: 0x0800_0000, flash_size: 128 * 1024, flash_alias: true, ram: vec![(0x2000_0000, 32 * 1024)], ram_alias: None }
     }
 }
 
@@ -39,6 +51,8 @@ pub struct Cx<'a> {
     pub sched: &'a mut Scheduler,
     /// Index of the calling peripheral (event owner).
     pub owner: u8,
+    /// Pins, clock tree, clock gating and other machine-wide services.
+    pub sys: &'a mut ArmSys,
 }
 
 impl Cx<'_> {
@@ -51,6 +65,17 @@ impl Cx<'_> {
         self.sched.cancel(EventKey { owner: self.owner, tag });
     }
 
+    /// Cycle of the access / event.
+    #[inline]
+    pub fn now(&self) -> u64 {
+        self.cycles
+    }
+
+    /// Simulated time (s) of the access / event.
+    pub fn time_seconds(&self) -> f64 {
+        self.sys.clock.time_at(self.cycles)
+    }
+
     /// Latches IRQ line `irq` (0-based external interrupt number) as pending.
     pub fn raise_irq(&mut self, irq: u32) {
         self.nvic.set_pending(irq);
@@ -60,18 +85,38 @@ impl Cx<'_> {
     pub fn clear_irq(&mut self, irq: u32) {
         self.nvic.clear_pending(irq);
     }
+
+    /// Drives the level of IRQ line `irq`. A rising level pends the interrupt; if the level is still
+    /// high when its handler returns, the interrupt is pended again (level-sensitive sources).
+    pub fn set_irq_line(&mut self, irq: u32, level: bool) {
+        self.nvic.set_line(irq, level);
+    }
 }
 
 /// A memory-mapped peripheral. All timing is event driven: instead of being ticked, a peripheral
 /// schedules the cycle where something observable happens (`Cx::schedule`) and advances lazily
 /// when software accesses its registers.
-pub trait Mmio {
+pub trait Mmio: Send {
     /// Reads `size` (1, 2 or 4) bytes at `offset` from the peripheral base.
     fn read(&mut self, offset: u32, size: u8, cx: &mut Cx) -> u32;
     fn write(&mut self, offset: u32, size: u8, value: u32, cx: &mut Cx);
     /// A scheduled event (see `Cx::schedule`) is due.
     fn on_event(&mut self, _tag: u8, _cx: &mut Cx) {}
-    fn reset(&mut self) {}
+    /// System / power-on reset.
+    fn reset(&mut self, _cx: &mut Cx) {}
+    /// The level of GPIO `pin` changed (only delivered to peripherals registered as listeners).
+    fn on_pin(&mut self, _pin: usize, _level: u8, _cycle: u64, _cx: &mut Cx) {}
+    /// RCC changed the clock tree (HCLK or an APB prescaler): re-derive timing from `cx.sys.clk`.
+    fn on_clock_change(&mut self, _cx: &mut Cx) {}
+    /// Side-effect free read of the 32-bit register at `offset` (debugger views). Registers
+    /// whose normal read has side effects override this.
+    fn peek(&mut self, offset: u32, cx: &mut Cx) -> u32 {
+        self.read(offset & !3, 4, cx)
+    }
+    /// Short status lines for the peripheral inspector.
+    fn inspect(&self, _cx: &Cx) -> Vec<(String, String)> {
+        Vec::new()
+    }
 }
 
 pub(crate) const T_NONE: u8 = 0;
@@ -79,6 +124,7 @@ pub(crate) const T_FLASH: u8 = 1;
 pub(crate) const T_ALIAS: u8 = 2;
 pub(crate) const T_PERIPH: u8 = 3;
 pub(crate) const T_PPB: u8 = 4;
+pub(crate) const T_RALIAS: u8 = 5;
 /// RAM regions are `T_RAM + index`.
 pub(crate) const T_RAM: u8 = 8;
 
@@ -99,6 +145,7 @@ pub struct Bus {
     pub flash_size: u32,
     pub flash_alias: bool,
     pub ram: Vec<Ram>,
+    pub ram_alias: Option<RamAlias>,
     pub(crate) top: [u8; 256],
     ranges: Vec<PeriphEntry>,
     pub(crate) devs: Vec<Box<dyn Mmio>>,
@@ -115,6 +162,9 @@ impl Bus {
             top[(base >> 24) as usize] = T_RAM + k as u8;
             ram.push(Ram { base, data: vec![0; size as usize] });
         }
+        if let Some(a) = cfg.ram_alias {
+            top[(a.base >> 24) as usize] = T_RALIAS;
+        }
         top[(cfg.flash_base >> 24) as usize] = T_FLASH;
         if cfg.flash_alias && cfg.flash_base >> 24 != 0 {
             top[0] = T_ALIAS;
@@ -125,6 +175,7 @@ impl Bus {
             flash_size: cfg.flash_size,
             flash_alias: cfg.flash_alias,
             ram,
+            ram_alias: cfg.ram_alias,
             top,
             ranges: Vec::new(),
             devs: Vec::new(),
@@ -170,6 +221,11 @@ impl Bus {
         let (data, off): (&[u8], u32) = match t {
             T_FLASH => (&self.flash, addr.wrapping_sub(self.flash_base)),
             T_ALIAS => (&self.flash, addr),
+            T_RALIAS => {
+                let a = self.ram_alias.as_ref()?;
+                let d = &self.ram.get(a.ram)?.data;
+                (d.get(a.off as usize..(a.off + a.size) as usize)?, addr.wrapping_sub(a.base))
+            }
             t if t >= T_RAM => {
                 let r = &self.ram[(t - T_RAM) as usize];
                 (&r.data, addr.wrapping_sub(r.base))
@@ -189,7 +245,7 @@ impl Bus {
     pub fn write_ram(&mut self, addr: u32, size: u32, value: u32) -> bool {
         let t = self.top[(addr >> 24) as usize];
         if t < T_RAM {
-            return false;
+            return t == T_RALIAS && self.write_alias(addr, size, value);
         }
         let r = &mut self.ram[(t - T_RAM) as usize];
         let o = addr.wrapping_sub(r.base) as usize;
@@ -218,6 +274,25 @@ impl Bus {
         }
     }
 
+    #[cold]
+    fn write_alias(&mut self, addr: u32, size: u32, value: u32) -> bool {
+        let Some(a) = self.ram_alias else { return false };
+        let o = addr.wrapping_sub(a.base);
+        if o.saturating_add(size) > a.size {
+            return false;
+        }
+        let Some(r) = self.ram.get_mut(a.ram) else { return false };
+        let i = (a.off + o) as usize;
+        let b = value.to_le_bytes();
+        match r.data.get_mut(i..i + size as usize) {
+            Some(d) => {
+                d.copy_from_slice(&b[..size as usize]);
+                true
+            }
+            None => false,
+        }
+    }
+
     /// Offset into `flash` for a code address (primary window or boot alias).
     #[inline]
     pub fn flash_offset(&self, addr: u32) -> Option<u32> {
@@ -235,6 +310,11 @@ impl Bus {
     pub fn ram_slice(&self, addr: u32, len: usize) -> Option<&[u8]> {
         let t = self.top[(addr >> 24) as usize];
         if t < T_RAM {
+            if t == T_RALIAS {
+                let a = self.ram_alias.as_ref()?;
+                let o = (addr.wrapping_sub(a.base) + a.off) as usize;
+                return self.ram.get(a.ram)?.data.get(o..o + len);
+            }
             return None;
         }
         let r = &self.ram[(t - T_RAM) as usize];

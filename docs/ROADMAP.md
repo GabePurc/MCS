@@ -58,6 +58,7 @@ Update this file when work is finished (only list items that are done in the rep
 
 ### Multi-architecture (docs/MULTI_ARCH.md, Stage B1)
 - [x] Standalone ARMv7-M core, not yet wired into the session: `mcs_core::arm` Thumb/Thumb-2 decoder + UAL disassembler (all base-ISA encodings, DSP saturating/extend-and-add subset; checked against 1900+ `llvm-objdump` reference lines in `crates/mcs-core/tests/arm_thumb`), `mcs_sim::arm` machine (r0-r15/xPSR/MSP/PSP/CONTROL/PRIMASK/FAULTMASK/BASEPRI, pre-decoded flash, memory bus with `Mmio` peripheral trait, NVIC with priority grouping/preemption/tail-chaining, SysTick, SCB incl. fault escalation/lockup, WFI/WFE sleep with fast-forward, ~300 simulated MHz); tests in `crates/mcs-sim/tests/arm_core` (programs assembled by clang, `gen_programs.py`)
+- [x] Stage C1, STM32G4 end to end on the Rust side: `STM32G431KB` (LQFP32) and `STM32G474RE` (LQFP64) as `DeviceRef::Arm` (`mcs_core::arm::{device, devices}`; register offsets, bit masks, IRQ names generated from ST's CMSIS header and pins/alternate functions from ST's CubeMX database by `gen_stm32g4.py`); `mcs_sim::arm::Machine::from_spec` wires memories (CCM SRAM alias), RCC (HSI16/HSE/PLL, prescalers, clock gating/reset, wait-state and boost warnings), FLASH ACR/key unlock, PWR, GPIO A-G (full electrical model, AF routing, lock), SYSCFG+EXTI, USART1-3/UART4-5/LPUART1 (bit-level TX/RX on the pins, serial monitor bridge), TIM2-4 (PWM/output compare) and TIM6/7 on the event scheduler; `Target` implementation (breakpoints, run-to, source/instruction step over/out, call stack, register `io` view); ELF `EM_ARM` + Intel HEX at 0x0800_0000 loading; ARM disassembly through `mcs_api::disassemble`; the AVR assembler refuses ARM devices; tests in `crates/mcs-sim/tests/stm32g4.rs`, `crates/mcs-formats/tests/arm.rs`, `crates/mcs-core/tests/arm_devices.rs` (UI support is a later stage)
 
 ## Next
 - [ ] DWARF variable/type info (`.debug_info`) for a typed Watch window and locals
@@ -68,7 +69,7 @@ Update this file when work is finished (only list items that are done in the rep
 - [ ] More devices (issues #1, #5): ATtiny20/40, then the AVR-0/1 series (new register map)
 - [ ] Virtual I²C/SPI devices on the bus (EEPROM, sensors) so TWI/SPI transfers get answers
 - [ ] SPM self-programming, debugWIRE, timer asynchronous (TOSC) mode, USART synchronous / MSPIM modes
-- [ ] ARM Cortex-M (STM32) targets: Thumb-2 core, NVIC and SysTick exist (Stage B1); still needs the architecture abstraction below, FPU, ELF/HEX loading at 0x0800_0000 and per-family peripherals
+- [ ] ARM Cortex-M (STM32) targets: core, STM32G4 devices and their peripherals are wired into the session (Stage B1/C1); still missing: UI support, FPU/DSP instructions, ADC/DMA/SPI/I2C/CAN, the STM32H7 family
 - [ ] Architecture abstraction for non-AVR targets (machine trait, register descriptions in specs)
 - [ ] Project files (multi-file C builds, per-project device/clock/fuses)
 - [ ] Signed release builds (Apple notarization, Windows code signing)

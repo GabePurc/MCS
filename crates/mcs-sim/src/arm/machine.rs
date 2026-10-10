@@ -11,12 +11,29 @@
 
 use crate::scheduler::Scheduler;
 
-use super::bus::{Bus, Cx, MemConfig, Mmio, T_PERIPH, T_PPB};
+use super::bus::{Bus, MemConfig, Mmio, T_PERIPH, T_PPB};
 use super::cpu::{Cpu, StopReason, CONTROL_SPSEL};
+use super::debug::{is_call, is_return, Dbg, StepCond};
 use super::nvic::*;
+use super::periph::serial::SerialBridge;
+use super::periph::stimulus::Stimulus;
 use super::scb::*;
+use super::sys::ArmSys;
 use super::systick::{SysTick, SYSTICK_OWNER};
+use mcs_core::arm::device::ArmDeviceSpec;
 use mcs_core::arm::thumb::{self, ArmFeatures, Insn};
+
+/// Scheduler owner ids of the machine-level services (peripheral owners are bus device indices).
+pub const BRIDGE_OWNER: u8 = 0xfe;
+pub const STIM_OWNER: u8 = 0xfd;
+
+/// Builds a peripheral context from disjoint machine fields (usable next to a `self.bus` borrow).
+macro_rules! cx {
+    ($s:ident, $owner:expr, $cycles:expr) => {
+        $crate::arm::bus::Cx { cycles: $cycles, nvic: &mut $s.nvic, sched: &mut $s.sched, sys: &mut $s.sys, owner: $owner }
+    };
+}
+pub(crate) use cx;
 
 /// Device configuration of the core and its memories.
 #[derive(Clone, Debug)]
@@ -31,6 +48,9 @@ pub struct ArmConfig {
     /// CPU cycles per SysTick tick when CLKSOURCE = 0 (STM32: HCLK/8).
     pub systick_ext_div: u32,
     pub systick_calib: u32,
+    /// Accesses to peripheral addresses without a device read as zero and ignore writes (with a
+    /// one-time warning) instead of faulting, so firmware touching unmodelled peripherals runs.
+    pub unmapped_peripherals_raz: bool,
 }
 
 impl Default for ArmConfig {
@@ -44,6 +64,7 @@ impl Default for ArmConfig {
             cpuid: 0x410f_c241,
             systick_ext_div: 8,
             systick_calib: 0,
+            unmapped_peripherals_raz: false,
         }
     }
 }
@@ -66,13 +87,34 @@ pub struct Machine {
     pub(crate) stop_limit: u64,
     /// AIRCR.SYSRESETREQ was written.
     pub reset_requested: bool,
+    /// Pins, clock tree and other machine-wide state shared by the peripherals.
+    pub sys: ArmSys,
+    /// The device description this machine was built from (None for the bare core).
+    pub spec: Option<&'static ArmDeviceSpec>,
+    /// Serial Monitor end of the UART cable and the pin signal generators (test bench).
+    pub bridge: SerialBridge,
+    pub stim: Stimulus,
+    pub(crate) dbg: Dbg,
+    /// Name and RCC clock-enable position of every bus device (parallel to `bus.devs`).
+    pub(crate) dev_names: Vec<String>,
+    pub(crate) dev_enable: Vec<Option<(u8, u8)>>,
+    pub(crate) hsi_hz: f64,
+    /// Active exceptions, innermost last: (exception number, address of its stacked frame).
+    pub(crate) exc_stack: Vec<(u16, u32)>,
+    ev_scratch: Vec<(u16, u8, u64)>,
 }
 
 const SPSEL: u8 = CONTROL_SPSEL;
 
 impl Machine {
     pub fn new(cfg: ArmConfig) -> Self {
+        Self::with_sys(cfg, ArmSys::new(0, 16e6, 3.3, 8e6), 16e6)
+    }
+
+    /// A core with the given machine-wide services (the STM32 factory passes the pin array).
+    pub fn with_sys(cfg: ArmConfig, sys: ArmSys, hsi_hz: f64) -> Self {
         let bus = Bus::new(&cfg.mem);
+        let pins = sys.pins.len();
         let prog = vec![Insn::UNDEF; (cfg.mem.flash_size / 2) as usize];
         let mut m = Self {
             cpu: Cpu::new(),
@@ -86,6 +128,16 @@ impl Machine {
             act_prio: IDLE_PRIO,
             stop_limit: u64::MAX,
             reset_requested: false,
+            sys,
+            spec: None,
+            bridge: SerialBridge::new(),
+            stim: Stimulus::new(pins),
+            dbg: Dbg::default(),
+            dev_names: Vec::new(),
+            dev_enable: Vec::new(),
+            hsi_hz,
+            exc_stack: Vec::with_capacity(16),
+            ev_scratch: Vec::new(),
             cfg,
         };
         m.decode_range(0, m.prog.len());
@@ -94,6 +146,8 @@ impl Machine {
 
     /// Maps a peripheral; returns its event-owner index.
     pub fn add_peripheral(&mut self, base: u32, size: u32, dev: Box<dyn Mmio>) -> u8 {
+        self.dev_names.push(String::new());
+        self.dev_enable.push(None);
         self.bus.add_peripheral(base, size, dev)
     }
 
@@ -117,7 +171,7 @@ impl Machine {
         self.reset();
     }
 
-    fn decode_range(&mut self, from: usize, to: usize) {
+    pub(crate) fn decode_range(&mut self, from: usize, to: usize) {
         let f = &self.bus.flash;
         let feat = self.cfg.features;
         let to = to.min(self.prog.len());
@@ -131,23 +185,57 @@ impl Machine {
 
     // ---- reset ----------------------------------------------------------------------------
 
-    /// Power-on / system reset: initial SP and PC come from the vector table at VTOR (0, or the
-    /// flash base when there is no boot alias).
+    /// Power-on reset: initial SP and PC come from the vector table at VTOR (0, or the flash base
+    /// when there is no boot alias); time and the pin trace restart.
     pub fn reset(&mut self) {
+        self.reset_with(true);
+    }
+
+    /// System reset (`power_on == false` keeps the cycle counter and the pin trace so time stays
+    /// continuous across a debugger or SYSRESETREQ reset).
+    pub fn reset_with(&mut self, power_on: bool) {
         let vt = if self.bus.flash_alias { 0 } else { self.bus.flash_base };
+        let (cycles, instructions) = (self.cpu.cycles, self.cpu.instructions);
         self.cpu = Cpu::new();
+        if power_on {
+            self.sys.power_on(self.hsi_hz);
+        } else {
+            self.cpu.cycles = cycles;
+            self.cpu.instructions = instructions;
+        }
+        let now = self.cpu.cycles;
         self.scb = Scb::new(self.cfg.cpuid);
         self.scb.vtor = vt;
         self.nvic.reset();
         self.sched.clear();
         self.systick.reset(&mut self.sched);
-        for d in self.bus.devs.iter_mut() {
-            d.reset();
+        self.sys.reset_pins(now);
+        if !power_on {
+            // Clock tree back to the reset state (HSI16); RCC re-derives it below.
+            let t = super::sys::ClockTree { sysclk_hz: self.hsi_hz, hclk_hz: self.hsi_hz, ppre1: 1, ppre2: 1 };
+            self.sys.set_clock_tree(t, now);
+            self.sys.enr = [0; 6];
         }
+        for d in 0..self.bus.devs.len() {
+            let mut cx = cx!(self, d as u8, now);
+            self.bus.devs[d].reset(&mut cx);
+        }
+        {
+            let mut cx = cx!(self, BRIDGE_OWNER, now);
+            self.bridge.reset(&mut cx);
+        }
+        {
+            let mut cx = cx!(self, STIM_OWNER, now);
+            self.stim.reset(power_on, &mut cx);
+        }
+        self.after_io();
         self.nest.clear();
+        self.exc_stack.clear();
         self.act_prio = IDLE_PRIO;
         self.stop_limit = u64::MAX;
         self.reset_requested = false;
+        self.dbg.step = None;
+        self.dbg.run_to = None;
         let sp = self.mem_read(vt, 4).unwrap_or(0);
         let pc = self.mem_read(vt + 4, 4).unwrap_or(0);
         self.cpu.r[13] = sp & !3;
@@ -168,13 +256,28 @@ impl Machine {
     fn mem_read_slow(&mut self, addr: u32, size: u32) -> Option<u32> {
         match self.bus.top[(addr >> 24) as usize] {
             T_PERIPH => {
-                let (dev, off) = self.bus.find(addr)?;
-                let mut cx = Cx { cycles: self.cpu.cycles, nvic: &mut self.nvic, sched: &mut self.sched, owner: dev as u8 };
-                Some(self.bus.devs[dev].read(off, size as u8, &mut cx))
+                let Some((dev, off)) = self.bus.find(addr) else { return self.unmapped_read(addr) };
+                let cycles = self.cpu.cycles;
+                let mut cx = cx!(self, dev as u8, cycles);
+                let v = self.bus.devs[dev].read(off, size as u8, &mut cx);
+                if self.sys.attn {
+                    self.after_io();
+                }
+                Some(v)
             }
             T_PPB => self.ppb_read(addr, size),
             _ => None,
         }
+    }
+
+    #[cold]
+    fn unmapped_read(&mut self, addr: u32) -> Option<u32> {
+        if !self.cfg.unmapped_peripherals_raz {
+            return None;
+        }
+        let c = self.cpu.cycles;
+        self.sys.warn_key(c, format!("unmapped-{:08x}", addr & !0x3ff), format!("Read of unimplemented peripheral register at 0x{addr:08X} returns 0"));
+        Some(0)
     }
 
     #[inline]
@@ -186,14 +289,74 @@ impl Machine {
     fn mem_write_slow(&mut self, addr: u32, size: u32, v: u32) -> bool {
         match self.bus.top[(addr >> 24) as usize] {
             T_PERIPH => {
-                let Some((dev, off)) = self.bus.find(addr) else { return false };
-                let mut cx = Cx { cycles: self.cpu.cycles, nvic: &mut self.nvic, sched: &mut self.sched, owner: dev as u8 };
+                let Some((dev, off)) = self.bus.find(addr) else {
+                    if self.cfg.unmapped_peripherals_raz {
+                        let c = self.cpu.cycles;
+                        self.sys.warn_key(c, format!("unmapped-{:08x}", addr & !0x3ff), format!("Write to unimplemented peripheral register at 0x{addr:08X} ignored"));
+                        return true;
+                    }
+                    return false;
+                };
+                let cycles = self.cpu.cycles;
+                let mut cx = cx!(self, dev as u8, cycles);
                 self.bus.devs[dev].write(off, size as u8, v, &mut cx);
+                if self.sys.attn {
+                    self.after_io();
+                }
                 true
             }
             T_PPB => self.ppb_write(addr, size, v),
             _ => false,
         }
+    }
+
+    /// Work that follows a peripheral register access or event: peripherals reset through RCC,
+    /// clock-tree changes and pin level changes are delivered to the interested peripherals.
+    #[inline(never)]
+    pub(crate) fn after_io(&mut self) {
+        self.sys.attn = false;
+        let now = self.cpu.cycles;
+        while let Some((reg, bit)) = self.sys.resets.pop() {
+            for d in 0..self.bus.devs.len() {
+                if self.dev_enable[d] == Some((reg, bit)) {
+                    let mut cx = cx!(self, d as u8, now);
+                    self.bus.devs[d].reset(&mut cx);
+                }
+            }
+        }
+        let mut rounds = 0;
+        while self.sys.clock_dirty && rounds < 4 {
+            self.sys.clock_dirty = false;
+            rounds += 1;
+            for d in 0..self.bus.devs.len() {
+                let mut cx = cx!(self, d as u8, now);
+                self.bus.devs[d].on_clock_change(&mut cx);
+            }
+            let mut cx = cx!(self, BRIDGE_OWNER, now);
+            self.bridge.on_clock_change(&mut cx);
+            let mut cx = cx!(self, STIM_OWNER, now);
+            self.stim.on_clock_change(&mut cx);
+        }
+        self.sys.clock_dirty = false;
+        let mut rounds = 0;
+        while !self.sys.changed.is_empty() && rounds < 64 {
+            rounds += 1;
+            let mut ev = std::mem::take(&mut self.ev_scratch);
+            std::mem::swap(&mut ev, &mut self.sys.changed);
+            for &(pin, level, cycle) in &ev {
+                for k in 0..self.sys.listeners.len() {
+                    let d = self.sys.listeners[k] as usize;
+                    let mut cx = cx!(self, d as u8, now.max(cycle));
+                    self.bus.devs[d].on_pin(pin as usize, level, cycle, &mut cx);
+                }
+                let mut cx = cx!(self, BRIDGE_OWNER, now.max(cycle));
+                self.bridge.on_pin(pin as usize, level, cycle, &mut cx);
+            }
+            ev.clear();
+            self.ev_scratch = ev;
+        }
+        self.sys.changed.clear();
+        self.sys.attn = false;
     }
 
     // ---- fetch ----------------------------------------------------------------------------
@@ -237,10 +400,21 @@ impl Machine {
     }
 
     /// Runs until the cycle counter reaches `limit`, a BKPT, a lockup or a stop request.
-    /// Returns the reason; `StopReason::Limit` means the cycle budget was used up.
+    /// Returns the reason; `StopReason::Limit` means the cycle budget was used up. While
+    /// breakpoints or a step condition are armed the checking variant of the loop runs.
     pub fn run(&mut self, limit: u64) -> StopReason {
+        if self.dbg.active() {
+            self.run_loop::<true>(limit)
+        } else {
+            self.run_loop::<false>(limit)
+        }
+    }
+
+    fn run_loop<const CHK: bool>(&mut self, limit: u64) -> StopReason {
         self.cpu.stop = StopReason::None;
+        self.dbg.hit_breakpoint = false;
         self.stop_limit = limit;
+        let mut first = true;
         while self.cpu.cycles < self.stop_limit {
             if self.sched.next <= self.cpu.cycles || self.nvic.dirty {
                 self.service();
@@ -257,12 +431,22 @@ impl Machine {
                 continue;
             }
             let pc = self.cpu.pc;
+            if CHK {
+                if !first && self.check_stop(pc) {
+                    break;
+                }
+                first = false;
+            }
             match self.fetch(pc) {
                 Some(insn) => {
                     self.cpu.r[15] = pc.wrapping_add(4);
                     self.cpu.pc = pc.wrapping_add(insn.len as u32);
                     self.cpu.instructions += 1;
+                    let ipsr = self.cpu.ipsr;
                     self.exec(&insn, pc);
+                    if CHK && self.dbg.step.is_some() {
+                        self.track_depth(&insn, ipsr);
+                    }
                 }
                 None => self.raise_fault(pc, EXC_BUSFAULT, BFSR_IBUSERR),
             }
@@ -271,6 +455,61 @@ impl Machine {
             self.cpu.stop = StopReason::Limit;
         }
         self.cpu.stop
+    }
+
+    /// Debugger conditions evaluated before the instruction at `pc` executes.
+    #[cold]
+    #[inline(never)]
+    fn check_stop(&mut self, pc: u32) -> bool {
+        let off = pc.wrapping_sub(self.bus.flash_base);
+        if self.dbg.nbp > 0 && self.dbg.bp.get((off >> 1) as usize).copied().unwrap_or(false) {
+            self.dbg.hit_breakpoint = true;
+            self.cpu.stop = StopReason::Requested;
+            return true;
+        }
+        let hit = match (self.dbg.run_to, self.dbg.step) {
+            (Some(t), _) if t == pc => true,
+            (_, Some(st)) => {
+                let key = self.dbg.key_at(off);
+                match st.cond {
+                    StepCond::OverCall { ret } => pc == ret && st.depth <= 0,
+                    StepCond::Out { lines } => st.depth < 0 && (!lines || key != -1),
+                    StepCond::IntoSrc { start } => key != -1 && (key != start || st.depth != 0),
+                    StepCond::OverSrc { start } => {
+                        if key == -1 {
+                            false
+                        } else if start == -1 {
+                            true
+                        } else if st.depth != 0 {
+                            st.depth < 0
+                        } else {
+                            key >> 20 == start >> 20 && key != start
+                        }
+                    }
+                }
+            }
+            _ => false,
+        };
+        if hit {
+            self.cpu.stop = StopReason::Requested;
+        }
+        hit
+    }
+
+    /// Updates the step's call depth after an instruction executed in context `ipsr`.
+    fn track_depth(&mut self, insn: &Insn, ipsr: u16) {
+        let after = self.cpu.ipsr;
+        let Some(st) = self.dbg.step.as_mut() else { return };
+        if ipsr != st.ipsr {
+            return; // inside an interrupt handler entered during the step
+        }
+        if after != st.ipsr {
+            st.depth -= 1; // exception return out of the stepped context
+        } else if is_call(insn) {
+            st.depth += 1;
+        } else if is_return(insn) {
+            st.depth -= 1;
+        }
     }
 
     /// Executes one instruction (or takes one exception entry).
@@ -282,11 +521,23 @@ impl Machine {
     /// Dispatches due scheduler events, then takes the highest-priority preempting exception.
     fn service(&mut self) {
         while let Some((key, at)) = self.sched.pop_due(self.cpu.cycles) {
-            if key.owner == SYSTICK_OWNER {
-                self.systick.on_event(at, &mut self.sched, &mut self.nvic);
-            } else {
-                let mut cx = Cx { cycles: at, nvic: &mut self.nvic, sched: &mut self.sched, owner: key.owner };
-                self.bus.devs[key.owner as usize].on_event(key.tag, &mut cx);
+            match key.owner {
+                SYSTICK_OWNER => self.systick.on_event(at, &mut self.sched, &mut self.nvic),
+                BRIDGE_OWNER => {
+                    let mut cx = cx!(self, BRIDGE_OWNER, at);
+                    self.bridge.on_event(key.tag, &mut cx);
+                }
+                STIM_OWNER => {
+                    let mut cx = cx!(self, STIM_OWNER, at);
+                    self.stim.on_event(key.tag, &mut cx);
+                }
+                owner => {
+                    let mut cx = cx!(self, owner, at);
+                    self.bus.devs[owner as usize].on_event(key.tag, &mut cx);
+                }
+            }
+            if self.sys.attn {
+                self.after_io();
             }
         }
         if self.nvic.dirty {
@@ -304,7 +555,7 @@ impl Machine {
             self.cpu.sleeping = false;
         }
         if self.reset_requested {
-            self.reset();
+            self.reset_with(false);
         }
     }
 
@@ -393,6 +644,7 @@ impl Machine {
             }
         }
         self.cpu.r[13] = frame;
+        self.exc_stack.push((exc, frame));
         self.enter_handler(exc, exc_return);
         self.cpu.cycles += 12;
     }
@@ -431,7 +683,12 @@ impl Machine {
             return;
         }
         self.nvic.set_active(exc, false);
+        if exc >= 16 {
+            // A level-sensitive source that is still asserted pends again.
+            self.nvic.resample_line(exc as u32 - 16);
+        }
         self.act_prio = self.nest.pop().unwrap_or(IDLE_PRIO);
+        let popped = self.exc_stack.pop();
         if exc != EXC_NMI {
             self.cpu.faultmask = false;
         }
@@ -439,6 +696,9 @@ impl Machine {
         // unstacking (6 cycles) and keeps the same EXC_RETURN.
         let exec = self.exec_prio();
         if let Some(next) = self.nvic.best_pending(exec) {
+            if let Some((_, f)) = popped {
+                self.exc_stack.push((next, f));
+            }
             self.enter_handler(next, v);
             self.cpu.cycles += 6;
             return;

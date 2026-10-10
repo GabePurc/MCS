@@ -30,9 +30,18 @@ pub enum SpeedMode {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum CpuField {
+    /// Program counter in the architecture's native unit (AVR: word address, ARM: byte address).
     Pc,
+    /// AVR stack pointer / ARM active stack pointer.
     Sp,
     Sreg,
+    /// ARM: xPSR flags (N, Z, C, V, Q).
+    Xpsr,
+    /// ARM: main / process stack pointer.
+    Msp,
+    Psp,
+    /// ARM: link register (r14).
+    Lr,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -65,9 +74,9 @@ pub enum Command {
     SerialSend { bytes: Vec<u8> },
     /// Debugger edit of the EEPROM.
     WriteEeprom { addr: u32, value: u8 },
-    WriteData { addr: u16, value: u8 },
+    WriteData { addr: u32, value: u8 },
     WriteFlash { addr: u32, value: u8 },
-    WriteReg { reg: usize, value: u8 },
+    WriteReg { reg: usize, value: u32 },
     WriteCpu { field: CpuField, value: u32 },
     /// Writes fuse byte `index` (0 = low / the configuration byte) and power-cycles.
     WriteFuse {
@@ -86,6 +95,7 @@ pub struct PinState {
     pub dir: u8,
     pub out: u8,
     pub pullup: u8,
+    pub pulldown: u8,
     pub ov_enable: u8,
     pub ext: ExtDrive,
     pub ext_volts: f64,
@@ -133,6 +143,9 @@ pub struct PeripheralInfo {
 #[serde(tag = "arch", rename_all = "lowercase")]
 pub enum CoreState {
     Avr { sp: u16, sreg: u8, regs: Vec<u8> },
+    /// ARMv7-M: r0-r15 (r13 = active SP, r15 = PC), xPSR, banked stack pointers, special registers.
+    #[serde(rename_all = "camelCase")]
+    Arm { r: [u32; 16], xpsr: u32, msp: u32, psp: u32, control: u8, primask: bool, basepri: u8, faultmask: bool },
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -155,7 +168,14 @@ pub struct MachineState {
     pub sleep_mode: u8,
     pub reset_held: bool,
     /// Data space (I/O + SRAM) as seen by the CPU, including live peripheral register values.
+    ///
+    /// ARM: the SRAM image (main SRAM followed by the CCM SRAM, starting at `sramBase`); empty
+    /// when it did not change since the previous state.
     pub data: Vec<u8>,
+    /// ARM: values of the memory-mapped peripheral and core registers, aligned to the device's
+    /// `registers` list (empty on AVR).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub io: Vec<u32>,
     /// Present only when program memory changed since the last state.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub flash: Option<Vec<u8>>,

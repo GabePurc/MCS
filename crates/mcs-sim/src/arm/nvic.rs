@@ -32,6 +32,8 @@ pub struct Nvic {
     pub enabled: [u32; 8],
     pub pending: [u32; 8],
     pub active: [u32; 8],
+    /// Current level of the level-sensitive interrupt lines driven by peripherals.
+    pub lines: [u32; 8],
     /// Pending system exceptions (bit = exception number).
     pub sys_pending: u32,
     /// Active system exceptions (bit = exception number).
@@ -53,6 +55,7 @@ impl Nvic {
             enabled: [0; 8],
             pending: [0; 8],
             active: [0; 8],
+            lines: [0; 8],
             sys_pending: 0,
             sys_active: 0,
             prio: vec![0; 16 + nirq as usize],
@@ -65,6 +68,7 @@ impl Nvic {
         self.enabled = [0; 8];
         self.pending = [0; 8];
         self.active = [0; 8];
+        self.lines = [0; 8];
         self.sys_pending = 0;
         self.sys_active = 0;
         self.prio.iter_mut().for_each(|p| *p = 0);
@@ -105,6 +109,30 @@ impl Nvic {
         if irq < self.nirq {
             self.pending[(irq >> 5) as usize] |= 1 << (irq & 31);
             self.dirty = true;
+        }
+    }
+
+    /// Drives interrupt line `irq`: a rising level latches the pending bit.
+    pub fn set_line(&mut self, irq: u32, level: bool) {
+        if irq >= self.nirq {
+            return;
+        }
+        let (w, m) = ((irq >> 5) as usize, 1u32 << (irq & 31));
+        let was = self.lines[w] & m != 0;
+        if level {
+            self.lines[w] |= m;
+            if !was {
+                self.set_pending(irq);
+            }
+        } else {
+            self.lines[w] &= !m;
+        }
+    }
+
+    /// Called when the handler of `irq` returns: a line that is still asserted pends again.
+    pub fn resample_line(&mut self, irq: u32) {
+        if irq < self.nirq && self.lines[(irq >> 5) as usize] >> (irq & 31) & 1 != 0 {
+            self.set_pending(irq);
         }
     }
 
