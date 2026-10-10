@@ -23,6 +23,8 @@ export interface Settings {
   autoUpdateCheck: boolean;
   /** Clear the Output window when a build starts or a run starts from reset. */
   clearOutputOnRun: boolean;
+  /** Editor shows one symbol (label / function) at a time with a symbol list. */
+  symbolView: boolean;
 }
 
 const DEFAULTS: Settings = {
@@ -40,6 +42,7 @@ const DEFAULTS: Settings = {
   vcc: 5,
   autoUpdateCheck: true,
   clearOutputOnRun: false,
+  symbolView: false,
 };
 
 const KEY = 'mcs.settings.v1';
@@ -67,7 +70,7 @@ function persist(s: SettingsStore): void {
     deviceId: s.deviceId, gccPath: s.gccPath, optimize: s.optimize, extraFlags: s.extraFlags, recentFiles: s.recentFiles,
     editorFontSize: s.editorFontSize, speedMode: s.speedMode, speedFactor: s.speedFactor, openFiles: s.openFiles, showStartPage: s.showStartPage,
     sourceStepping: s.sourceStepping, vcc: s.vcc, autoUpdateCheck: s.autoUpdateCheck,
-    clearOutputOnRun: s.clearOutputOnRun,
+    clearOutputOnRun: s.clearOutputOnRun, symbolView: s.symbolView,
   };
   saveJson(KEY, out);
 }

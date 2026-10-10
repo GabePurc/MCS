@@ -165,7 +165,9 @@
 .out-count { display: inline-flex; align-items: center; gap: 3px; margin-left: 8px; }
 
 /* ------------------------------------------------------------- Dialog extras */
-.include-view { max-height: 50vh; overflow: auto; padding: 8px; border: 1px solid #d5dfe5; background: #fbfcfe; font-size: 12px; margin: 0; }
+.defs-panel { display: flex; flex-direction: column; height: 100%; }
+.defs-panel .panel-toolbar input { flex: 1; min-width: 80px; }
+.defs-view { flex: 1; overflow: auto; padding: 6px 8px; background: #fbfcfe; font-size: 12px; margin: 0; }
 .start-steps { margin: 4px 0 0; padding-left: 22px; line-height: 1.8; }
 
 /* ---------------------------------------------------------------- chip view */
@@ -245,3 +247,23 @@ a.link:hover { text-decoration: underline; }
 .cm-hover-insn .mono { white-space: pre; margin: 3px 0; font-size: 11px; }
 .cm-hover-insn .insn-usage { margin-top: 4px; }
 .cm-hover-insn .insn-example { margin: 4px 0 0; padding: 3px 6px; background: #f6f8fb; border: 1px solid #e0e6ef; white-space: pre; }
+
+/* ---------------------------------------------------------------- symbol view */
+.editor-body { display: flex; }
+.editor-body > .editor-main, .editor-body > .start-page { flex: 1; min-width: 0; }
+.symview-sidebar { width: 190px; flex: none; display: flex; flex-direction: column; border-right: 1px solid #c5d0de; background: #f7f9fc; }
+.symview-head { display: flex; align-items: center; gap: 4px; padding: 3px 4px 3px 8px; border-bottom: 1px solid #dde3ec; background: linear-gradient(#fdfeff, #eef2f8); font-weight: 600; }
+.symview-head span { flex: 1; }
+.symview-add { width: 18px; height: 18px; padding: 0; border: 1px solid transparent; border-radius: 2px; background: none; font-size: 14px; line-height: 14px; color: #1c4f9c; cursor: pointer; }
+.symview-add:hover { border-color: #a5c3e3; background: linear-gradient(#f2f8fe, #dcebfc); }
+.symview-list { flex: 1; overflow: auto; padding: 2px 0; }
+.symview-item { display: flex; align-items: baseline; gap: 6px; padding: 2px 8px; cursor: pointer; white-space: nowrap; border: 1px solid transparent; }
+.symview-item > span:first-child { flex: 1; overflow: hidden; text-overflow: ellipsis; }
+.symview-item.top { color: #5a6678; font-style: italic; }
+.symview-item .line { color: #2b91af; font-size: 11px; }
+.symview-item:hover { background: #e5f1fb; border-color: #cde6f7; }
+.symview-item.active { background: linear-gradient(#dcebfc, #c1dbfc); border-color: #7da2ce; }
+.symview-empty { padding: 6px 8px; color: #7a8698; font-style: italic; }
+.symview-new { padding: 3px 6px; }
+.symview-new input { width: 100%; box-sizing: border-box; }
+.symview-new .error-text { font-size: 11px; padding-top: 2px; white-space: normal; }

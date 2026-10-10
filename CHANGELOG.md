@@ -11,6 +11,11 @@ the in-app updater shows it as the update notes.
 - **Instruction help**: hover an instruction in the editor to see what it does, how to use it
   and an example; the Instruction Set window shows the same and lists aliases like BRNE.
 - **Chip View**: zoom into the memories to read every byte; click a memory to jump there.
+- **Symbol View** (View > Symbol View, Ctrl+Shift+O): work on one label or C function at a
+  time, as if each were its own file, with a symbol list on the side and a + button that adds a
+  new label / function to the file. It's still one file: line numbers, breakpoints and undo
+  stay the same, and stepping into another symbol shows that one.
+- **Device Definitions** is now a window you can keep open, dock or pop out, with a filter.
 - **Clear Output on Build / Run** option (Build menu).
 - **Fixed**: Tab in the middle of a line moved the whole line.
 

@@ -9,7 +9,7 @@ import { loadJson, saveJson } from './persist';
 
 export type PanelId =
   | 'processor' | 'io' | 'memory' | 'disasm' | 'pins' | 'wave' | 'output' | 'symbols' | 'callstack' | 'breakpoints'
-  | 'chip' | 'info' | 'isa' | 'serial';
+  | 'chip' | 'info' | 'isa' | 'serial' | 'defs';
 export type ZoneId = 'rightTop' | 'rightBottom' | 'bottomLeft' | 'bottomRight';
 
 export const ZONES: ZoneId[] = ['rightTop', 'rightBottom', 'bottomLeft', 'bottomRight'];
@@ -54,14 +54,15 @@ const DEFAULT: LayoutData = {
   home: {
     processor: 'rightTop', io: 'rightTop', pins: 'rightBottom', symbols: 'rightBottom',
     output: 'bottomLeft', wave: 'bottomLeft', memory: 'bottomLeft', disasm: 'bottomRight', callstack: 'bottomRight', breakpoints: 'bottomRight',
-    chip: 'bottomLeft', info: 'rightTop', isa: 'rightBottom', serial: 'bottomLeft',
+    chip: 'bottomLeft', info: 'rightTop', isa: 'rightBottom', serial: 'bottomLeft', defs: 'rightBottom',
   },
-  floatHome: ['chip', 'info', 'isa'],
+  floatHome: ['chip', 'info', 'isa', 'defs'],
   floating: [],
   floatRects: {
     chip: { x: 120, y: 90, w: 820, h: 600 },
     info: { x: 180, y: 110, w: 640, h: 620 },
     isa: { x: 240, y: 130, w: 600, h: 520 },
+    defs: { x: 280, y: 150, w: 560, h: 520 },
   },
   rightWidth: 380,
   bottomHeight: 250,
@@ -117,8 +118,10 @@ function load(): LayoutData {
     d.zones[z].panels = d.zones[z].panels.filter((p) => p in DEFAULT.home && !seen.has(p) && seen.add(p));
     if (d.zones[z].active && !d.zones[z].panels.includes(d.zones[z].active!)) d.zones[z].active = d.zones[z].panels[0] ?? null;
   }
+  // Panels added after the layout was saved take their default placement.
+  const added = DEFAULT.floatHome.filter((p) => !(d.home && p in d.home));
   d.home = { ...DEFAULT.home, ...d.home };
-  d.floatHome = Array.isArray(d.floatHome) ? d.floatHome.filter((p) => p in DEFAULT.home) : [...DEFAULT.floatHome];
+  d.floatHome = Array.isArray(d.floatHome) ? [...d.floatHome.filter((p) => p in DEFAULT.home), ...added] : [...DEFAULT.floatHome];
   d.floating = (Array.isArray(d.floating) ? d.floating : []).filter((p) => p in DEFAULT.home && !seen.has(p) && seen.add(p));
   d.floatRects = { ...DEFAULT.floatRects, ...d.floatRects };
   return d;

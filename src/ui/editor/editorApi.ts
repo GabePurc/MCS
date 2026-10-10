@@ -14,6 +14,10 @@ export interface EditorApi {
   focus(): void;
   /** Inserts text at the cursor (replacing the selection). */
   insertText(text: string): void;
+  /** Symbol View: shows symbol `index` of the outline (-1 = top of file). */
+  focusSymbol(index: number): void;
+  /** Symbol View: adds a symbol after the shown one. */
+  addSymbol(name: string): void;
 }
 
 let current: EditorApi | null = null;
