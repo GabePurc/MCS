@@ -7,11 +7,10 @@
 //! * ESP32-C3 Technical Reference Manual (v1.x): chapter "System and Memory" (internal memory address mapping, table
 //!   "Internal Memory Address Mapping" and the external memory cache windows IROM / DROM), chapter "Reset and Clock"
 //!   (clock sources), chapter "Interrupt Matrix", chapter "IO MUX and GPIO Matrix".
-//! * ESP32-C3 Series Datasheet: QFN32 (5 x 5 mm) pin list ("Pin Overview", pins by number), strapping pins GPIO2 / GPIO8 /
-//!   GPIO9, operating conditions (3.0 - 3.6 V), 160 MHz maximum CPU clock.
+//! * ESP32-C3 Series Datasheet v2.4: QFN32 (5 x 5 mm) pin list (table 2-1 "Pin Overview"), IO MUX functions (table 2-4),
+//!   strapping pins GPIO2 / GPIO8 / GPIO9, operating conditions (3.0 - 3.6 V), 160 MHz maximum CPU clock.
 //!
-//! Assumptions (written from memory of the datasheet, not checked against a copy of it): the QFN32 pin numbering below,
-//! the IO MUX function names and the exact CPU interrupt numbers reserved for the core (0, 3, 4, 7 are used by the core's
+//! Assumptions (not checked against the TRM): the exact CPU interrupt numbers reserved for the core (0, 3, 4, 7 are used by the core's
 //! own interrupt sources; the simulator does not enforce this). The external flash is assumed to be 4 MiB; the real
 //! module may carry 2 - 16 MiB.
 
@@ -82,8 +81,9 @@ type PinRow = (u8, &'static str, PinKind, i8, &'static [&'static str]);
 
 use PinKind::{Gnd, Io, Ref, Vcc};
 
-/// ESP32-C3 datasheet "Pin Overview" (QFN32). Pins 17 - 23 are the SPI flash interface: VDD_SPI and GPIO12 - GPIO17
-/// (GPIO11 is the VDD_SPI power selection and not bonded out).
+/// ESP32-C3 Series Datasheet v2.4, table 2-1 "Pin Overview" and table 2-4 "IO MUX Pin Functions" (QFN32). Pins 18 - 24
+/// are the SPI flash interface: VDD_SPI (GPIO11 only when VDD_SPI is reconfigured as a GPIO by eFuse; modelled as the
+/// supply) and GPIO12 - GPIO17. Pin 33 is the exposed ground pad.
 const PINS: &[PinRow] = &[
     (1, "LNA_IN", Ref, -1, &["RF input / output"]),
     (2, "VDD3P3", Vcc, -1, &["3.3 V supply (analog)"]),
@@ -91,7 +91,7 @@ const PINS: &[PinRow] = &[
     (4, "XTAL_32K_P", Io, 0, &["GPIO0", "XTAL_32K_P", "ADC1_CH0"]),
     (5, "XTAL_32K_N", Io, 1, &["GPIO1", "XTAL_32K_N", "ADC1_CH1"]),
     (6, "GPIO2", Io, 2, &["GPIO2", "FSPIQ", "ADC1_CH2", "strapping"]),
-    (7, "CHIP_PU", Ref, -1, &["Chip enable (reset, active high)"]),
+    (7, "CHIP_EN", Ref, -1, &["Chip enable (reset, active high)"]),
     (8, "GPIO3", Io, 3, &["GPIO3", "ADC1_CH3"]),
     (9, "MTMS", Io, 4, &["GPIO4", "MTMS", "FSPIHD", "ADC1_CH4"]),
     (10, "MTDI", Io, 5, &["GPIO5", "MTDI", "FSPIWP", "ADC2_CH0"]),
@@ -101,30 +101,30 @@ const PINS: &[PinRow] = &[
     (14, "GPIO8", Io, 8, &["GPIO8", "strapping"]),
     (15, "GPIO9", Io, 9, &["GPIO9", "strapping (boot mode)"]),
     (16, "GPIO10", Io, 10, &["GPIO10", "FSPICS0"]),
-    (17, "VDD_SPI", Vcc, -1, &["Flash supply / GPIO11"]),
-    (18, "SPIHD", Io, 12, &["GPIO12", "SPIHD"]),
-    (19, "SPIWP", Io, 13, &["GPIO13", "SPIWP"]),
-    (20, "SPICS0", Io, 14, &["GPIO14", "SPICS0"]),
-    (21, "SPICLK", Io, 15, &["GPIO15", "SPICLK"]),
-    (22, "SPID", Io, 16, &["GPIO16", "SPID"]),
-    (23, "SPIQ", Io, 17, &["GPIO17", "SPIQ"]),
-    (24, "GPIO18", Io, 18, &["GPIO18", "USB_D-"]),
-    (25, "GPIO19", Io, 19, &["GPIO19", "USB_D+"]),
-    (26, "U0RXD", Io, 20, &["GPIO20", "U0RXD"]),
-    (27, "U0TXD", Io, 21, &["GPIO21", "U0TXD"]),
-    (28, "XTAL_N", Ref, -1, &["40 MHz crystal"]),
-    (29, "XTAL_P", Ref, -1, &["40 MHz crystal"]),
-    (30, "VDDA", Vcc, -1, &["1.8 V / 3.3 V analog supply"]),
-    (31, "VDDA", Vcc, -1, &["1.8 V / 3.3 V analog supply"]),
-    (32, "GND", Gnd, -1, &["Ground"]),
+    (17, "VDD3P3_CPU", Vcc, -1, &["3.3 V supply (CPU IO)"]),
+    (18, "VDD_SPI", Vcc, -1, &["Flash supply (GPIO11 when VDD_SPI is configured as GPIO)"]),
+    (19, "SPIHD", Io, 12, &["GPIO12", "SPIHD"]),
+    (20, "SPIWP", Io, 13, &["GPIO13", "SPIWP"]),
+    (21, "SPICS0", Io, 14, &["GPIO14", "SPICS0"]),
+    (22, "SPICLK", Io, 15, &["GPIO15", "SPICLK"]),
+    (23, "SPID", Io, 16, &["GPIO16", "SPID"]),
+    (24, "SPIQ", Io, 17, &["GPIO17", "SPIQ"]),
+    (25, "GPIO18", Io, 18, &["GPIO18", "USB_D-"]),
+    (26, "GPIO19", Io, 19, &["GPIO19", "USB_D+"]),
+    (27, "U0RXD", Io, 20, &["GPIO20", "U0RXD"]),
+    (28, "U0TXD", Io, 21, &["GPIO21", "U0TXD"]),
+    (29, "XTAL_N", Ref, -1, &["40 MHz crystal"]),
+    (30, "XTAL_P", Ref, -1, &["40 MHz crystal"]),
+    (31, "VDDA", Vcc, -1, &["3.3 V analog supply"]),
+    (32, "VDDA", Vcc, -1, &["3.3 V analog supply"]),
     (33, "GND", Gnd, -1, &["Exposed pad (ground)"]),
 ];
 
 fn pins(v: &Variant) -> Vec<PinSpec> {
     PINS.iter()
         .map(|&(number, name, kind, gpio, funcs)| {
-            // The ESP32-C3FH4 connects pins 17 - 23 to the in-package flash.
-            let internal = !v.flash_external && (17..=23).contains(&number);
+            // The ESP32-C3FH4 connects pins 18 - 24 (VDD_SPI, GPIO12 - GPIO17) to the in-package flash.
+            let internal = !v.flash_external && (18..=24).contains(&number);
             PinSpec {
                 number,
                 name: if internal { format!("{name} (in-package flash)") } else { name.to_string() },

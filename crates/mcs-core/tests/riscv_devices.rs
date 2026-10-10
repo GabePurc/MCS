@@ -59,11 +59,11 @@ fn qfn32_pins() {
     let d = c3();
     assert_eq!(d.pins.len(), 33, "32 pins plus the exposed pad");
     let pin = |n: u8| d.pins.iter().find(|p| p.number == n).unwrap();
-    assert_eq!((pin(27).name.as_str(), pin(27).gpio, pin(26).name.as_str(), pin(26).gpio), ("U0TXD", Some(21), "U0RXD", Some(20)));
+    assert_eq!((pin(28).name.as_str(), pin(28).gpio, pin(27).name.as_str(), pin(27).gpio), ("U0TXD", Some(21), "U0RXD", Some(20)));
     assert_eq!((pin(6).gpio, pin(14).gpio, pin(15).gpio), (Some(2), Some(8), Some(9)));
     assert!(pin(6).functions.iter().any(|f| f == "strapping") && pin(15).functions.iter().any(|f| f.contains("strapping")));
-    assert_eq!(pin(7).name, "CHIP_PU");
-    assert!(matches!(pin(2).kind, PinKind::Vcc) && matches!(pin(32).kind, PinKind::Gnd));
+    assert_eq!((pin(7).name.as_str(), pin(17).name.as_str(), pin(18).name.as_str()), ("CHIP_EN", "VDD3P3_CPU", "VDD_SPI"));
+    assert!(matches!(pin(2).kind, PinKind::Vcc) && matches!(pin(33).kind, PinKind::Gnd));
     // Every GPIO 0 - 21 except GPIO11 (VDD_SPI) is on exactly one pin.
     let mut gpios: Vec<u8> = d.pins.iter().filter_map(|p| p.gpio).collect();
     gpios.sort();

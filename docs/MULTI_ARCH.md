@@ -96,13 +96,12 @@ if wanted.
     read-as-zero, misaligned loads/stores trap (like the ESP32-C3 core), `ebreak` can be a host breakpoint
     (`halt_on_ebreak`), `mtval` holds the instruction bits for illegal instructions and the pc for `ebreak`.
 * **E2 (done on the Rust side; UI = E3): ESP32-C3 device + `Target`.**
-  * Devices: `ESP32-C3` (QFN32, external flash assumed 4 MiB) and `ESP32-C3FH4` (4 MiB in-package flash; pins 17-23 are
-    connected to it) as `DeviceRef::Riscv` (`mcs_core::riscv::{device, devices}`, arch tag `"riscv"`). Peripheral base
+  * Devices: `ESP32-C3` (QFN32, external flash assumed 4 MiB) and `ESP32-C3FH4` (4 MiB in-package flash; pins 18-24 are
+    connected to it; pinout from datasheet v2.4 tables 2-1 / 2-4) as `DeviceRef::Riscv` (`mcs_core::riscv::{device, devices}`, arch tag `"riscv"`). Peripheral base
     addresses, register offsets/fields/reset values (about 560 registers for the UI register view) and interrupt matrix
     source numbers come from Espressif's official `esp32c3.svd` (Apache-2.0) through `gen_esp32c3.py` -> `esp32c3_gen.rs`
     (the SVD is not checked in); memory map, clocks, pins and boot behaviour are from the TRM / datasheet and cited in
-    the module docs, with the unverified items marked as assumptions (QFN32 pin numbering and IO MUX function names
-    were written from memory of the datasheet, GPIO matrix constant-input encoding, `GPIO_STRAP_REG` bit layout).
+    the module docs, with the unverified items marked as assumptions (GPIO matrix constant-input encoding, `GPIO_STRAP_REG` bit layout).
   * Memory: ROM (384 KiB IBUS / 128 KiB DBUS) is mapped but empty and not executable; the machine stops with
     `StopReason::RomCall` (message with the ROM address and `ra`) when the pc enters it. SRAM0 16 KiB (IRAM only) +
     SRAM1 384 KiB (IRAM 0x4038_0000 and DRAM 0x3FC8_0000 alias one memory), RTC FAST 8 KiB at 0x5000_0000. Flash is a
