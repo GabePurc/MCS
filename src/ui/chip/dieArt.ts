@@ -251,6 +251,8 @@ export interface LiveData {
   regWrites: Float32Array;
   /** Program memory (latest image). */
   flash: Uint8Array | null;
+  /** EEPROM contents (latest image). */
+  eeprom: Uint8Array | null;
   /** Decayed activity per register group (0..1). */
   activity: Map<string, number>;
   /** Disassembly text by word address. */
@@ -291,32 +293,158 @@ function cellGrid(x0: number, y0: number, w: number, h: number, n: number, cols:
   for (let i = 0; i < n; i++) draw(i, x0 + (i % cols) * cw, y0 + Math.floor(i / cols) * ch, cw, ch);
 }
 
+/** Header font size of a block canvas of `w x h` pixels. */
+function headerFs(w: number, h: number): number {
+  return Math.max(10, Math.min(h * 0.11, w * 0.06, 30));
+}
+
+/** Cell layout of a large memory array (flash words, SRAM / EEPROM bytes) in a `w x h` canvas. */
+export interface MemGrid {
+  /** Cells (flash: words, others: bytes). */
+  n: number;
+  cols: number;
+  /** First address shown and address step per cell (flash: byte address of each word). */
+  base: number;
+  step: number;
+  top: number;
+  cw: number;
+  ch: number;
+}
+
+/** Number of cells of a memory block (0 when the block has no array). */
+function memCells(b: Block, spec: AvrDeviceSpec): number {
+  return b.kind === 'flash' ? spec.flashSize / 2 : b.kind === 'sram' ? spec.sramSize : b.kind === 'eeprom' ? spec.eepromSize : 0;
+}
+
+/** True for memory blocks drawn as a plain cell array (small SRAMs get the labelled hex grid). */
+function isArray(b: Block, spec: AvrDeviceSpec): boolean {
+  const n = memCells(b, spec);
+  return n > 0 && (b.kind === 'flash' || n > 128);
+}
+
+/** Layout shared by the block texture and the zoomed byte view, so both line up exactly. */
+export function memoryGrid(b: Block, spec: AvrDeviceSpec, w: number, h: number): MemGrid | null {
+  if (!isArray(b, spec)) return null;
+  const n = memCells(b, spec);
+  const top = headerFs(w, h) * 1.55;
+  const cols = Math.max(1, Math.round(Math.sqrt(n * (w / (h - top)))));
+  const rows = Math.ceil(n / cols);
+  return { n, cols, base: b.kind === 'sram' ? spec.sramStart : 0, step: b.kind === 'flash' ? 2 : 1, top, cw: w / cols, ch: (h - top) / rows };
+}
+
+/** Cell value and fill colour of memory cell `i` (array view). */
+function memCell(b: Block, d: LiveData, i: number): { v: number; fill: string } {
+  if (b.kind === 'flash') {
+    const f = d.flash;
+    const v = f ? f[i * 2] | (f[i * 2 + 1] << 8) : 0xffff;
+    return { v, fill: heatColor(d.heat[i] ?? 0, !f || v !== 0xffff) };
+  }
+  if (b.kind === 'eeprom') {
+    const v = d.eeprom?.[i] ?? 0xff;
+    return { v, fill: `rgb(${40 + v / 4},${40 + v / 3},${70 + v / 3})` };
+  }
+  const a = d.spec.sramStart + i;
+  const v = d.st.data[a] ?? 0;
+  const wr = d.writes[a] ?? 0;
+  const fill = wr > 0.03 ? `rgba(255,170,40,${0.4 + 0.6 * wr})` : a > d.st.sp ? `rgb(${30 + v / 4},${70 + v / 3},${120 + v / 3})` : `rgb(${30 + v / 3},${50 + v / 2.2},${80 + v / 2})`;
+  return { v, fill };
+}
+
+/**
+ * Zoomed-in byte view of a memory block, drawn in screen space at screen resolution: only the
+ * cells inside `view` (screen pixels) are visited, so cost depends on the window, not the
+ * memory size. `ox/oy/s` map block-canvas pixels (`cw x ch` grid of `g`) to the screen.
+ * Returns false when the cells are still too small for text (the texture is shown instead).
+ */
+export function drawMemoryDetail(
+  ctx: CanvasRenderingContext2D, b: Block, d: LiveData, g: MemGrid, ox: number, oy: number, s: number, view: { w: number; h: number },
+): boolean {
+  const cw = g.cw * s;
+  const ch = g.ch * s;
+  const flash = b.kind === 'flash';
+  if (cw < (flash ? 30 : 17) || ch < 11) return false;
+  const rows = Math.ceil(g.n / g.cols);
+  const y0 = oy + g.top * s;
+  const c0 = Math.max(0, Math.floor(-ox / cw));
+  const c1 = Math.min(g.cols - 1, Math.floor((view.w - ox) / cw));
+  const r0 = Math.max(0, Math.floor(-(y0) / ch));
+  const r1 = Math.min(rows - 1, Math.floor((view.h - y0) / ch));
+  if (c0 > c1 || r0 > r1) return true;
+  const pad = Math.max(1, cw * 0.04);
+  const fsV = Math.min(ch * 0.42, cw / (flash ? 2.9 : 1.6));
+  const showAddr = ch >= 30 && cw >= 34;
+  const showAsm = flash && ch >= 44 && cw >= 70;
+  const fsA = Math.min(ch * 0.2, cw / 6.5);
+  const pc = d.st.pc;
+  const sp = d.st.sp;
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(ox, y0, g.cols * cw, rows * ch);
+  ctx.clip();
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  for (let r = r0; r <= r1; r++) {
+    for (let c = c0; c <= c1; c++) {
+      const i = r * g.cols + c;
+      if (i >= g.n) break;
+      const x = ox + c * cw;
+      const y = y0 + r * ch;
+      const cell = memCell(b, d, i);
+      ctx.fillStyle = 'rgba(6,10,14,0.9)';
+      ctx.fillRect(x, y, cw, ch);
+      ctx.fillStyle = cell.fill;
+      ctx.fillRect(x + pad, y + pad, cw - 2 * pad, ch - 2 * pad);
+      const addr = g.base + i * g.step;
+      if ((flash && i === pc) || (b.kind === 'sram' && addr === sp)) {
+        ctx.strokeStyle = flash ? '#ffffff' : '#7ff0ff';
+        ctx.lineWidth = Math.max(2, cw * 0.05);
+        ctx.strokeRect(x + pad, y + pad, cw - 2 * pad, ch - 2 * pad);
+      }
+      const ty = showAsm ? y + ch * 0.42 : showAddr ? y + ch * 0.58 : y + ch / 2;
+      ctx.fillStyle = '#ffffff';
+      ctx.font = `600 ${fsV}px ${MONO}`;
+      ctx.fillText(flash ? hex4(cell.v) : hex2(cell.v), x + cw / 2, ty, cw - 2 * pad);
+      if (showAddr) {
+        ctx.fillStyle = 'rgba(220,232,240,0.75)';
+        ctx.font = `${fsA}px ${MONO}`;
+        ctx.textAlign = 'left';
+        ctx.fillText(hex4(addr), x + pad * 2, y + pad + fsA * 0.75, cw - 4 * pad);
+        ctx.textAlign = 'center';
+      }
+      if (showAsm) {
+        const t = d.disasm.get(i);
+        if (t) {
+          ctx.fillStyle = '#ffe9a8';
+          ctx.font = `${Math.min(ch * 0.2, cw / 9)}px ${MONO}`;
+          ctx.fillText(t, x + cw / 2, y + ch * 0.74, cw - 3 * pad);
+        }
+      }
+    }
+  }
+  ctx.restore();
+  return true;
+}
+
 /**
  * Draws one block's live overlay into a canvas of `w x h` pixels (the block's rectangle).
  * The background stays translucent so the silicon artwork shows through.
  */
 export function drawBlockLive(ctx: CanvasRenderingContext2D, w: number, h: number, b: Block, d: LiveData): void {
   ctx.clearRect(0, 0, w, h);
-  const fs = Math.max(10, Math.min(h * 0.11, w * 0.06, 30));
+  const fs = headerFs(w, h);
   const st = d.st;
   const spec = d.spec;
   switch (b.kind) {
     case 'flash': {
-      const top = header(ctx, w, b.label, `${spec.flashSize} B - PC 0x${hex4(st.pc * 2)}`, fs);
-      const words = spec.flashSize / 2;
-      const aspect = w / (h - top);
-      const cols = Math.max(1, Math.round(Math.sqrt(words * aspect)));
-      const flash = d.flash;
-      const pad = Math.max(1, w / cols * 0.08);
-      cellGrid(0, top, w, h - top, words, cols, (i, x, y, cw, ch) => {
-        const programmed = flash ? flash[i * 2] !== 0xff || flash[i * 2 + 1] !== 0xff : true;
-        ctx.fillStyle = heatColor(d.heat[i] ?? 0, programmed);
+      header(ctx, w, b.label, `${spec.flashSize} B - PC 0x${hex4(st.pc * 2)}`, fs);
+      const g = memoryGrid(b, spec, w, h)!;
+      const { cols, top, cw, ch } = g;
+      const pad = Math.max(1, cw * 0.08);
+      cellGrid(0, top, w, h - top, g.n, cols, (i, x, y, cw, ch) => {
+        ctx.fillStyle = memCell(b, d, i).fill;
         ctx.fillRect(x + pad / 2, y + pad / 2, cw - pad, ch - pad);
       });
       // PC marker.
-      const rows = Math.ceil(words / cols);
-      const cw = w / cols;
-      const ch = (h - top) / rows;
       const px = (st.pc % cols) * cw;
       const py = top + Math.floor(st.pc / cols) * ch;
       ctx.strokeStyle = '#ffffff';
@@ -329,21 +457,23 @@ export function drawBlockLive(ctx: CanvasRenderingContext2D, w: number, h: numbe
     }
     case 'sram':
     case 'eeprom': {
-      const base = spec.sramStart;
-      const n = b.kind === 'sram' ? spec.sramSize : 0;
+      const base = b.kind === 'sram' ? spec.sramStart : 0;
+      const n = memCells(b, spec);
       const top = header(ctx, w, b.label, b.kind === 'sram' ? `SP 0x${hex4(st.sp)}` : b.sub, fs);
       if (!n) return;
-      if (n <= 128) {
+      const g = memoryGrid(b, spec, w, h);
+      if (!g) {
         const cols = n <= 32 ? 8 : 16;
         const addrW = fs * 3.3;
         cellGrid(addrW, top, w - addrW, h - top, n, cols, (i, x, y, cw, ch) => {
           const a = base + i;
-          const v = st.data[a] ?? 0;
-          const wr = d.writes[a] ?? 0;
-          const stack = a > st.sp;
+          const eep = b.kind === 'eeprom';
+          const v = eep ? d.eeprom?.[i] ?? 0xff : st.data[a] ?? 0;
+          const wr = eep ? 0 : d.writes[a] ?? 0;
+          const stack = !eep && a > st.sp;
           ctx.fillStyle = wr > 0.03 ? `rgba(255,${Math.round(150 + 60 * (1 - wr))},40,${0.35 + 0.55 * wr})` : stack ? 'rgba(80,160,230,0.32)' : 'rgba(10,20,30,0.42)';
           ctx.fillRect(x + 1, y + 1, cw - 2, ch - 2);
-          if (a === st.sp) {
+          if (!eep && a === st.sp) {
             ctx.strokeStyle = '#7ff0ff';
             ctx.lineWidth = 2;
             ctx.strokeRect(x + 1, y + 1, cw - 2, ch - 2);
@@ -361,12 +491,8 @@ export function drawBlockLive(ctx: CanvasRenderingContext2D, w: number, h: numbe
           }
         });
       } else {
-        const cols = Math.round(Math.sqrt(n * (w / (h - top))));
-        cellGrid(0, top, w, h - top, n, cols, (i, x, y, cw, ch) => {
-          const a = base + i;
-          const v = st.data[a] ?? 0;
-          const wr = d.writes[a] ?? 0;
-          ctx.fillStyle = wr > 0.03 ? `rgba(255,170,40,${0.4 + 0.6 * wr})` : `rgb(${30 + v / 3},${50 + v / 2.2},${80 + v / 2})`;
+        cellGrid(0, g.top, w, h - g.top, n, g.cols, (i, x, y, cw, ch) => {
+          ctx.fillStyle = memCell(b, d, i).fill;
           ctx.fillRect(x, y, cw, ch);
         });
       }
@@ -517,8 +643,13 @@ export function blockSignature(b: Block, d: LiveData, heatVersion: number): stri
       for (let a = spec.sramStart; a < spec.sramStart + spec.sramSize; a++) s += `${st.data[a]},${q(d.writes[a])};`;
       return s;
     }
-    case 'eeprom':
-      return '';
+    case 'eeprom': {
+      // Cheap content hash; the EEPROM image changes rarely.
+      const e = d.eeprom;
+      let hsh = 0;
+      if (e) for (let i = 0; i < e.length; i++) hsh = (Math.imul(hsh, 31) + e[i]) | 0;
+      return `${hsh}`;
+    }
     case 'regs': {
       let s = '';
       for (let r = 0; r < 32; r++) s += `${st.regs[r]},${q(d.regWrites[r])};`;

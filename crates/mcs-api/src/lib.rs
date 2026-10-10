@@ -6,7 +6,7 @@ use std::collections::HashMap;
 
 use mcs_core::avr::devices;
 use mcs_core::avr::isa::{self, DisasmContext};
-use mcs_core::avr::isa_docs;
+use mcs_core::avr::{isa_docs, isa_usage};
 use mcs_core::program::{Diagnostic, LoadedProgram};
 use serde::Serialize;
 
@@ -58,6 +58,11 @@ pub struct InsnInfo {
     pub operation: String,
     pub flags: String,
     pub aliases: String,
+    /// Beginner help: what the instruction is for and how to use it.
+    pub usage: String,
+    pub example: String,
+    /// Canonical mnemonic for an assembler alias row ('' for real instructions).
+    pub alias_of: String,
 }
 
 pub fn list_devices() -> Vec<DeviceSummary> {
@@ -173,11 +178,12 @@ pub fn disassemble(device_id: &str, flash: &[u8], labels: &HashMap<u32, String>)
 pub fn instruction_set(device_id: &str) -> Vec<InsnInfo> {
     let Some(spec) = devices::get(device_id) else { return Vec::new() };
     let rc = spec.features & isa::feature::RC != 0;
-    isa::insns()
+    let mut out: Vec<InsnInfo> = isa::insns()
         .iter()
         .filter(|d| d.is_available(spec.features))
         .map(|d| {
             let doc = isa_docs::insn_doc(d.name);
+            let usage = isa_usage::insn_usage(d.name);
             InsnInfo {
                 mnemonic: d.name.to_uppercase(),
                 operands: d.operands.iter().map(|k| operand_label(*k)).collect::<Vec<_>>().join(", "),
@@ -188,9 +194,32 @@ pub fn instruction_set(device_id: &str) -> Vec<InsnInfo> {
                 operation: doc.map(|x| x.operation).unwrap_or_default().into(),
                 flags: doc.map(|x| x.flags).unwrap_or_default().into(),
                 aliases: doc.map(|x| x.aliases).unwrap_or_default().into(),
+                usage: usage.map(|x| x.help).unwrap_or_default().into(),
+                example: usage.map(|x| x.example).unwrap_or_default().into(),
+                alias_of: String::new(),
             }
         })
-        .collect()
+        .collect();
+    // Aliases (BRNE, CLR, ...) of the instructions this device has, after the real ones.
+    for a in isa_usage::ALIASES {
+        let Some(base) = out.iter().find(|i| i.alias_of.is_empty() && i.mnemonic.eq_ignore_ascii_case(a.of)) else { continue };
+        let row = InsnInfo {
+            mnemonic: a.name.to_uppercase(),
+            operands: a.operands.into(),
+            encoding: base.encoding.clone(),
+            cycles: base.cycles,
+            words: base.words,
+            summary: a.summary.into(),
+            operation: a.operation.into(),
+            flags: base.flags.clone(),
+            aliases: String::new(),
+            usage: a.usage.help.into(),
+            example: a.usage.example.into(),
+            alias_of: base.mnemonic.clone(),
+        };
+        out.push(row);
+    }
+    out
 }
 
 fn operand_label(k: isa::OperandKind) -> String {

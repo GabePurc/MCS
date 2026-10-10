@@ -7,7 +7,7 @@ import { buildAsm, buildC, buildMachineCode, importProgram, pickFile, programToM
 import type { BuildOutcome, Diagnostic, LoadedProgram } from '../backend/types';
 import { getDocText } from '../editor/docText';
 import { useSettings } from '../state/settings';
-import { activeDoc, addDoc, appendOutput, enabledBreakpointPcs, setBuild, showOutput, untitledName, useWorkspace, type Doc } from '../state/workspace';
+import { activeDoc, addDoc, appendOutput, clearOutput, enabledBreakpointPcs, setBuild, showOutput, untitledName, useWorkspace, type Doc } from '../state/workspace';
 import { useSim } from '../state/sim';
 import { sim } from './simClient';
 import { baseName } from './debugInfo';
@@ -55,6 +55,7 @@ export async function buildDoc(doc: Doc): Promise<boolean> {
   const settings = useSettings.getState();
   const text = getDocText(doc.id);
   const t0 = performance.now();
+  if (settings.clearOutputOnRun) clearOutput();
   useWorkspace.setState({ building: true, diagnostics: [] });
   const tool = { asm: 'MCS assembler', mc: 'machine code', c: 'avr-gcc', gas: 'avr-gcc' }[doc.language];
   appendOutput('cmd', `------ Build started: ${doc.name} (${tool}, ${settings.deviceId}) ------`);

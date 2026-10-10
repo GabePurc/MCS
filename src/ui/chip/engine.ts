@@ -7,7 +7,7 @@
  * * `Die2D` draws the die flat on a canvas with zoom and pan.
  */
 import type { AvrDeviceSpec, MachineState } from '../backend/types';
-import { blockSignature, drawBlockLive, drawDieBase, pinColor, type LiveData } from './dieArt';
+import { blockSignature, drawBlockLive, drawDieBase, drawMemoryDetail, memoryGrid, pinColor, type LiveData, type MemGrid } from './dieArt';
 import { hitTest, type Block, type Floorplan } from './floorplan';
 
 const HEAT_DECAY = 0.82;
@@ -20,6 +20,7 @@ export class LiveModel {
   readonly activity = new Map<string, number>();
   disasm = new Map<number, string>();
   flash: Uint8Array | null = null;
+  eeprom: Uint8Array | null = null;
   /** Bumped whenever the heat map changed (block fingerprint). */
   heatVersion = 0;
   private prevData: Uint8Array | null = null;
@@ -85,7 +86,7 @@ export class LiveModel {
   }
 
   data(st: MachineState, running: boolean): LiveData {
-    return { spec: this.spec, st, running, heat: this.heat, writes: this.writes, regWrites: this.regWrites, activity: this.activity, disasm: this.disasm, flash: this.flash };
+    return { spec: this.spec, st, running, heat: this.heat, writes: this.writes, regWrites: this.regWrites, activity: this.activity, disasm: this.disasm, flash: this.flash, eeprom: this.eeprom };
   }
 }
 
@@ -158,6 +159,10 @@ export class Die2D {
   private raf = 0;
   private st: MachineState | null = null;
   private vcc = 5;
+  /** Latest live data (for the zoomed-in byte view of the memory arrays). */
+  private live: LiveData | null = null;
+  /** Zoom at which the smallest memory cell is ~64 px wide (readable bytes and disassembly). */
+  private maxZoom = 12;
   private ro: ResizeObserver;
   private cleanup: (() => void)[] = [];
 
@@ -183,7 +188,7 @@ export class Die2D {
       const r = canvas.getBoundingClientRect();
       const mx = e.clientX - r.left - r.width / 2;
       const my = e.clientY - r.top - r.height / 2;
-      const nz = Math.max(0.5, Math.min(12, this.zoom * f));
+      const nz = Math.max(0.5, Math.min(this.maxZoom, this.zoom * f));
       const k = nz / this.zoom;
       this.panX = mx - (mx - this.panX) * k;
       this.panY = my - (my - this.panY) * k;
@@ -233,10 +238,48 @@ export class Die2D {
     this.request();
   }
 
-  setState(st: MachineState, vcc: number): void {
+  setState(st: MachineState, vcc: number, live?: LiveData): void {
     this.st = st;
     this.vcc = vcc;
+    if (live) this.live = live;
     this.request();
+  }
+
+  /** Zooms onto a block (memory arrays: far enough to read the bytes). */
+  focus(block: Block): void {
+    const base = this.fit().s / this.zoom;
+    const w = this.canvas.clientWidth;
+    const h = this.canvas.clientHeight;
+    let z = Math.min((w - 24) / block.w, (h - 52) / block.h) * 0.95 / base;
+    const l = this.layers.layers.find((x) => x.block === block);
+    const g = l && this.live ? memoryGrid(block, this.live.spec, l.canvas.width, l.canvas.height) : null;
+    let cx = block.x + block.w / 2;
+    let cy = block.y + block.h / 2;
+    if (g && l) {
+      // Readable cells: zoom to ~44 px per cell and start at the top-left of the array.
+      const um = block.w / l.canvas.width;
+      z = Math.max(z, Math.min(this.maxZoom, 44 / (g.cw * um * base)));
+      const s = base * z;
+      cx = Math.min(cx, block.x + (w / 2 - 12) / s);
+      cy = Math.min(cy, block.y + g.top * um + (h / 2 - 40) / s);
+    }
+    this.zoom = Math.max(0.5, Math.min(this.maxZoom, z));
+    const s = base * this.zoom;
+    this.panX = s * (this.plan.w / 2 - cx);
+    this.panY = s * (this.plan.h / 2 - cy);
+    this.request();
+  }
+
+  /** Allows zooming in until the smallest memory cell is readable. */
+  private updateMaxZoom(base: number): void {
+    let z = 12;
+    if (this.live) {
+      for (const l of this.layers.layers) {
+        const g = memoryGrid(l.block, this.live.spec, l.canvas.width, l.canvas.height);
+        if (g) z = Math.max(z, 72 / (Math.min(g.cw, g.ch) * (l.block.w / l.canvas.width) * base));
+      }
+    }
+    this.maxZoom = z;
   }
 
   request(): void {
@@ -286,7 +329,13 @@ export class Die2D {
     ctx.fillRect(sh * 0.5, sh * 0.5, this.plan.w, this.plan.h);
     ctx.drawImage(this.base, 0, 0, this.plan.w, this.plan.h);
     ctx.imageSmoothingQuality = 'high';
-    for (const l of this.layers.layers) ctx.drawImage(l.canvas, l.block.x, l.block.y, l.block.w, l.block.h);
+    this.updateMaxZoom(f.s / this.zoom);
+    const detail: { l: Layer; g: MemGrid }[] = [];
+    for (const l of this.layers.layers) {
+      ctx.drawImage(l.canvas, l.block.x, l.block.y, l.block.w, l.block.h);
+      const g = this.live && this.zoom > 1.5 ? memoryGrid(l.block, this.live.spec, l.canvas.width, l.canvas.height) : null;
+      if (g) detail.push({ l, g });
+    }
     for (const p of this.plan.pads) {
       ctx.fillStyle = pinColor(p, this.st, this.vcc);
       ctx.globalAlpha = 0.85;
@@ -306,5 +355,10 @@ export class Die2D {
       ctx.textAlign = 'left';
     }
     ctx.restore();
+    // Memory arrays zoomed in far enough: individual bytes / words at screen resolution.
+    for (const { l, g } of detail) {
+      const k = (l.block.w / l.canvas.width) * f.s;
+      drawMemoryDetail(ctx, l.block, this.live!, g, f.ox + l.block.x * f.s, f.oy + l.block.y * f.s, k, f);
+    }
   }
 }

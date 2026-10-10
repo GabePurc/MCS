@@ -21,6 +21,8 @@ export interface Settings {
   vcc: number;
   /** Look for a new release a few seconds after start-up (desktop app). */
   autoUpdateCheck: boolean;
+  /** Clear the Output window when a build starts or a run starts from reset. */
+  clearOutputOnRun: boolean;
 }
 
 const DEFAULTS: Settings = {
@@ -37,6 +39,7 @@ const DEFAULTS: Settings = {
   sourceStepping: true,
   vcc: 5,
   autoUpdateCheck: true,
+  clearOutputOnRun: false,
 };
 
 const KEY = 'mcs.settings.v1';
@@ -64,6 +67,7 @@ function persist(s: SettingsStore): void {
     deviceId: s.deviceId, gccPath: s.gccPath, optimize: s.optimize, extraFlags: s.extraFlags, recentFiles: s.recentFiles,
     editorFontSize: s.editorFontSize, speedMode: s.speedMode, speedFactor: s.speedFactor, openFiles: s.openFiles, showStartPage: s.showStartPage,
     sourceStepping: s.sourceStepping, vcc: s.vcc, autoUpdateCheck: s.autoUpdateCheck,
+    clearOutputOnRun: s.clearOutputOnRun,
   };
   saveJson(KEY, out);
 }

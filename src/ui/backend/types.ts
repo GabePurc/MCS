@@ -332,6 +332,11 @@ export interface InsnInfo {
   operation: string;
   flags: string;
   aliases: string;
+  /** Beginner help: what the instruction is for and how to use it. */
+  usage: string;
+  example: string;
+  /** Canonical mnemonic when this row is an assembler alias ('' otherwise). */
+  aliasOf: string;
 }
 
 export interface ToolchainInfo {

@@ -68,14 +68,16 @@ export function IsaPanel(): JSX.Element {
   const [rows, setRows] = useState<InsnInfo[]>([]);
   const [filter, setFilter] = useState('');
   const [sel, setSel] = useState<string | null>(null);
+  const [showAliases, setShowAliases] = useState(true);
   useEffect(() => {
     if (spec) instructionSet(spec.id).then(setRows).catch(() => {});
   }, [spec]);
   const shown = useMemo(() => {
     const f = filter.trim().toLowerCase();
-    if (!f) return rows;
-    return rows.filter((r) => r.mnemonic.toLowerCase().includes(f) || r.summary.toLowerCase().includes(f) || r.aliases.toLowerCase().includes(f));
-  }, [rows, filter]);
+    const base = showAliases ? rows : rows.filter((r) => !r.aliasOf);
+    if (!f) return base;
+    return base.filter((r) => r.mnemonic.toLowerCase().includes(f) || r.summary.toLowerCase().includes(f) || r.aliases.toLowerCase().includes(f));
+  }, [rows, filter, showAliases]);
   const current = rows.find((r) => `${r.mnemonic} ${r.operands}` === sel);
   if (!spec) return <EmptyHint>No device loaded.</EmptyHint>;
   const insert = (r: InsnInfo) => {
@@ -88,7 +90,8 @@ export function IsaPanel(): JSX.Element {
     <div className="panel">
       <div className="panel-toolbar">
         <input className="w7-input" placeholder="Filter (mnemonic, description, alias)..." value={filter} onChange={(e) => setFilter(e.target.value)} style={{ flex: 1 }} />
-        <span className="dim">{spec.name} ({spec.coreName}): {rows.length} instructions</span>
+        <label className="dim" style={{ whiteSpace: 'nowrap' }} data-tip="Also list assembler aliases such as BRNE, CLR and SEI"><input type="checkbox" checked={showAliases} onChange={(e) => setShowAliases(e.target.checked)} /> Aliases</label>
+        <span className="dim" style={{ whiteSpace: 'nowrap' }}>{rows.filter((r) => !r.aliasOf).length} instructions</span>
       </div>
       <Converter deviceId={spec.id} />
       <div className="panel-scroll">
@@ -100,8 +103,8 @@ export function IsaPanel(): JSX.Element {
             {shown.map((r) => {
               const key = `${r.mnemonic} ${r.operands}`;
               return (
-                <tr key={key} className={`row-hot${sel === key ? ' selected' : ''}`} onClick={() => setSel(key)} onDoubleClick={() => insert(r)} data-tip={`${r.operation}${r.aliases ? `\nAliases: ${r.aliases}` : ''}\nDouble-click to insert into the editor`}>
-                  <td><b>{r.mnemonic}</b></td>
+                <tr key={key} className={`row-hot${sel === key ? ' selected' : ''}`} onClick={() => setSel(key)} onDoubleClick={() => insert(r)} data-tip={`${r.operation}${r.aliases ? `\nAliases: ${r.aliases}` : ''}${r.aliasOf ? `\nAlias of ${r.aliasOf}` : ''}\nDouble-click to insert into the editor`}>
+                  <td>{r.aliasOf ? <i>{r.mnemonic}</i> : <b>{r.mnemonic}</b>}</td>
                   <td className="mono">{r.operands}</td>
                   <td>{r.summary}</td>
                   <td><Encoding pattern={r.encoding} /></td>
@@ -121,6 +124,9 @@ export function IsaPanel(): JSX.Element {
             <span>Flags:</span><span className="mono">{current.flags}</span>
             <span>Encoding:</span><Encoding pattern={current.encoding} />
             {current.aliases && (<><span>Aliases:</span><span className="mono">{current.aliases}</span></>)}
+            {current.aliasOf && (<><span>Alias of:</span><span className="mono">{current.aliasOf}</span></>)}
+            {current.usage && (<><span>How to use:</span><span>{current.usage}</span></>)}
+            {current.example && (<><span>Example:</span><pre className="mono selectable isa-example">{current.example}</pre></>)}
           </div>
           <p className="dim" style={{ margin: '4px 0 0' }}>Letters in the encoding are operand bits: d = destination register, r = source register, K = constant, k = address, A = I/O address, b = bit, s = SREG bit, q = displacement. Branches take one extra cycle when taken; skips take 1 + the skipped instruction's size.</p>
         </div>

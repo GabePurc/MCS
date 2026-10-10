@@ -44,7 +44,7 @@ const MENUS: TopMenu[] = [
     mnemonic: 0,
     items: () => [cmd('view.startPage'), sep, ...PANEL_COMMAND_IDS.map((id) => cmd(id)), sep, cmd('view.resetLayout')],
   },
-  { title: 'Build', mnemonic: 0, items: () => [cmd('build.build'), sep, cmd('build.toMachineCode'), sep, cmd('build.options')] },
+  { title: 'Build', mnemonic: 0, items: () => [cmd('build.build'), sep, cmd('build.toMachineCode'), sep, cmd('build.clearOutputOnRun'), cmd('build.options')] },
   {
     title: 'Debug',
     mnemonic: 0,
