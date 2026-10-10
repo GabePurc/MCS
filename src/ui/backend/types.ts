@@ -136,6 +136,72 @@ export interface AvrDeviceSpec {
   peripheralSet: string;
 }
 
+/** Memory-mapped register of an ARM device (mirrors mcs_core::arm::device::MmioRegisterSpec). */
+export interface MmioRegisterSpec {
+  name: string;
+  /** Absolute bus address. */
+  addr: number;
+  /** Register width in bytes (1, 2 or 4). */
+  size: number;
+  reset: number;
+  /** Peripheral instance the register belongs to. */
+  group: string;
+  desc: string;
+  /** Bit-field masks are 32-bit (multi-bit fields use contiguous masks). */
+  bits: BitFieldSpec[];
+  access: 'rw' | 'r' | 'w';
+}
+
+export interface ArmVectorSpec {
+  /** Exception number: 1 Reset ... 15 SysTick, 16 + n for external interrupt n. */
+  index: number;
+  name: string;
+  desc: string;
+}
+
+export interface ArmDeviceSpec {
+  arch: 'arm';
+  id: string;
+  name: string;
+  family: string;
+  coreName: string;
+  /** ArmFeatures bits: 1 DSP, 2 FPv4-SP, 4 FPv5-D16. */
+  features: number;
+  cpuid: number;
+  flashBase: number;
+  flashSize: number;
+  sramBase: number;
+  /** Main SRAM in bytes; the CCM SRAM (when present) follows it in the data the session sends. */
+  sramSize: number;
+  ccmSram: { base: number; size: number; aliasBase: number } | null;
+  registers: MmioRegisterSpec[];
+  groups: { name: string; desc: string }[];
+  vectors: ArmVectorSpec[];
+  nirq: number;
+  nvicPrioBits: number;
+  package: string;
+  pins: PinSpec[];
+  /** Size of the GPIO array (ports * 16); pin index = port * 16 + bit, so there are gaps. */
+  gpioCount: number;
+  clock: { hsiHz: number; lsiHz: number; hseMinHz: number; hseMaxHz: number; hseDefaultHz: number };
+  vcc: number;
+  vccRange: [number, number];
+  speedGrades: [number, number][];
+  datasheet: string;
+  die: { widthUm: number; heightUm: number; photoUrl: string; photoCredit: string } | null;
+  peripheralSet: {
+    rccBase: number;
+    flashBase: number;
+    pwrBase: number;
+    syscfgBase: number;
+    extiBase: number;
+    gpio: { name: string; port: number; base: number }[];
+    uarts: { name: string; kind: 'usart' | 'uart' | 'lpuart'; base: number; irq: number; apb: number }[];
+    timers: { name: string; base: number; irq: number; width: number; channels: number; apb: number }[];
+    extiIrqs: number[];
+  };
+}
+
 // ---------------------------------------------------------------- protocol.rs
 export type ExtDrive = 'float' | 'low' | 'high' | 'analog';
 export type StepKind = 'into' | 'over' | 'out';
@@ -170,14 +236,19 @@ export type SimCommand =
   | { type: 'setPinGenerator'; pin: number; gen: PinGenerator | null }
   | { type: 'setProfiling'; enabled: boolean }
   | { type: 'writeData'; addr: number; value: number }
+  /** Wide (1/2/4-byte) write through the bus; needed for ARM peripheral registers. */
+  | { type: 'writeMem'; addr: number; size: number; value: number }
   | { type: 'writeFlash'; addr: number; value: number }
   | { type: 'writeReg'; reg: number; value: number }
-  | { type: 'writeCpu'; field: 'pc' | 'sp' | 'sreg'; value: number }
+  | { type: 'writeCpu'; field: CpuField; value: number }
   | { type: 'writeFuse'; index: number; value: number }
   | { type: 'writeEeprom'; addr: number; value: number }
   | { type: 'setSerial'; config: SerialConfig }
   | { type: 'serialSend'; bytes: number[] }
   | { type: 'requestState' };
+
+/** `pc` is in the architecture's native unit; `sreg` is AVR-only, the rest ARM-only. */
+export type CpuField = 'pc' | 'sp' | 'sreg' | 'xpsr' | 'msp' | 'psp' | 'lr' | 'control' | 'primask' | 'basepri' | 'faultmask' | 'fpscr';
 
 export interface SerialConfig {
   /** GPIO decoded into the Serial Monitor (the MCU's TX). */
@@ -226,14 +297,33 @@ export interface SimMessage {
 }
 
 /** Any supported device spec; discriminated by `arch` (more architectures are added to the union). */
-export type DeviceSpec = AvrDeviceSpec;
+export type DeviceSpec = AvrDeviceSpec | ArmDeviceSpec;
 export type Arch = DeviceSpec['arch'];
 
 /** Architecture-specific CPU state as received from Rust. */
-export type RawCoreState = { arch: 'avr'; sp: number; sreg: number; regs: number[] };
+export type RawCoreState =
+  | { arch: 'avr'; sp: number; sreg: number; regs: number[] }
+  | {
+      arch: 'arm';
+      /** r0-r15 (r13 = active SP, r15 = PC). */
+      r: number[];
+      xpsr: number;
+      msp: number;
+      psp: number;
+      control: number;
+      primask: boolean;
+      basepri: number;
+      faultmask: boolean;
+      /** S0-S31 as raw bits (absent without an FPU). */
+      fpr?: number[];
+      fpscr: number;
+    };
 /** CPU state as used by the UI (typed arrays). */
-export type CoreState = { arch: 'avr'; sp: number; sreg: number; regs: Uint8Array };
+export type CoreState =
+  | { arch: 'avr'; sp: number; sreg: number; regs: Uint8Array }
+  | { arch: 'arm'; r: Uint32Array; xpsr: number; msp: number; psp: number; control: number; primask: boolean; basepri: number; faultmask: boolean; fpr: Uint32Array; fpscr: number };
 export type AvrCore = Extract<CoreState, { arch: 'avr' }>;
+export type ArmCore = Extract<CoreState, { arch: 'arm' }>;
 
 /** Raw state as received from Rust. */
 export interface RawMachineState {
@@ -251,7 +341,10 @@ export interface RawMachineState {
   sleeping: boolean;
   sleepMode: number;
   resetHeld: boolean;
+  /** AVR: data space. ARM: the SRAM image (main SRAM then CCM), empty while unchanged. */
   data: number[];
+  /** ARM: values of the memory-mapped registers, aligned to `spec.registers`. */
+  io?: number[];
   flash?: number[];
   flashVersion: number;
   fuses: number[];
@@ -278,20 +371,51 @@ export interface RawMachineState {
 }
 
 /** State as used by the UI (typed arrays). */
-export interface MachineState extends Omit<RawMachineState, 'core' | 'data' | 'flash' | 'traceCycles' | 'traceLevels' | 'execHeat' | 'eeprom'> {
+export interface MachineState extends Omit<RawMachineState, 'core' | 'data' | 'io' | 'flash' | 'traceCycles' | 'traceLevels' | 'execHeat' | 'eeprom'> {
   eeprom?: Uint8Array;
   core: CoreState;
   data: Uint8Array;
+  io: Uint32Array;
   flash?: Uint8Array;
   traceCycles: Float64Array;
   traceLevels: Uint32Array;
   execHeat?: Uint32Array;
 }
 
-/** AVR CPU state of a snapshot (the only architecture so far; throws for others). */
+export const isAvr = (spec: DeviceSpec): spec is AvrDeviceSpec => spec.arch === 'avr';
+export const isArm = (spec: DeviceSpec): spec is ArmDeviceSpec => spec.arch === 'arm';
+
+/** AVR CPU state of a snapshot (throws for other architectures). */
 export function avrCore(st: MachineState): AvrCore {
-  if (st.core.arch !== 'avr') throw new Error(`Expected an AVR state, got ${(st.core as { arch: string }).arch}`);
+  if (st.core.arch !== 'avr') throw new Error(`Expected an AVR state, got ${st.core.arch}`);
   return st.core;
+}
+
+/** ARM CPU state of a snapshot (throws for other architectures). */
+export function armCore(st: MachineState): ArmCore {
+  if (st.core.arch !== 'arm') throw new Error(`Expected an ARM state, got ${st.core.arch}`);
+  return st.core;
+}
+
+/** Bytes per unit of the architecture's native program counter (AVR: 16-bit words, ARM: bytes). */
+export const pcUnit = (arch: Arch): number => (arch === 'avr' ? 2 : 1);
+/** Native program counter -> byte address in the program's address space. */
+export const pcToBytes = (arch: Arch, pc: number): number => pc * pcUnit(arch);
+/** Byte address -> native program counter (rounded down). */
+export const bytesToPc = (arch: Arch, bytes: number): number => Math.floor(bytes / pcUnit(arch));
+/** Address of the first flash byte on the bus (0 on AVR). */
+export const flashBaseOf = (spec: DeviceSpec): number => (spec.arch === 'arm' ? spec.flashBase : 0);
+
+/** Whether the FPU is present (FPv4-SP or FPv5). */
+export const armHasFpu = (spec: ArmDeviceSpec): boolean => (spec.features & 6) !== 0;
+/** Whether the FPU handles double precision (FPv5-D16). */
+export const armHasDouble = (spec: ArmDeviceSpec): boolean => (spec.features & 4) !== 0;
+
+/** Converts the raw core state of a snapshot (typed arrays). */
+export function convertCore(c: RawCoreState): CoreState {
+  return c.arch === 'avr'
+    ? { ...c, regs: Uint8Array.from(c.regs) }
+    : { ...c, r: Uint32Array.from(c.r), fpr: Uint32Array.from(c.fpr ?? []) };
 }
 
 export type SimOutput =

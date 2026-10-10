@@ -3,7 +3,7 @@
  * device (persisted). Bytes arrive with every machine state (see simClient.serialTaps).
  */
 import { create } from 'zustand';
-import type { AvrDeviceSpec, SerialConfig } from '../backend/types';
+import type { DeviceSpec, SerialConfig } from '../backend/types';
 import { loadJson, saveJson } from './persist';
 import { serialTaps, sim } from '../services/simClient';
 import { useSim } from './sim';
@@ -63,16 +63,21 @@ export function clearSerial(): void {
 }
 
 /** Default line settings: the device's USART pins when it has one. */
-export function defaultSerialConfig(spec: AvrDeviceSpec): SerialConfig {
+export function defaultSerialConfig(spec: DeviceSpec): SerialConfig {
   const pin = (fn: string) => spec.pins.find((p) => p.functions.includes(fn))?.gpio ?? null;
+  if (spec.arch === 'arm') {
+    // USART2 is the ST-LINK virtual COM port on Nucleo boards; fall back to the first USART/UART.
+    const uart = ['USART2', 'USART1', 'USART3', 'UART4', 'UART5', 'LPUART1'].find((u) => pin(`${u}_TX`) !== null && pin(`${u}_RX`) !== null);
+    return uart ? { monitor: pin(`${uart}_TX`), inject: pin(`${uart}_RX`), baud: 115200, dataBits: 8, parity: 0, stopBits: 1 } : { monitor: null, inject: null, baud: 115200, dataBits: 8, parity: 0, stopBits: 1 };
+  }
   return { monitor: pin('TXD'), inject: pin('RXD'), baud: 9600, dataBits: 8, parity: 0, stopBits: 1 };
 }
 
-export function serialConfigFor(spec: AvrDeviceSpec): SerialConfig {
+export function serialConfigFor(spec: DeviceSpec): SerialConfig {
   return useSerial.getState().configs[spec.id] ?? defaultSerialConfig(spec);
 }
 
-export function setSerialConfig(spec: AvrDeviceSpec, config: SerialConfig): void {
+export function setSerialConfig(spec: DeviceSpec, config: SerialConfig): void {
   useSerial.setState((s) => ({ configs: { ...s.configs, [spec.id]: config } }));
   savePrefs();
   sim({ type: 'setSerial', config });
@@ -91,8 +96,8 @@ export function startSerial(): void {
   if (started) return;
   started = true;
   serialTaps.add(append);
-  let lastSpec: AvrDeviceSpec | null = null;
-  const apply = (spec: AvrDeviceSpec | null) => {
+  let lastSpec: DeviceSpec | null = null;
+  const apply = (spec: DeviceSpec | null) => {
     if (!spec || spec === lastSpec) return;
     lastSpec = spec;
     sim({ type: 'setSerial', config: serialConfigFor(spec) });

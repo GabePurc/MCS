@@ -117,6 +117,7 @@ logic is Rust; TypeScript only renders and routes user input.
   window stays the only owner of the simulator and documents and mirrors simulator outputs,
   workspace and settings to them over a bridge (Tauri events / BroadcastChannel). Pop-outs send
   simulator commands, UI commands and workspace edits back.
+* Per architecture: `DeviceSpec` is `AvrDeviceSpec | ArmDeviceSpec` (`arch` tag) and `CoreState` has an `avr` and an `arm` member (`backend/types.ts`: `isAvr`, `avrCore`, `armCore`, `pcToBytes`). The Processor, I/O view, Memory and Device Info panels have an ARM variant (`ArmProcessorPanel`, `ArmIoView`, `ArmDeviceInfo`; Memory and Pins branch inside); the Chip View, fuses, ISA and `.inc` panels are AVR-only.
 * Chip View (`src/ui/chip`): `floorplan.ts` derives a die floorplan from the device spec (memory
   arrays, CPU, one block per peripheral group, pads per package pin); `dieArt.ts` draws the
   silicon and the live block contents on canvases; `engine.ts` turns machine states into decaying

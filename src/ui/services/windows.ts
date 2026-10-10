@@ -9,7 +9,7 @@
  * navigation), settings edits, UI commands (F5, F10...), show-panel requests, bye.
  */
 import { inTauri } from '../backend/api';
-import type { DeviceSpec, Diagnostic, LoadedProgram, RawMachineState, SimCommand, SimOutput } from '../backend/types';
+import type { Arch, DeviceSpec, Diagnostic, LoadedProgram, RawMachineState, SimCommand, SimOutput } from '../backend/types';
 import { useLayout, windowHooks, type PanelId } from '../state/layout';
 import { useSettings, type Settings } from '../state/settings';
 import { useSim } from '../state/sim';
@@ -33,6 +33,7 @@ interface WsBuild {
   docId: string | null;
   label: string;
   time: number;
+  arch: Arch;
 }
 
 /** Mirrored workspace fields. */
@@ -101,7 +102,7 @@ function settingsPatch(s: Settings, prev?: Settings): SettingsPatch {
 }
 
 function wsBuild(b: ReturnType<typeof useWorkspace.getState>['build']): WsBuild | null {
-  return b ? { program: b.program, docId: b.docId, label: b.label, time: b.time } : null;
+  return b ? { program: b.program, docId: b.docId, label: b.label, time: b.time, arch: b.arch } : null;
 }
 
 /** Workspace fields that changed between two states (all of them without `prev`). */

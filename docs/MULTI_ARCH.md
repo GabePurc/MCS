@@ -50,10 +50,10 @@ cores, devices and peripherals. Work is staged so every stage ships with all tes
     separately from CP10.
 
 ## Stage C — STM32G4 (Cortex-M4F): STM32G431/G474
-C1 (Rust side: devices, peripherals, `Target`, loaders, tests) is DONE; see `docs/ROADMAP.md`. Remaining: ADC, UI (C2).
+C1 (Rust side: devices, peripherals, `Target`, loaders, tests) and C2 (UI) are DONE; see `docs/ROADMAP.md`. Remaining: ADC.
 RCC (HSI16/HSE/PLL, bus prescalers), FLASH ACR wait states, GPIO A-G (MODER/OTYPER/OSPEEDR/
 PUPDR/IDR/ODR/BSRR/AFR), EXTI + SYSCFG, NVIC, SysTick, USART/LPUART, TIM2-TIM4/TIM6/TIM7,
-ADC (later). UI: Processor panel for Cortex-M registers, peripheral register view from the spec.
+ADC (later). UI (C2): Processor panel for Cortex-M registers incl. FPU, peripheral register view from the spec, memory / pins / waveform / serial adapted to ARM (quad LQFP drawing, only existing GPIOs). The UI's program counter is in the architecture's native unit everywhere (`pcToBytes` / `bytesToPc`; `BuildInfo.arch`); AVR-only features are disabled for ARM devices.
 
 ## Stage D — STM32H7 (Cortex-M7, double FPU): STM32H743
 Large chips like STM32H743IIT6 (LQFP-176): RCC/PWR domains, GPIO A-K, USART, TIM, SysTick.

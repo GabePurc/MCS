@@ -13,7 +13,7 @@ use mcs_core::program::{LoadedProgram, ProgramFormat};
 use mcs_sim::arm::{Machine, StopReason};
 use mcs_sim::avr::peripherals::serial::SerialConfig;
 use mcs_sim::pins::ExtDrive;
-use mcs_sim::protocol::{Command, CoreState, Output, SpeedMode, StepKind, StopKind};
+use mcs_sim::protocol::{Command, CoreState, CpuField, Output, SpeedMode, StepKind, StopKind};
 use mcs_sim::session::Session;
 use mcs_sim::target::{Sent, Target};
 use programs::*;
@@ -629,4 +629,33 @@ fn power_cycle_and_debugger_reset() {
     m.power_cycle();
     assert_eq!(m.cpu.cycles, 0);
     assert!(pin_edges(&m, 14).iter().all(|e| e.0 == 0) && pin_edges(&m, 15).iter().all(|e| e.0 == 0), "trace restarted at cycle 0");
+}
+
+#[test]
+fn debugger_writes_fpu_state_special_registers_and_wide_registers() {
+    let mut s = Session::new();
+    let outs = s.handle(Command::Load { device_id: G474.into(), program: Box::new(blink_program()) });
+    let st = states(&outs).pop().unwrap();
+    let CoreState::Arm { fpr, fpscr, .. } = &st.core else { panic!("ARM core state") };
+    assert_eq!((fpr.len(), *fpscr), (32, 0), "the Cortex-M4F reports S0-S31 and FPSCR");
+    // S3 via writeReg 16 + 3, FPSCR / CONTROL / BASEPRI via writeCpu.
+    s.handle(Command::WriteReg { reg: 19, value: 0x3fc0_0000 });
+    s.handle(Command::WriteCpu { field: CpuField::Fpscr, value: 0x0300_0000 });
+    s.handle(Command::WriteCpu { field: CpuField::Basepri, value: 0x40 });
+    s.handle(Command::WriteCpu { field: CpuField::Primask, value: 1 });
+    s.handle(Command::WriteCpu { field: CpuField::Psp, value: 0x2000_8000 });
+    s.handle(Command::WriteCpu { field: CpuField::Control, value: 0b110 });
+    // A 32-bit write reaches the peripheral as one access (GPIOB_ODR = 0x1234).
+    let odr = spec(G474).reg("GPIOB_ODR");
+    s.handle(Command::WriteMem { addr: spec(G474).reg("RCC_AHB2ENR"), size: 4, value: 0x2 });
+    s.handle(Command::WriteMem { addr: odr, size: 4, value: 0x1234 });
+    let outs = s.handle(Command::RequestState);
+    let st = states(&outs).pop().unwrap();
+    let CoreState::Arm { r, fpr, fpscr, control, primask, basepri, psp, .. } = &st.core else { panic!("ARM core state") };
+    assert_eq!((fpr[3], *fpscr, *basepri, *primask, *control, *psp), (0x3fc0_0000, 0x0300_0000, 0x40, true, 0b110, 0x2000_8000));
+    assert_eq!(r[13], 0x2000_8000, "CONTROL.SPSEL switches the active stack pointer to PSP");
+    let idx = spec(G474).registers.iter().position(|r| r.name == "GPIOB_ODR").unwrap();
+    assert_eq!(st.io[idx], 0x1234);
+    let bad = s.handle(Command::WriteMem { addr: odr + 1, size: 4, value: 0 });
+    assert!(bad.iter().any(|o| matches!(o, Output::Error { .. })), "unaligned wide write is rejected");
 }

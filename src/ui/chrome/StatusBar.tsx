@@ -3,6 +3,7 @@ import { useSim } from '../state/sim';
 import { useWorkspace } from '../state/workspace';
 import { useSettings } from '../state/settings';
 import { formatHz, formatTime } from '../format';
+import { pcToBytes } from '../backend/types';
 import { speedLabel } from '../services/commands';
 import { openDialog } from '../state/dialogs';
 import { useUpdates } from '../services/updater';
@@ -32,7 +33,7 @@ export function StatusBar(): JSX.Element {
     text = st?.sleeping ? 'Running (CPU sleeping)' : 'Running';
   } else if (lastStop && st) {
     led = lastStop.reason === 'invalid' ? 'error' : 'pause';
-    const where = `0x${(lastStop.pc * 2).toString(16).toUpperCase().padStart(4, '0')}`;
+    const where = `0x${pcToBytes(spec?.arch ?? 'avr', lastStop.pc).toString(16).toUpperCase().padStart(spec?.arch === 'arm' ? 8 : 4, '0')}`;
     text = {
       breakpoint: `Breakpoint hit at ${where}`,
       break: `BREAK at ${where}`,
@@ -40,7 +41,7 @@ export function StatusBar(): JSX.Element {
       step: `Paused at ${where}`,
       pause: `Paused at ${where}`,
       runTo: `Paused at ${where}`,
-      reset: 'Reset - paused at 0x0000',
+      reset: spec?.arch === 'arm' ? `Reset - paused at ${where}` : 'Reset - paused at 0x0000',
       load: 'Program loaded - paused at reset vector',
     }[lastStop.reason];
   }

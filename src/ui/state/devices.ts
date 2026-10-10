@@ -1,9 +1,14 @@
 import { create } from 'zustand';
 import { listDevices } from '../backend/api';
-import type { DeviceSummary } from '../backend/types';
+import type { Arch, DeviceSummary } from '../backend/types';
 import { useCustomDevices } from './customDevices';
 
 export const useDevices = create<{ devices: DeviceSummary[] }>(() => ({ devices: [] }));
+
+/** Architecture of a device id from the device list (AVR while the list is not loaded). */
+export function archOf(deviceId: string): Arch {
+  return useDevices.getState().devices.find((d) => d.id === deviceId)?.arch ?? 'avr';
+}
 
 export async function loadDevices(): Promise<void> {
   try {

@@ -9,6 +9,7 @@ use mcs_core::arm::thumb::{self, Op};
 use mcs_core::device::DeviceRef;
 use mcs_core::program::LoadedProgram;
 
+use super::cpu::{CONTROL_FPCA, CONTROL_NPRIV, CONTROL_SPSEL};
 use super::debug::{is_call, StepCond, Stepper};
 use super::machine::{cx, Machine, BRIDGE_OWNER};
 use super::{StopReason as ArmStop, systick};
@@ -346,6 +347,17 @@ impl Target for Machine {
         }
     }
 
+    fn write_mem(&mut self, addr: u32, size: u8, value: u32) -> Result<(), String> {
+        if !matches!(size, 1 | 2 | 4) || addr & (size as u32 - 1) != 0 {
+            return Err(format!("Unaligned or unsupported {size}-byte access at 0x{addr:08X}"));
+        }
+        if self.mem_write(addr, size as u32, value) {
+            Ok(())
+        } else {
+            Err(format!("Address 0x{addr:08X} is not writable"))
+        }
+    }
+
     fn write_flash(&mut self, addr: u32, value: u8) -> Result<(), String> {
         let off = if addr >= self.bus.flash_base { addr - self.bus.flash_base } else { addr };
         if off >= self.bus.flash_size {
@@ -360,6 +372,8 @@ impl Target for Machine {
             0..=12 | 14 => self.cpu.r[reg] = value,
             13 => self.cpu.r[13] = value & !3,
             15 => self.cpu.pc = value & !1,
+            // 16..=47: S0-S31 (raw bits) on FPU devices.
+            16..=47 if self.cfg.features.has_fpu() => self.cpu.fpr[reg - 16] = value,
             _ => return Err(format!("There is no register r{reg}")),
         }
         Ok(())
@@ -373,6 +387,16 @@ impl Target for Machine {
             CpuField::Msp => self.cpu.set_msp(value),
             CpuField::Psp => self.cpu.set_psp(value),
             CpuField::Lr => self.cpu.r[14] = value,
+            CpuField::Control => {
+                let c = value as u8 & (CONTROL_NPRIV | CONTROL_SPSEL | if self.cfg.features.has_fpu() { CONTROL_FPCA } else { 0 });
+                self.cpu.control = c;
+                self.cpu.select_sp(c & CONTROL_SPSEL != 0);
+            }
+            CpuField::Primask => self.cpu.primask = value & 1 != 0,
+            CpuField::Basepri => self.cpu.basepri = value as u8,
+            CpuField::Faultmask => self.cpu.faultmask = value & 1 != 0,
+            CpuField::Fpscr if self.cfg.features.has_fpu() => self.cpu.fpscr = value,
+            CpuField::Fpscr => return Err("This core has no FPU".into()),
             CpuField::Sreg => return Err("The ARM core has no SREG; use xPSR".into()),
         }
         Ok(())
@@ -429,7 +453,9 @@ impl Target for Machine {
         let c = &self.cpu;
         let mut r = c.r;
         r[15] = c.pc;
-        let core = CoreState::Arm { r, xpsr: c.xpsr(), msp: c.msp(), psp: c.psp(), control: c.control, primask: c.primask, basepri: c.basepri, faultmask: c.faultmask };
+        let fpu = self.cfg.features.has_fpu();
+        let fpr = if fpu { c.fpr.to_vec() } else { Vec::new() };
+        let core = CoreState::Arm { r, xpsr: c.xpsr(), msp: c.msp(), psp: c.psp(), control: c.control, primask: c.primask, basepri: c.basepri, faultmask: c.faultmask, fpr, fpscr: if fpu { c.fpscr } else { 0 } };
         MachineState {
             running: false,
             pc: c.pc,

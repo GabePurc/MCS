@@ -3,6 +3,7 @@ import { clearBreakpoints, removeBreakpoint, requestDisasmGoto, requestGoto, res
 import { useLayout } from '../state/layout';
 import { baseName, sameFile } from '../services/debugInfo';
 import { hex } from '../format';
+import { pcToBytes } from '../backend/types';
 import { Icons } from '../icons';
 import { EmptyHint } from './common';
 
@@ -32,7 +33,9 @@ export function BreakpointsPanel(): JSX.Element {
             </thead>
             <tbody>
               {bps.map((b) => {
-                const pc = resolveBreakpoint(b, build?.program ?? null);
+                const arch = build?.arch ?? 'avr';
+                const digits = arch === 'arm' ? 8 : 4;
+                const pc = resolveBreakpoint(b, build?.program ?? null, arch);
                 return (
                   <tr
                     key={b.id}
@@ -48,8 +51,8 @@ export function BreakpointsPanel(): JSX.Element {
                     }}
                   >
                     <td><label className="w7-check"><input type="checkbox" checked={b.enabled} onChange={(e) => setBreakpointEnabled(b.id, e.target.checked)} /></label></td>
-                    <td>{b.kind === 'source' ? `${baseName(b.file)}, line ${b.line}` : `Address ${hex(b.pc * 2, 4)}`}</td>
-                    <td className="mono">{pc >= 0 ? hex(pc * 2, 4) : <span className="dim">unresolved</span>}</td>
+                    <td>{b.kind === 'source' ? `${baseName(b.file)}, line ${b.line}` : `Address ${hex(pcToBytes(arch, b.pc), digits)}`}</td>
+                    <td className="mono">{pc >= 0 ? hex(pcToBytes(arch, pc), digits) : <span className="dim">unresolved</span>}</td>
                     <td>
                       <button className="tb-btn" data-tip="Delete" onClick={() => removeBreakpoint(b.id)}><Icons.Close size={8} /></button>
                     </td>

@@ -225,7 +225,7 @@ function fusePresets(spec: AvrDeviceSpec): [string, number[]][] {
 }
 
 function FusesDialog(): JSX.Element {
-  const spec = useSim((s) => s.spec);
+  const spec = useSim((s) => (s.spec?.arch === 'avr' ? s.spec : null));
   const st = useSim((s) => s.state);
   const [fuses, setFuses] = useState<number[]>(() => st?.fuses.slice() ?? spec?.fuses.map((f) => f.default) ?? []);
   if (!spec) return <Dialog title="Fuses">No device loaded.</Dialog>;
@@ -301,20 +301,22 @@ const PRESCALERS = [0, 1, 2, 3, 4, 5, 6, 7, 8];
 function SupplyDialog(): JSX.Element {
   const st = useSim((s) => s.state);
   const spec = useSim((s) => s.spec);
+  // The clock source / prescaler registers are AVR-only; ARM parts just get the external clock (HSE) input.
+  const avr = spec?.arch === 'avr' ? spec : null;
   const vcc = useSettings((s) => s.vcc);
-  const msr = spec?.registers.find((r) => r.name === 'CLKMSR');
-  const psr = spec?.registers.find((r) => r.name === 'CLKPSR');
-  const clkpr = spec?.registers.find((r) => r.name === 'CLKPR');
+  const msr = avr?.registers.find((r) => r.name === 'CLKMSR');
+  const psr = avr?.registers.find((r) => r.name === 'CLKPSR');
+  const clkpr = avr?.registers.find((r) => r.name === 'CLKPR');
   const curSource = msr && st ? st.data[msr.addr] & 3 : 0;
-  const curPs = (psr ?? clkpr) && st ? st.data[(psr ?? clkpr)!.addr] & 0x0f : spec?.clock.defaultPrescaleLog2 ?? 0;
+  const curPs = (psr ?? clkpr) && st ? st.data[(psr ?? clkpr)!.addr] & 0x0f : avr?.clock.defaultPrescaleLog2 ?? 0;
   const [source, setSource] = useState(curSource);
   const [ps, setPs] = useState(Math.min(curPs, 8));
   const [ext, setExt] = useState(formatHz(st?.extClockHz ?? 8e6));
   const extHz = parseHz(ext);
   const clki = spec?.pins.find((p) => p.functions.includes('CLKI'));
   const maxHz = spec ? speedGradeMax(spec.speedGrades, vcc) : 0;
-  const resulting = (source === 0 ? spec?.clock.internalHz ?? 0 : source === 1 ? spec?.clock.slowHz ?? 0 : extHz || 0) / 2 ** ps;
-  const sourceNames = [`Internal ${formatHz(spec?.clock.internalHz ?? 8e6)} RC oscillator`, `Internal ${formatHz(spec?.clock.slowHz ?? 128e3)} oscillator`, `External clock on CLKI${clki ? ` (${clki.name}, pin ${clki.number})` : ''}`];
+  const resulting = (source === 0 ? avr?.clock.internalHz ?? 0 : source === 1 ? avr?.clock.slowHz ?? 0 : extHz || 0) / 2 ** ps;
+  const sourceNames = [`Internal ${formatHz(avr?.clock.internalHz ?? 8e6)} RC oscillator`, `Internal ${formatHz(avr?.clock.slowHz ?? 128e3)} oscillator`, `External clock on CLKI${clki ? ` (${clki.name}, pin ${clki.number})` : ''}`];
   const apply = () => {
     if (extHz > 0) sim({ type: 'setExternalClock', hz: extHz });
     if ((msr && psr) || clkpr) sim({ type: 'setClockConfig', source, prescaleLog2: ps });
@@ -339,7 +341,7 @@ function SupplyDialog(): JSX.Element {
           <input type="range" className="w7-slider" min={spec?.vccRange[0] ?? 1.8} max={spec?.vccRange[1] ?? 5.5} step={0.05} value={vcc} onChange={(e) => { const v = Number(e.target.value); useSettings.getState().set({ vcc: v }); sim({ type: 'setVcc', volts: v }); }} />
           <span className="mono">{vcc.toFixed(2)} V</span>
         </div>
-        <p className="dim">Affects the ADC reference, the analog comparator and the VCC level monitor (VLM). {spec && maxHz > 0 && <>Datasheet speed grade at this voltage: up to <b>{formatHz(maxHz)}</b>.</>}</p>
+        <p className="dim">{spec?.arch === 'arm' ? 'Affects the ADC reference and the pin input thresholds.' : 'Affects the ADC reference, the analog comparator and the VCC level monitor (VLM).'} {spec && maxHz > 0 && <>Datasheet speed grade at this voltage: up to <b>{formatHz(maxHz)}</b>.</>}</p>
         {st && maxHz > 0 && st.hz > maxHz * 1.0001 && (
           <div className="hint warn"><Icons.Warning size={13} /> The CPU runs at {formatHz(st.hz)}, faster than the {formatHz(maxHz)} allowed at {vcc.toFixed(2)} V. A real chip may not run reliably.</div>
         )}
@@ -369,15 +371,17 @@ function SupplyDialog(): JSX.Element {
             <span>Result:</span>
             <b className="mono">{formatHz(resulting)}</b>
           </div>
-        ) : clkpr && spec ? (
-          <ClassicClock spec={spec} ext={ext} setExt={setExt} extHz={extHz} ps={ps} setPs={setPs} />
+        ) : clkpr && avr ? (
+          <ClassicClock spec={avr} ext={ext} setExt={setExt} extHz={extHz} ps={ps} setPs={setPs} />
         ) : (
           <div className="supply-row">
             External clock: <input className="w7-input mono" value={ext} onChange={(e) => setExt(e.target.value)} style={{ width: 120 }} />
           </div>
         )}
         <p className="dim" style={{ marginBottom: 0 }}>
-          {msr
+          {avr === null
+            ? 'The firmware configures the STM32 clock tree (HSI16 / HSE / PLL and the bus prescalers) through RCC. The external frequency above is the HSE crystal or clock input.'
+            : msr
             ? 'On this chip the program selects the clock itself (CLKMSR/CLKPSR, protected by CCP). Apply writes those registers the way the debugger would; firmware that changes them later wins. The external frequency is used whenever the external source is selected.'
             : 'On this chip the clock source is chosen by the CKSEL fuses (changing them power-cycles the chip); the program can only change the prescaler (CLKPR). The external / crystal frequency is used when CKSEL selects an external clock or a crystal.'}
         </p>

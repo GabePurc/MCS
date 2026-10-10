@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { formatHz, formatTime, hex, parseHz, parseNumber } from './format';
+import { f32FromBits, f64FromBits, formatFloat, formatHz, formatTime, hex, parseHz, parseNumber } from './format';
 
 describe('format', () => {
   it('parses numbers in the notations the debugger accepts', () => {
@@ -29,5 +29,22 @@ describe('format', () => {
     expect(formatHz(1)).toBe('1 Hz');
     expect(formatHz(0.5)).toBe('0.5 Hz');
     expect(formatHz(2e9)).toBe('2 GHz');
+  });
+
+  it('decodes floating-point register bits', () => {
+    expect(f32FromBits(0x3f800000)).toBe(1);
+    expect(f32FromBits(0xc0490fdb)).toBeCloseTo(-3.14159, 4);
+    expect(f64FromBits(0, 0x3ff00000)).toBe(1);
+    expect(f64FromBits(0x00000000, 0xc0000000)).toBe(-2);
+    expect(Number.isNaN(f32FromBits(0x7fc00000))).toBe(true);
+  });
+
+  it('formats floats compactly', () => {
+    expect(formatFloat(0.5)).toBe('0.5');
+    expect(formatFloat(1 / 3)).toBe('0.3333333');
+    expect(formatFloat(1.5e10)).toBe('1.500000e+10');
+    expect(formatFloat(NaN)).toBe('NaN');
+    expect(formatFloat(-Infinity)).toBe('-Inf');
+    expect(formatFloat(-0)).toBe('-0');
   });
 });

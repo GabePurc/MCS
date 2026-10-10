@@ -5,7 +5,7 @@
  * outputs through the window bridge and forward their commands to it.
  */
 import { simAttach, simCommand } from '../backend/api';
-import type { DeviceSpec, MachineState, RawMachineState, SimCommand, SimOutput } from '../backend/types';
+import { convertCore, pcToBytes, type DeviceSpec, type MachineState, type RawMachineState, type SimCommand, type SimOutput } from '../backend/types';
 import { useSim } from '../state/sim';
 import { trace } from '../state/trace';
 import { appendOutput } from '../state/workspace';
@@ -55,6 +55,21 @@ export function sim(cmd: SimCommand): void {
   void attached.then(() => simCommand(cmd));
 }
 
+/** Raw backend state -> UI state (typed arrays). */
+export function convertState(r: RawMachineState): MachineState {
+  return {
+    ...r,
+    core: convertCore(r.core),
+    data: Uint8Array.from(r.data),
+    io: Uint32Array.from(r.io ?? []),
+    flash: r.flash ? Uint8Array.from(r.flash) : undefined,
+    traceCycles: Float64Array.from(r.traceCycles),
+    traceLevels: Uint32Array.from(r.traceLevels),
+    execHeat: r.execHeat ? Uint32Array.from(r.execHeat) : undefined,
+    eeprom: r.eeprom ? Uint8Array.from(r.eeprom) : undefined,
+  };
+}
+
 export function handleOutput(o: SimOutput): void {
   for (const tap of outputTaps) tap(o);
   switch (o.type) {
@@ -68,27 +83,16 @@ export function handleOutput(o: SimOutput): void {
       return;
     case 'state':
       latest.state = o.state;
-      applyState(convert(o.state));
+      applyState(convertState(o.state));
   }
-}
-
-function convert(r: RawMachineState): MachineState {
-  return {
-    ...r,
-    core: { ...r.core, regs: Uint8Array.from(r.core.regs) },
-    data: Uint8Array.from(r.data),
-    flash: r.flash ? Uint8Array.from(r.flash) : undefined,
-    traceCycles: Float64Array.from(r.traceCycles),
-    traceLevels: Uint32Array.from(r.traceLevels),
-    execHeat: r.execHeat ? Uint32Array.from(r.execHeat) : undefined,
-    eeprom: r.eeprom ? Uint8Array.from(r.eeprom) : undefined,
-  };
 }
 
 function applyState(st: MachineState): void {
   const cur = useSim.getState();
   // Pop-outs get the Output window lines through the workspace mirror instead.
   if (!forward) for (const m of st.messages) appendOutput(m.level === 'warning' ? 'warning' : m.level === 'error' ? 'error' : 'info', `[sim @ ${m.cycle}] ${m.text}`);
+  // ARM sends the SRAM image only when it changed: keep the previous one in between.
+  if (st.core.arch === 'arm' && st.data.length === 0 && cur.state?.core.arch === 'arm') st.data = cur.state.data;
   const patch: Partial<typeof cur> = { state: st, running: st.running };
   if (st.flash) patch.flash = st.flash;
   if (st.eeprom) patch.eeprom = st.eeprom;
@@ -108,7 +112,7 @@ function applyState(st: MachineState): void {
       patch.baseline = cur.lastStopped ?? st;
       patch.lastStopped = st;
     }
-    if (st.stop.message && !forward) appendOutput(st.stop.reason === 'invalid' ? 'error' : 'info', `${st.stop.message} at 0x${(st.stop.pc * 2).toString(16).toUpperCase().padStart(4, '0')}`);
+    if (st.stop.message && !forward) appendOutput(st.stop.reason === 'invalid' ? 'error' : 'info', `${st.stop.message} at 0x${pcToBytes(st.core.arch, st.stop.pc).toString(16).toUpperCase().padStart(4, '0')}`);
   }
   useSim.setState(patch);
 }

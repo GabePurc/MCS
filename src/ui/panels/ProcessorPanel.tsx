@@ -1,5 +1,6 @@
 import type { JSX } from 'react';
 import { avrCore } from '../backend/types';
+import { ArmProcessorPanel } from './ArmProcessorPanel';
 import { useSim, resetStopwatch } from '../state/sim';
 import { sim } from '../services/simClient';
 import { useWorkspace } from '../state/workspace';
@@ -15,12 +16,17 @@ const FLAG_DESC: Record<string, string> = {
 const SLEEP_MODES = ['Idle', 'ADC Noise Reduction', 'Power-down', 'Power-save', 'Standby', 'Extended Standby'];
 
 export function ProcessorPanel(): JSX.Element {
+  const arm = useSim((s) => s.spec?.arch === 'arm');
+  return arm ? <ArmProcessorPanel /> : <AvrProcessorPanel />;
+}
+
+function AvrProcessorPanel(): JSX.Element {
   const st = useSim((s) => s.state);
   const base = useSim((s) => s.baseline);
   const spec = useSim((s) => s.spec);
   const stopwatch = useSim((s) => s.stopwatch);
   const symbols = useWorkspace((s) => s.build?.symbols);
-  if (!st || !spec) return <EmptyHint>Build or import a program to see the processor state.</EmptyHint>;
+  if (!st || !spec || spec.arch !== 'avr') return <EmptyHint>Build or import a program to see the processor state.</EmptyHint>;
   const rc = spec.coreName === 'AVRrc';
   const firstReg = rc ? 16 : 0;
   const changed = (a: number, b: number | null | undefined) => (b !== undefined && b !== null && a !== b ? "changed" : "");

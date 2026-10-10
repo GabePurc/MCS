@@ -1,10 +1,10 @@
-import { useEffect, useRef, useState, type JSX } from 'react';
+import { useEffect, useMemo, useRef, useState, type JSX } from 'react';
 import { trace } from '../state/trace';
 import { useSim } from '../state/sim';
 import { Icons } from '../icons';
 import { formatHz, formatTime } from '../format';
 import { EmptyHint } from './common';
-import { gpioNames } from '../services/device';
+import { waveformRows } from '../services/device';
 
 /** View state survives tab switches. */
 const view = { start: 0, cyclesPerPx: 200, follow: true, cursorA: -1, cursorB: -1 };
@@ -23,7 +23,8 @@ export function WaveformPanel(): JSX.Element {
   const wrapRef = useRef<HTMLDivElement>(null);
   const [, setTick] = useState(0);
   const rerender = () => setTick((t) => t + 1);
-  const names = spec ? gpioNames(spec) : [];
+  const rows = useMemo(() => (spec ? waveformRows(spec) : []), [spec]);
+  const names = rows.map((r) => r.name);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -32,7 +33,7 @@ export function WaveformPanel(): JSX.Element {
     let raf = 0;
     const draw = () => {
       raf = 0;
-      drawWave(canvas, names);
+      drawWave(canvas, rows);
     };
     const schedule = () => {
       if (!raf) raf = requestAnimationFrame(draw);
@@ -51,7 +52,7 @@ export function WaveformPanel(): JSX.Element {
   if (!spec) return <EmptyHint>No device loaded.</EmptyHint>;
 
   const redraw = () => {
-    if (canvasRef.current) drawWave(canvasRef.current, names);
+    if (canvasRef.current) drawWave(canvasRef.current, rows);
     rerender();
   };
   const zoom = (factor: number, anchorPx?: number) => {
@@ -121,7 +122,7 @@ export function WaveformPanel(): JSX.Element {
               if (moved) {
                 view.start = Math.max(0, start0 - dx * view.cyclesPerPx);
                 view.follow = false;
-                drawWave(el, names);
+                drawWave(el, rows);
               }
             };
             const up = (ev: PointerEvent) => {
@@ -152,10 +153,10 @@ function niceStep(raw: number): number {
   return 10 * p;
 }
 
-function drawWave(canvas: HTMLCanvasElement, names: string[]): void {
+function drawWave(canvas: HTMLCanvasElement, rows: { pin: number; name: string }[]): void {
   const dpr = window.devicePixelRatio || 1;
   const w = canvas.parentElement!.clientWidth;
-  const h = Math.max(canvas.parentElement!.clientHeight, HEADER_H + names.length * ROW_H + 4);
+  const h = Math.max(canvas.parentElement!.clientHeight, HEADER_H + rows.length * ROW_H + 4);
   if (canvas.width !== Math.round(w * dpr) || canvas.height !== Math.round(h * dpr)) {
     canvas.width = Math.round(w * dpr);
     canvas.height = Math.round(h * dpr);
@@ -209,14 +210,14 @@ function drawWave(canvas: HTMLCanvasElement, names: string[]): void {
   }
 
   // Rows
-  for (let r = 0; r < names.length; r++) {
+  for (let r = 0; r < rows.length; r++) {
     const top = HEADER_H + r * ROW_H;
     const yHi = top + 8;
     const yLo = top + ROW_H - 8;
     ctx.fillStyle = r % 2 ? '#122230' : '#0f1b25';
     ctx.fillRect(LABEL_W, top, plotW, ROW_H);
     ctx.fillStyle = '#1e395b';
-    ctx.fillText(names[r], 8, top + ROW_H / 2);
+    ctx.fillText(rows[r].name, 8, top + ROW_H / 2);
     ctx.strokeStyle = '#c5d2e2';
     ctx.beginPath();
     ctx.moveTo(0, top + ROW_H + 0.5);
@@ -230,7 +231,7 @@ function drawWave(canvas: HTMLCanvasElement, names: string[]): void {
     ctx.lineWidth = 1.5;
     ctx.beginPath();
     let i = Math.max(0, trace.indexAt(start));
-    let level = trace.bitAt(i, r);
+    let level = trace.bitAt(i, rows[r].pin);
     let x = LABEL_W;
     const xEnd = LABEL_W + Math.min(plotW, (Math.min(end, trace.endCycle) - start) / view.cyclesPerPx);
     if (trace.cycleAt(0) > start) x = LABEL_W + (trace.cycleAt(0) - start) / view.cyclesPerPx;
@@ -240,7 +241,7 @@ function drawWave(canvas: HTMLCanvasElement, names: string[]): void {
     for (i = i + 1; i < trace.count; i++) {
       const c = trace.cycleAt(i);
       if (c > end) break;
-      const nl = trace.bitAt(i, r);
+      const nl = trace.bitAt(i, rows[r].pin);
       if (nl === level) continue;
       const px = Math.round(LABEL_W + (c - start) / view.cyclesPerPx);
       if (px === lastPx) {

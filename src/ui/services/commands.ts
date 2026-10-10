@@ -19,6 +19,7 @@ import { inTauri } from '../backend/api';
 import { sim } from './simClient';
 import { sourceToPc } from './debugInfo';
 import { exportHexDialog } from './exporting';
+import { archOf } from '../state/devices';
 
 export interface CommandDef {
   id: string;
@@ -42,6 +43,8 @@ export function shortcutLabel(keys: string[] | undefined): string {
 
 const hasDoc = () => !!useWorkspace.getState().activeDocId;
 const running = () => useSim.getState().running;
+/** Fuses, EEPROM, ISA reference, .inc files and custom MCUs exist for AVR devices only. */
+const avrSelected = () => archOf(useSettings.getState().deviceId) === 'avr';
 const hasProgram = () => !!useWorkspace.getState().build;
 const canBuild = () => hasDoc() && !useWorkspace.getState().building;
 
@@ -141,7 +144,7 @@ const list: CommandDef[] = [
   { id: 'file.saveAll', label: 'Save All', keys: ['Mod+Shift+S'], run: saveAll, enabled: hasDoc },
   { id: 'file.close', label: 'Close', keys: ['Mod+W'], run: () => closeDocument(), enabled: hasDoc },
   { id: 'file.import', label: 'Import HEX / ELF...', icon: 'Import', keys: ['Mod+I'], run: importHexOrElf },
-  { id: 'file.exportHex', label: 'Export Intel HEX...', icon: 'Export', run: exportHexDialog, enabled: hasProgram },
+  { id: 'file.exportHex', label: 'Export Intel HEX...', icon: 'Export', run: exportHexDialog, enabled: () => hasProgram() && avrSelected() },
   { id: 'file.exit', label: 'Exit', keys: isMac ? ['Mod+Q'] : ['Alt+F4'], run: async () => { if (await confirmQuit()) win.destroy(); } },
 
   // Edit (CodeMirror handles the keys itself when focused)
@@ -177,7 +180,7 @@ const list: CommandDef[] = [
   // Build
   { id: 'build.build', label: 'Build', icon: 'Build', keys: ['F7'], run: buildActive, enabled: canBuild },
   { id: 'build.options', label: 'Toolchain Options...', icon: 'Settings', run: () => openDialog('toolchain') },
-  { id: 'build.toMachineCode', label: 'Open Program as Machine Code', icon: 'MachineCode', run: openProgramAsMachineCode, enabled: hasProgram },
+  { id: 'build.toMachineCode', label: 'Open Program as Machine Code', icon: 'MachineCode', run: openProgramAsMachineCode, enabled: () => hasProgram() && avrSelected() },
 
   // Debug
   {
@@ -207,7 +210,8 @@ const list: CommandDef[] = [
     run: async () => {
       const loc = cursorLocation();
       if (!loc || running() || !(await ensureProgram())) return;
-      const { pc } = sourceToPc(useWorkspace.getState().build?.program, loc.file, loc.line);
+      const build = useWorkspace.getState().build;
+      const { pc } = sourceToPc(build?.program, loc.file, loc.line, build?.arch);
       if (pc >= 0) sim({ type: 'runTo', pc });
     },
     enabled: () => !running() && hasDoc(),
@@ -248,14 +252,14 @@ const list: CommandDef[] = [
   { id: 'speed.custom', label: 'Custom Speed...', icon: 'Settings', run: () => openDialog('speed') },
 
   // Device / tools / help
-  { id: 'device.custom', label: 'Custom Microcontroller...', icon: 'Chip3D', run: () => openDialog('customDevice') },
-  { id: 'device.fuses', label: 'Fuses & Lock Bits...', icon: 'Fuse', run: () => openDialog('fuses') },
+  { id: 'device.custom', label: 'Custom Microcontroller...', icon: 'Chip3D', run: () => openDialog('customDevice'), enabled: avrSelected },
+  { id: 'device.fuses', label: 'Fuses & Lock Bits...', icon: 'Fuse', run: () => openDialog('fuses'), enabled: avrSelected },
   { id: 'device.supply', label: 'Supply & Clock...', icon: 'Settings', run: () => openDialog('supply') },
   { id: 'tools.toolchain', label: 'Toolchain Options...', icon: 'Settings', run: () => openDialog('toolchain') },
   { id: 'device.info', label: 'Device Info', icon: 'Info', run: () => useLayout.getState().show('info') },
   { id: 'device.chip', label: 'Chip View (3D)', icon: 'Chip3D', run: () => useLayout.getState().show('chip') },
-  { id: 'help.isa', label: 'Instruction Set Reference', icon: 'Book', keys: ['F1'], run: () => useLayout.getState().show('isa') },
-  { id: 'help.include', label: 'Device Definitions (.inc)', run: () => useLayout.getState().show('defs') },
+  { id: 'help.isa', label: 'Instruction Set Reference', icon: 'Book', keys: ['F1'], run: () => useLayout.getState().show('isa'), enabled: avrSelected },
+  { id: 'help.include', label: 'Device Definitions (.inc)', run: () => useLayout.getState().show('defs'), enabled: avrSelected },
   { id: 'help.toolchain', label: 'C Toolchain Setup', run: () => openDialog('toolchainHelp') },
   { id: 'help.updates', label: 'Check for Updates...', icon: 'Download', run: openUpdateDialog, enabled: () => inTauri },
   { id: 'help.about', label: 'About MCS', icon: 'App', run: () => openDialog('about') },

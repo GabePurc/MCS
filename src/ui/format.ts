@@ -34,3 +34,24 @@ export function parseNumber(text: string): number {
   if (/^[0-9a-f]+h$/.test(t)) return parseInt(t.slice(0, -1), 16);
   return NaN;
 }
+
+const cvt = new DataView(new ArrayBuffer(8));
+/** IEEE single from its raw bits. */
+export function f32FromBits(bits: number): number {
+  cvt.setUint32(0, bits >>> 0);
+  return cvt.getFloat32(0);
+}
+/** IEEE double from its low and high 32-bit words. */
+export function f64FromBits(lo: number, hi: number): number {
+  cvt.setUint32(0, hi >>> 0);
+  cvt.setUint32(4, lo >>> 0);
+  return cvt.getFloat64(0);
+}
+/** Compact float text (7 significant digits for singles). */
+export function formatFloat(v: number, digits = 7): string {
+  if (Number.isNaN(v)) return 'NaN';
+  if (!Number.isFinite(v)) return v < 0 ? '-Inf' : 'Inf';
+  if (v === 0) return Object.is(v, -0) ? '-0' : '0';
+  const a = Math.abs(v);
+  return a >= 1e7 || a < 1e-4 ? v.toExponential(digits - 1) : String(Number(v.toPrecision(digits)));
+}

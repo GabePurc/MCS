@@ -58,8 +58,14 @@ function describe(h: Hover['hit']): { title: string; lines: string[] } | null {
   return { title: b.label, lines };
 }
 
+/** Chip View exists for AVR devices only (die floorplan, 3D package and execution heat map). */
 export function ChipView(): JSX.Element {
-  const spec = useSim((s) => s.spec);
+  const arm = useSim((s) => s.spec?.arch === 'arm');
+  return arm ? <EmptyHint>Chip View is available for AVR devices.</EmptyHint> : <AvrChipView />;
+}
+
+function AvrChipView(): JSX.Element {
+  const spec = useSim((s) => (s.spec?.arch === 'avr' ? s.spec : null));
   const speedMode = useSettings((s) => s.speedMode);
   const speedFactor = useSettings((s) => s.speedFactor);
   const saved = useMemo(() => loadJson<{ mode: Mode; shell: Shell; shading: boolean }>(KEY, { mode: '3d', shell: 'xray', shading: true }), []);

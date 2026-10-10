@@ -1,5 +1,5 @@
 /** Address <-> source line / symbol lookups over a LoadedProgram. */
-import type { LoadedProgram, ProgramSymbol } from '../backend/types';
+import { bytesToPc, pcToBytes, type Arch, type LoadedProgram, type ProgramSymbol } from '../backend/types';
 
 export function baseName(p: string): string {
   const i = Math.max(p.lastIndexOf('/'), p.lastIndexOf('\\'));
@@ -19,10 +19,10 @@ export interface SourceLoc {
   line: number;
 }
 
-/** Source location for a word address (exact row range match), or null. */
-export function pcToSource(p: LoadedProgram | null | undefined, pcWord: number): SourceLoc | null {
+/** Source location for a program counter in the architecture's native unit (AVR words, ARM bytes), or null. */
+export function pcToSource(p: LoadedProgram | null | undefined, pc: number, arch: Arch = 'avr'): SourceLoc | null {
   if (!p || p.lines.length === 0) return null;
-  const addr = pcWord * 2;
+  const addr = pcToBytes(arch, pc);
   const rows = p.lines;
   let lo = 0;
   let hi = rows.length - 1;
@@ -53,8 +53,8 @@ export function pcToSource(p: LoadedProgram | null | undefined, pcWord: number):
   return { file: p.files[row.file] ?? '', line: row.line };
 }
 
-/** First code word address for a source line (searching forward a few lines), or -1. */
-export function sourceToPc(p: LoadedProgram | null | undefined, docKey: string, line: number): { pc: number; line: number } {
+/** First code pc (native unit) for a source line (searching forward a few lines), or -1. */
+export function sourceToPc(p: LoadedProgram | null | undefined, docKey: string, line: number, arch: Arch = 'avr'): { pc: number; line: number } {
   if (!p) return { pc: -1, line };
   const fileIdx = new Set<number>();
   p.files.forEach((f, i) => { if (sameFile(f, docKey)) fileIdx.add(i); });
@@ -62,7 +62,7 @@ export function sourceToPc(p: LoadedProgram | null | undefined, docKey: string, 
   for (let l = line; l < line + 30; l++) {
     let best = -1;
     for (const row of p.lines) if (row.line === l && fileIdx.has(row.file) && (best < 0 || row.address < best)) best = row.address;
-    if (best >= 0) return { pc: best >> 1, line: l };
+    if (best >= 0) return { pc: bytesToPc(arch, best), line: l };
   }
   return { pc: -1, line };
 }
@@ -102,7 +102,7 @@ export class SymbolIndex {
   }
 }
 
-/** Word address a source breakpoint resolves to, or -1. */
-export function resolvedSourcePc(p: LoadedProgram | null | undefined, docKey: string, line: number): number {
-  return sourceToPc(p, docKey, line).pc;
+/** Program counter (native unit) a source breakpoint resolves to, or -1. */
+export function resolvedSourcePc(p: LoadedProgram | null | undefined, docKey: string, line: number, arch: Arch = 'avr'): number {
+  return sourceToPc(p, docKey, line, arch).pc;
 }

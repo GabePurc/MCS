@@ -42,4 +42,12 @@ describe('debugInfo', () => {
     expect(idx.describeCode(6)).toBe('reset+0x4');
     expect(idx.dataLabel(0x40)).toBe('counter');
   });
+
+  it('uses byte addresses on ARM', () => {
+    const arm: LoadedProgram = { ...program, lines: [{ address: 0x0800_00e8, file: 0, line: 7, isStmt: true }, { address: 0x0800_00f0, file: 0, line: 9, isStmt: true }] };
+    expect(pcToSource(arm, 0x0800_00ea, 'arm')).toEqual({ file: '/proj/main.asm', line: 7 });
+    expect(sourceToPc(arm, 'main.asm', 9, 'arm').pc).toBe(0x0800_00f0);
+    // Word addressing would put the same line at half the address.
+    expect(sourceToPc(arm, 'main.asm', 9).pc).toBe(0x0400_0078);
+  });
 });

@@ -185,6 +185,10 @@ impl Session {
                 self.m().write_data(addr, value)?;
                 self.publish_if_idle();
             }
+            Command::WriteMem { addr, size, value } => {
+                self.m().write_mem(addr, size, value)?;
+                self.publish_if_idle();
+            }
             Command::WriteFlash { addr, value } => {
                 self.m().write_flash(addr, value)?;
                 self.flash_version += 1;

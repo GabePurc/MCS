@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type JSX } from 'react';
 import { useSim } from '../state/sim';
 import { clearSerial, sendSerial, serialConfigFor, setSerialConfig, setSerialPrefs, useSerial } from '../state/serial';
-import { gpioNames } from '../services/device';
+import { gpioNames, waveformRows } from '../services/device';
 import { Icons } from '../icons';
 import { EmptyHint } from './common';
 import type { SerialConfig } from '../backend/types';
@@ -58,12 +58,14 @@ export function SerialPanel(): JSX.Element {
   if (!spec) return <EmptyHint>No device loaded.</EmptyHint>;
   const cfg = serialConfigFor(spec);
   const names = gpioNames(spec);
+  // Only GPIOs that exist on the package (ARM indices have gaps).
+  const pinChoices = waveformRows(spec).map((r) => r.pin);
   const set = (patch: Partial<SerialConfig>) => setSerialConfig(spec, { ...cfg, ...patch });
   const fmt = FORMATS.find(([, f]) => f.dataBits === cfg.dataBits && f.parity === cfg.parity && f.stopBits === cfg.stopBits)?.[0] ?? 'custom';
   const pinLabel = (g: number) => {
     const p = spec.pins.find((x) => x.gpio === g);
-    const fn = p?.functions.find((f) => f === 'TXD' || f === 'RXD');
-    return `${names[g]}${fn ? ` (${fn})` : ''}`;
+    const fns = p?.functions.filter((f) => f === 'TXD' || f === 'RXD' || /^(?:LP)?U(?:S)?ART\d_[TR]X$/.test(f)) ?? [];
+    return `${names[g]}${fns.length ? ` (${fns.join(', ')})` : ''}`;
   };
   const send = () => {
     sendSerial(input);
@@ -77,12 +79,12 @@ export function SerialPanel(): JSX.Element {
         <span data-tip="Pin decoded into this window (the microcontroller's TX)">From</span>
         <select className="w7-select" value={cfg.monitor ?? ''} onChange={(e) => set({ monitor: e.target.value === '' ? null : Number(e.target.value) })}>
           <option value="">(none)</option>
-          {names.map((_, g) => <option key={g} value={g}>{pinLabel(g)}</option>)}
+          {pinChoices.map((g) => <option key={g} value={g}>{pinLabel(g)}</option>)}
         </select>
         <span data-tip="Pin that receives what you type (the microcontroller's RX)">To</span>
         <select className="w7-select" value={cfg.inject ?? ''} onChange={(e) => set({ inject: e.target.value === '' ? null : Number(e.target.value) })}>
           <option value="">(none)</option>
-          {names.map((_, g) => <option key={g} value={g}>{pinLabel(g)}</option>)}
+          {pinChoices.map((g) => <option key={g} value={g}>{pinLabel(g)}</option>)}
         </select>
         <select className="w7-select" value={cfg.baud} onChange={(e) => set({ baud: Number(e.target.value) })} data-tip="Baud rate">
           {(BAUDS.includes(cfg.baud) ? BAUDS : [...BAUDS, cfg.baud]).map((b) => <option key={b} value={b}>{b} baud</option>)}

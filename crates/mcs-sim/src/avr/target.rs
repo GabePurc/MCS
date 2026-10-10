@@ -216,7 +216,7 @@ impl Target for Machine {
             CpuField::Pc => self.cpu.pc = (value >> 1) & self.cpu.pc_mask,
             CpuField::Sp => self.cpu.sp = value as u16,
             CpuField::Sreg => self.cpu.sreg = value as u8,
-            CpuField::Xpsr | CpuField::Msp | CpuField::Psp | CpuField::Lr => return Err("This CPU field does not exist on AVR".into()),
+            CpuField::Xpsr | CpuField::Msp | CpuField::Psp | CpuField::Lr | CpuField::Control | CpuField::Primask | CpuField::Basepri | CpuField::Faultmask | CpuField::Fpscr => return Err("This CPU field does not exist on AVR".into()),
         }
         Ok(())
     }

@@ -42,6 +42,13 @@ pub enum CpuField {
     Psp,
     /// ARM: link register (r14).
     Lr,
+    /// ARM: CONTROL (nPRIV, SPSEL, FPCA).
+    Control,
+    Primask,
+    Basepri,
+    Faultmask,
+    /// ARM: floating-point status and control register (FPU devices).
+    Fpscr,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -75,6 +82,9 @@ pub enum Command {
     /// Debugger edit of the EEPROM.
     WriteEeprom { addr: u32, value: u8 },
     WriteData { addr: u32, value: u8 },
+    /// Debugger write of `size` (1, 2 or 4) bytes through the CPU's bus (ARM peripheral registers
+    /// need full-width accesses).
+    WriteMem { addr: u32, size: u8, value: u32 },
     WriteFlash { addr: u32, value: u8 },
     WriteReg { reg: usize, value: u32 },
     WriteCpu { field: CpuField, value: u32 },
@@ -143,9 +153,23 @@ pub struct PeripheralInfo {
 #[serde(tag = "arch", rename_all = "lowercase")]
 pub enum CoreState {
     Avr { sp: u16, sreg: u8, regs: Vec<u8> },
-    /// ARMv7-M: r0-r15 (r13 = active SP, r15 = PC), xPSR, banked stack pointers, special registers.
+    /// ARMv7-M: r0-r15 (r13 = active SP, r15 = PC), xPSR, banked stack pointers, special registers;
+    /// `fpr` (S0-S31 as raw bits) and `fpscr` are filled on devices with an FPU (`fpr` is empty
+    /// otherwise).
     #[serde(rename_all = "camelCase")]
-    Arm { r: [u32; 16], xpsr: u32, msp: u32, psp: u32, control: u8, primask: bool, basepri: u8, faultmask: bool },
+    Arm {
+        r: [u32; 16],
+        xpsr: u32,
+        msp: u32,
+        psp: u32,
+        control: u8,
+        primask: bool,
+        basepri: u8,
+        faultmask: bool,
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        fpr: Vec<u32>,
+        fpscr: u32,
+    },
 }
 
 #[derive(Clone, Debug, Serialize)]

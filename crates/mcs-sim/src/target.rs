@@ -87,6 +87,14 @@ pub trait Target: Send {
 
     // ---- debugger writes (architecture-specific ones default to an error)
     fn write_data(&mut self, addr: u32, value: u8) -> Result<(), String>;
+    /// Writes `size` (1, 2 or 4) bytes through the CPU's bus; defaults to byte writes only.
+    fn write_mem(&mut self, addr: u32, size: u8, value: u32) -> Result<(), String> {
+        if size == 1 {
+            self.write_data(addr, value as u8)
+        } else {
+            unsupported("Wide memory writes")
+        }
+    }
     fn write_flash(&mut self, addr: u32, value: u8) -> Result<(), String> {
         let _ = (addr, value);
         unsupported("Writing program memory")

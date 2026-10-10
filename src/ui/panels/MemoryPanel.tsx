@@ -1,5 +1,5 @@
 import { useMemo, useRef, useState, type JSX } from 'react';
-import { avrCore } from '../backend/types';
+import { armCore, avrCore } from '../backend/types';
 import { useSim } from '../state/sim';
 import { useWorkspace } from '../state/workspace';
 import { sim } from '../services/simClient';
@@ -45,20 +45,24 @@ export function MemoryPanel(): JSX.Element {
 
   if (!spec || !st) return <EmptyHint>No device loaded.</EmptyHint>;
 
-  if (space === 'nvm') {
+  const avr = spec.arch === 'avr' ? spec : null;
+  const arm = spec.arch === 'arm' ? spec : null;
+  const eepromSize = avr?.eepromSize ?? 0;
+
+  if (space === 'nvm' && avr) {
     const rows: [string, string, string][] = [
-      ['Signature', spec.signature.map((b) => hexRaw(b)).join(' '), `${spec.name} device ID`],
-      ...spec.fuses.map((fb, i): [string, string, string] => [
+      ['Signature', avr.signature.map((b) => hexRaw(b)).join(' '), `${spec.name} device ID`],
+      ...avr.fuses.map((fb, i): [string, string, string] => [
         `${fb.name} fuse`,
         hex(st.fuses[i] ?? 0xff),
         fb.bits.map((f) => `${f.name}=${(((st.fuses[i] ?? 0xff) & f.mask) >> Math.log2(f.mask & -f.mask)).toString(2).padStart(Math.round(Math.log2((f.mask >> Math.log2(f.mask & -f.mask)) + 1)), '0')}`).join('  '),
       ]),
       ['Lock bits', hex(st.lock), 'NVLB'],
-      ['Calibration', hex(spec.calibration), 'Factory OSCCAL value'],
+      ['Calibration', hex(avr.calibration), 'Factory OSCCAL value'],
     ];
     return (
       <div className="panel">
-        <MemToolbar space={space} setSpace={setSpace} cols={cols} setCols={setCols} gotoText={gotoText} setGotoText={setGotoText} onGoto={() => {}} eeprom={spec.eepromSize > 0} />
+        <MemToolbar space={space} setSpace={setSpace} cols={cols} setCols={setCols} gotoText={gotoText} setGotoText={setGotoText} onGoto={() => {}} eeprom={eepromSize > 0} arm={!!arm} />
         <div className="panel-scroll">
           <table className="grid-table">
             <thead>
@@ -75,41 +79,49 @@ export function MemoryPanel(): JSX.Element {
     );
   }
 
-  const space2: Space = space === 'eeprom' && spec.eepromSize === 0 ? 'data' : space;
-  const bytes = space2 === 'data' ? st.data : space2 === 'eeprom' ? eeprom ?? new Uint8Array(spec.eepromSize).fill(0xff) : flash ?? new Uint8Array(spec.flashSize).fill(0xff);
-  const prev = space === 'data' ? base?.data : undefined;
+  const space2: Space = (space === 'eeprom' && eepromSize === 0) || (space === 'nvm' && !avr) ? 'data' : space;
+  const bytes = space2 === 'data' ? st.data : space2 === 'eeprom' ? eeprom ?? new Uint8Array(eepromSize).fill(0xff) : flash ?? new Uint8Array(spec.flashSize).fill(0xff);
+  // Bus address of byte 0 of the viewed memory (ARM memories sit at their bus addresses).
+  const addrBase = arm ? (space2 === 'flash' ? arm.flashBase : arm.sramBase) : 0;
+  const sramStart = avr ? avr.sramStart : 0;
+  const sramEnd = arm ? arm.sramBase + st.data.length : avr ? avr.sramStart + avr.sramSize : 0;
+  const prev = space === 'data' && base?.data.length === st.data.length ? base?.data : undefined;
   const total = bytes.length;
   const rowsN = Math.ceil(total / cols);
   const first = Math.max(0, Math.floor(scroll / ROW_H) - 2);
   const last = Math.min(rowsN, first + Math.ceil(height / ROW_H) + 4);
-  const addrDigits = total > 0x10000 ? 6 : 4;
+  const addrDigits = arm ? 8 : total > 0x10000 ? 6 : 4;
   const pcByte = st.pcBytes;
-  const sp = avrCore(st).sp;
+  // Bus address of the stack pointer (AVR: data space address; ARM: active SP).
+  const sp = arm ? armCore(st).r[13] : avrCore(st).sp;
   const markClass = (a: number) => {
-    if (space === 'data' && a === sp) return ' mark-sp';
-    if (space === 'data' && a > sp && a < spec.sramStart + spec.sramSize) return ' mark-stack';
-    if (space === 'flash' && (a === pcByte || a === pcByte + 1)) return ' mark-pc';
+    if (space2 === 'data' && a === sp) return ' mark-sp';
+    if (space2 === 'data' && a > sp && a < sramEnd) return ' mark-stack';
+    if (space2 === 'flash' && (a === pcByte || a === pcByte + 1)) return ' mark-pc';
     return '';
   };
-  const tipFor = (a: number) => {
-    const n = space === 'data' ? names.get(a) : undefined;
-    const region = space === 'flash' ? 'Flash' : space === 'eeprom' ? 'EEPROM' : a < spec.sramStart ? 'I/O' : 'SRAM';
-    return `${region} ${hex(a, addrDigits)}${n ? ` - ${n}` : ''} = ${hex(bytes[a])} (${bytes[a]})${a === sp && space === 'data' ? '\n<- SP' : ''}\nDouble-click to edit`;
+  const tipFor = (i: number) => {
+    const a = i + addrBase;
+    const n = space2 === 'data' ? names.get(a) : undefined;
+    const ccm = arm?.ccmSram;
+    const region = space2 === 'flash' ? 'Flash' : space2 === 'eeprom' ? 'EEPROM' : arm ? (ccm && a >= ccm.aliasBase ? 'CCM SRAM' : 'SRAM') : a < sramStart ? 'I/O' : 'SRAM';
+    return `${region} ${hex(a, addrDigits)}${n ? ` - ${n}` : ''} = ${hex(bytes[i])} (${bytes[i]})${a === sp && space2 === 'data' ? '\n<- SP' : ''}\nDouble-click to edit`;
   };
-  const commit = (a: number, v: number) => {
-    if (space === 'data') sim({ type: 'writeData', addr: a, value: v });
-    else if (space === 'eeprom') sim({ type: 'writeEeprom', addr: a, value: v });
+  const commit = (i: number, v: number) => {
+    const a = i + addrBase;
+    if (space2 === 'data') sim({ type: 'writeData', addr: a, value: v });
+    else if (space2 === 'eeprom') sim({ type: 'writeEeprom', addr: a, value: v });
     else sim({ type: 'writeFlash', addr: a, value: v });
   };
   const goto = () => {
-    const a = parseNumber(gotoText);
-    if (Number.isNaN(a) || !scroller.current) return;
+    const a = parseNumber(gotoText) - addrBase;
+    if (Number.isNaN(a) || a < 0 || !scroller.current) return;
     scroller.current.scrollTop = Math.floor(a / cols) * ROW_H;
   };
 
   return (
     <div className="panel">
-      <MemToolbar space={space2} setSpace={setSpace} cols={cols} setCols={setCols} gotoText={gotoText} setGotoText={setGotoText} onGoto={goto} eeprom={spec.eepromSize > 0} />
+      <MemToolbar space={space2} setSpace={setSpace} cols={cols} setCols={setCols} gotoText={gotoText} setGotoText={setGotoText} onGoto={goto} eeprom={eepromSize > 0} arm={!!arm} />
       <div className="hex-header mono">
         <span className="hex-addr">Address</span>
         {Array.from({ length: cols }, (_, i) => (
@@ -158,7 +170,7 @@ export function MemoryPanel(): JSX.Element {
                     }}
                   />
                 ) : (
-                  <span key={a} className={`hex-byte${ch ? ' changed' : ''}${a < spec.sramStart && space === 'data' ? ' io' : ''}${markClass(a)}`} data-tip={tipFor(a)} onDoubleClick={() => setEditing(a)}>
+                  <span key={a} className={`hex-byte${ch ? ' changed' : ''}${a < sramStart && space2 === 'data' ? ' io' : ''}${markClass(a + addrBase)}`} data-tip={tipFor(a)} onDoubleClick={() => setEditing(a)}>
                     {hexRaw(v)}
                   </span>
                 ),
@@ -166,7 +178,7 @@ export function MemoryPanel(): JSX.Element {
             }
             return (
               <div key={row} className="hex-row" style={{ top: row * ROW_H }}>
-                <span className="hex-addr">{hexRaw(start, addrDigits)}</span>
+                <span className="hex-addr">{hexRaw(start + addrBase, addrDigits)}</span>
                 {cells}
                 <span className="hex-ascii">{ascii}</span>
               </div>
@@ -178,15 +190,15 @@ export function MemoryPanel(): JSX.Element {
   );
 }
 
-function MemToolbar(p: { space: Space; setSpace: (s: Space) => void; cols: number; setCols: (c: number) => void; gotoText: string; setGotoText: (s: string) => void; onGoto: () => void; eeprom: boolean }): JSX.Element {
+function MemToolbar(p: { arm: boolean; space: Space; setSpace: (s: Space) => void; cols: number; setCols: (c: number) => void; gotoText: string; setGotoText: (s: string) => void; onGoto: () => void; eeprom: boolean }): JSX.Element {
   return (
     <div className="panel-toolbar">
       <span>Memory:</span>
       <select className="w7-select" value={p.space} onChange={(e) => p.setSpace(e.target.value as Space)}>
-        <option value="data">data (I/O + SRAM)</option>
-        <option value="flash">prog (Flash)</option>
+        <option value="data">{p.arm ? 'SRAM' : 'data (I/O + SRAM)'}</option>
+        <option value="flash">{p.arm ? 'Flash' : 'prog (Flash)'}</option>
         {p.eeprom && <option value="eeprom">eeprom (EEPROM)</option>}
-        <option value="nvm">fuses, lock, signature</option>
+        {!p.arm && <option value="nvm">fuses, lock, signature</option>}
       </select>
       {p.space !== 'nvm' && (
         <>
@@ -195,7 +207,7 @@ function MemToolbar(p: { space: Space; setSpace: (s: Space) => void; cols: numbe
             {[4, 8, 16, 32].map((c) => <option key={c} value={c}>{c}</option>)}
           </select>
           <span>Go to:</span>
-          <input className="w7-input mono" style={{ width: 80 }} placeholder="0x0040" value={p.gotoText} onChange={(e) => p.setGotoText(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && p.onGoto()} />
+          <input className="w7-input mono" style={{ width: 80 }} placeholder={p.arm ? '0x20000000' : '0x0040'} value={p.gotoText} onChange={(e) => p.setGotoText(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && p.onGoto()} />
         </>
       )}
     </div>

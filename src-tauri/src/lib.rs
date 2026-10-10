@@ -87,6 +87,12 @@ fn program_to_machine_code(device_id: String, flash: Vec<u8>, used: usize, label
 
 #[tauri::command]
 async fn build_c(source: String, file_name: String, file_path: Option<String>, device_id: String, optimize: String, extra_flags: Vec<String>, gcc_path: Option<String>) -> BuildOutcome {
+    // The toolchain wrapper drives avr-gcc; ARM devices load an ELF / HEX built elsewhere for now.
+    if mcs_core::devices::get_any(&device_id).is_some_and(|d| d.as_avr().is_none()) {
+        let message = "C builds target AVR devices (avr-gcc). For an ARM Cortex-M device, build with arm-none-eabi-gcc or clang and load the ELF or Intel HEX file (File > Import HEX/ELF)".to_string();
+        let diagnostics = vec![mcs_core::program::Diagnostic::new(mcs_core::program::Severity::Error, message, file_name, 0, 0)];
+        return BuildOutcome { ok: false, program: None, diagnostics, output: String::new(), listing: None, device_id };
+    }
     let dir = file_path.as_deref().and_then(|p| Path::new(p).parent()).map(Path::to_path_buf);
     let r = toolchain::compile(&toolchain::CompileRequest {
         source: &source,
@@ -109,6 +115,12 @@ fn import_program(path: String, device_id: String) -> Result<BuildOutcome, Strin
     let bytes = std::fs::read(&path).map_err(|e| format!("{path}: {e}"))?;
     let name = Path::new(&path).file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
     Ok(mcs_api::import_program(&bytes, &name, &device_id))
+}
+
+/// Parses an ELF / Intel HEX image that is already in memory (bundled examples).
+#[tauri::command]
+fn import_program_bytes(bytes: Vec<u8>, file_name: String, device_id: String) -> BuildOutcome {
+    mcs_api::import_program(&bytes, &file_name, &device_id)
 }
 
 #[tauri::command]
@@ -192,6 +204,7 @@ pub fn run() {
             program_to_machine_code,
             build_c,
             import_program,
+            import_program_bytes,
             detect_toolchain,
             read_text_file,
             write_text_file,
