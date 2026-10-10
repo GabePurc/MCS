@@ -24,6 +24,7 @@ pub(crate) fn lane_write(old: u32, offset: u32, size: u8, value: u32) -> u32 {
 }
 
 pub mod gpio;
+pub mod h7;
 pub mod serial;
 pub mod stimulus;
 pub mod exti;
@@ -31,7 +32,7 @@ pub mod rcc;
 pub mod tim;
 pub mod uart;
 
-use mcs_core::arm::device::ArmDeviceSpec;
+use mcs_core::arm::device::{ArmDeviceSpec, PeriphFamily};
 use mcs_core::arm::thumb::ArmFeatures;
 
 use super::bus::{MemConfig, RamAlias};
@@ -43,19 +44,18 @@ const SYSTICK_EXT_DIV: u32 = 8;
 
 impl Machine {
     /// Builds the complete microcontroller described by `spec`: memories (with the CCM SRAM
-    /// alias), core peripherals and the STM32 peripherals of its [`ArmPeripheralSet`]
-    /// (RCC, FLASH, PWR, SYSCFG/EXTI, GPIO ports, USART/UART/LPUART, timers), the pin array and the
-    /// alternate-function routing. Power-on reset has been applied.
+    /// alias / the H7 RAM blocks), core peripherals and the STM32 peripherals of its
+    /// [`ArmPeripheralSet`] (RCC, FLASH, PWR, SYSCFG/EXTI in the layout of its [`PeriphFamily`], GPIO
+    /// ports, USART/UART/LPUART, timers), the pin array and the alternate-function routing.
+    /// Power-on reset has been applied.
     pub fn from_spec(spec: &'static ArmDeviceSpec) -> Machine {
         let ps = &spec.peripheral_set;
-        let ccm = spec.ccm_sram;
-        let mem = MemConfig {
-            flash_base: spec.flash_base,
-            flash_size: spec.flash_size,
-            flash_alias: true,
-            ram: vec![(spec.sram_base, spec.ram_total())],
-            ram_alias: ccm.map(|c| RamAlias { base: c.base, size: c.size, ram: 0, off: c.alias_base - spec.sram_base }),
-        };
+        // RAM block 0 is the main SRAM (+ CCM tail on the G4), then the device's extra blocks.
+        let mut ram = vec![(spec.sram_base, spec.ram_total())];
+        ram.extend(spec.extra_ram.iter().map(|r| (r.base, r.size)));
+        let mut ram_alias: Vec<RamAlias> = spec.ccm_sram.iter().map(|c| RamAlias { base: c.base, size: c.size, ram: 0, off: c.alias_base - spec.sram_base }).collect();
+        ram_alias.extend(spec.ram_aliases.iter().map(|a| RamAlias { base: a.base, size: a.size, ram: a.region as usize, off: a.offset }));
+        let mem = MemConfig { flash_base: spec.flash_base, flash_size: spec.flash_size, flash_alias: spec.flash_alias, ram, ram_alias };
         let cfg = ArmConfig {
             mem,
             features: ArmFeatures(spec.features),
@@ -81,13 +81,24 @@ impl Machine {
                 m.sys.listeners.push(idx);
             }
         };
-        add(&mut m, "RCC", ps.rcc_base, 0x400, Box::new(rcc::Rcc::new(spec.clock.hsi_hz)), None, false);
-        add(&mut m, "FLASH", ps.flash_base, 0x400, Box::<rcc::FlashIf>::default(), Some((0, 8)), false);
-        add(&mut m, "PWR", ps.pwr_base, 0x400, Box::<rcc::Pwr>::default(), Some((3, 28)), false);
-        assert_eq!(ps.exti_base, ps.syscfg_base + 0x400, "SYSCFG and EXTI share one device");
-        add(&mut m, "EXTI", ps.syscfg_base, 0x800, Box::new(exti::SysExti::new(&ps.exti_irqs)), Some((5, 0)), true);
+        match ps.family {
+            PeriphFamily::Stm32G4 => {
+                add(&mut m, "RCC", ps.rcc_base, 0x400, Box::new(rcc::Rcc::new(spec.clock.hsi_hz)), None, false);
+                add(&mut m, "FLASH", ps.flash_base, 0x400, Box::<rcc::FlashIf>::default(), Some((0, 8)), false);
+                add(&mut m, "PWR", ps.pwr_base, 0x400, Box::<rcc::Pwr>::default(), Some((3, 28)), false);
+                assert_eq!(ps.exti_base, ps.syscfg_base + 0x400, "SYSCFG and EXTI share one device");
+                add(&mut m, "EXTI", ps.syscfg_base, 0x800, Box::new(exti::SysExti::new(exti::ExtiLayout::G4, &ps.exti_irqs)), Some((5, 0)), true);
+            }
+            PeriphFamily::Stm32H7 => {
+                add(&mut m, "RCC", ps.rcc_base, 0x400, Box::new(h7::Rcc::new(spec.clock.hsi_hz, spec.clock.csi_hz)), None, false);
+                add(&mut m, "FLASH", ps.flash_base, 0x400, Box::<h7::FlashIf>::default(), None, false);
+                add(&mut m, "PWR", ps.pwr_base, 0x400, Box::<h7::Pwr>::default(), None, false);
+                assert_eq!(ps.syscfg_base, ps.exti_base + 0x400, "EXTI and SYSCFG share one device");
+                add(&mut m, "EXTI", ps.exti_base, 0x800, Box::new(exti::SysExti::new(exti::ExtiLayout::H7, &ps.exti_irqs)), Some((8, 1)), true);
+            }
+        }
         for g in &ps.gpio {
-            add(&mut m, &g.name, g.base, 0x400, Box::new(gpio::Gpio::new(g.port)), Some((1, g.port)), false);
+            add(&mut m, &g.name, g.base, 0x400, Box::new(gpio::Gpio::new(g.port, g.enable)), Some((g.enable.reg, g.enable.bit)), false);
         }
         for u in &ps.uarts {
             add(&mut m, &u.name, u.base, 0x400, Box::new(uart::Uart::new(u)), Some((u.enable.reg, u.enable.bit)), true);

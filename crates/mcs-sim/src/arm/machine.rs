@@ -224,9 +224,11 @@ impl Machine {
         self.sys.reset_pins(now);
         if !power_on {
             // Clock tree back to the reset state (HSI16); RCC re-derives it below.
-            let t = super::sys::ClockTree { sysclk_hz: self.hsi_hz, hclk_hz: self.hsi_hz, ppre1: 1, ppre2: 1 };
+            let t = super::sys::ClockTree::flat(self.hsi_hz);
             self.sys.set_clock_tree(t, now);
-            self.sys.enr = [0; 6];
+            self.sys.enr = [0; super::sys::NENR];
+            self.sys.vos_field = 1;
+            self.sys.oden = false;
         }
         for d in 0..self.bus.devs.len() {
             let mut cx = cx!(self, d as u8, now);
@@ -266,7 +268,7 @@ impl Machine {
 
     #[inline(never)]
     fn mem_read_slow(&mut self, addr: u32, size: u32) -> Option<u32> {
-        match self.bus.top[(addr >> 24) as usize] {
+        match self.bus.kind(addr) {
             T_PERIPH => {
                 let Some((dev, off)) = self.bus.find(addr) else { return self.unmapped_read(addr) };
                 let cycles = self.cpu.cycles;
@@ -299,7 +301,7 @@ impl Machine {
 
     #[inline(never)]
     fn mem_write_slow(&mut self, addr: u32, size: u32, v: u32) -> bool {
-        match self.bus.top[(addr >> 24) as usize] {
+        match self.bus.kind(addr) {
             T_PERIPH => {
                 let Some((dev, off)) = self.bus.find(addr) else {
                     if self.cfg.unmapped_peripherals_raz {

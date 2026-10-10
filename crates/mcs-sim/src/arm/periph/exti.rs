@@ -1,29 +1,104 @@
-//! SYSCFG (EXTI line routing) and EXTI (RM0440 sections 10 and 16) as one device mapped over
-//! `SYSCFG_BASE .. SYSCFG_BASE + 0x800` (EXTI sits at +0x400).
+//! SYSCFG (EXTI line routing) and EXTI as one device mapped over a 0x800 byte window that holds both
+//! blocks. Two register layouts share the logic:
+//!
+//! * STM32G4 (RM0440 sections 10 and 16): SYSCFG at +0x000, EXTI at +0x400 (IMR1, EMR1, RTSR1, FTSR1,
+//!   SWIER1, PR1), SYSCFGEN = APB2ENR bit 0.
+//! * STM32H7 (RM0433 sections 14 and 21): EXTI at +0x000 (RTSR1, FTSR1, SWIER1, D3PMR1, ..., then the
+//!   Cortex-M7 masks CPUIMR1 / CPUEMR1 / CPUPR1 at +0x80), SYSCFG at +0x400 (PMCR, EXTICR1-4, CFGR,
+//!   CCCSR, CCVR, CCCR, PWRCR, PKGR), SYSCFGEN = APB4ENR bit 1. SYSCFG_PWRCR.ODEN is published to
+//!   [`ArmSys`](crate::arm::sys::ArmSys) for the PWR model (VOS0 overdrive).
 //!
 //! EXTI: lines 0-15 follow the GPIO selected by SYSCFG_EXTICRx; rising / falling edge detection
 //! sets the pending bit (PR1), the interrupt mask (IMR1) gates the NVIC line. EXTI0-4 have their
 //! own interrupts, lines 5-9 and 10-15 share EXTI9_5 and EXTI15_10. SWIER sets pending bits in
-//! software. Event mode (EMR1) is stored; events do not wake WFE. Lines 16+ (internal sources) and
-//! the second register bank (IMR2...) are not modelled. SYSCFG registers need the SYSCFGEN clock
-//! (APB2ENR bit 0); EXTI itself is always clocked.
+//! software. Event mode (EMR1) is stored; events do not wake WFE. Lines 16+ (internal sources), the
+//! second and third register banks and the H7 D3 pending-clear registers are stored but have no
+//! effect. EXTI itself is always clocked; SYSCFG registers need the SYSCFGEN clock.
 
 use crate::arm::bus::{Cx, Mmio};
 
 use super::{lane_read, lane_write};
 
-const EXTI_OFF: u32 = 0x400;
+/// Register layout of the SYSCFG / EXTI window.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ExtiLayout {
+    G4,
+    H7,
+}
+
+#[derive(Clone, Copy)]
+enum Reg {
+    Imr,
+    Emr,
+    Rtsr,
+    Ftsr,
+    Swier,
+    Pr,
+}
+
+impl ExtiLayout {
+    /// The EXTI block is in the upper half of the window (G4) or the lower half (H7).
+    fn exti_high(self) -> bool {
+        self == ExtiLayout::G4
+    }
+
+    /// RCC enable register index and bit of the SYSCFG clock.
+    fn syscfg_clock(self) -> (u8, u8) {
+        match self {
+            ExtiLayout::G4 => (5, 0),
+            ExtiLayout::H7 => (8, 1),
+        }
+    }
+
+    fn exti_reg(self, rel: u32) -> Option<Reg> {
+        match (self, rel) {
+            (ExtiLayout::G4, 0x00) | (ExtiLayout::H7, 0x80) => Some(Reg::Imr),
+            (ExtiLayout::G4, 0x04) | (ExtiLayout::H7, 0x84) => Some(Reg::Emr),
+            (ExtiLayout::G4, 0x08) | (ExtiLayout::H7, 0x00) => Some(Reg::Rtsr),
+            (ExtiLayout::G4, 0x0c) | (ExtiLayout::H7, 0x04) => Some(Reg::Ftsr),
+            (ExtiLayout::G4, 0x10) | (ExtiLayout::H7, 0x08) => Some(Reg::Swier),
+            (ExtiLayout::G4, 0x14) | (ExtiLayout::H7, 0x88) => Some(Reg::Pr),
+            _ => None,
+        }
+    }
+
+    /// Writable bits of the SYSCFG register at `rel` (0 = read-only / absent).
+    fn syscfg_mask(self, rel: u32) -> u32 {
+        match (self, rel) {
+            (_, 0x08..=0x14) => if self == ExtiLayout::G4 { 0x7777 } else { 0xffff },
+            (ExtiLayout::G4, 0x00) => 7,
+            (ExtiLayout::G4, 0x04 | 0x18 | 0x1c | 0x20) => u32::MAX,
+            (ExtiLayout::H7, 0x04 | 0x18 | 0x20 | 0x28) => u32::MAX,
+            (ExtiLayout::H7, 0x2c) => 1, // PWRCR.ODEN
+            _ => 0,
+        }
+    }
+
+    fn syscfg_reset(self, words: &mut [u32]) {
+        words.iter_mut().for_each(|w| *w = 0);
+        if self == ExtiLayout::G4 {
+            words[1] = 0x7c00_0001; // CFGR1
+        }
+    }
+
+    fn imr_reset(self) -> u32 {
+        match self {
+            ExtiLayout::G4 => 0xff82_0000, // STM32G474xx.svd
+            ExtiLayout::H7 => 0xffc0_0000,
+        }
+    }
+}
+
+const WORDS: usize = 256;
+const ODEN_OFF: u32 = 0x2c;
 
 pub struct SysExti {
+    layout: ExtiLayout,
     irqs: [u16; 16],
-    // SYSCFG
-    memrmp: u32,
-    cfgr1: u32,
-    exticr: [u32; 4],
-    scsr: u32,
-    cfgr2: u32,
-    swpr: u32,
-    // EXTI
+    /// SYSCFG registers by word offset (EXTICR1-4 at words 2-5).
+    sys: [u32; WORDS],
+    /// Stored EXTI registers without behaviour (H7 D3PMR / D3PCR, line 2 and 3 banks).
+    xr: [u32; WORDS],
     imr: u32,
     emr: u32,
     rtsr: u32,
@@ -35,24 +110,20 @@ pub struct SysExti {
 }
 
 impl SysExti {
-    pub fn new(irqs: &[u16]) -> Self {
+    pub fn new(layout: ExtiLayout, irqs: &[u16]) -> Self {
         let mut a = [0u16; 16];
         for (d, s) in a.iter_mut().zip(irqs) {
             *d = *s;
         }
-        let mut x = Self { irqs: a, memrmp: 0, cfgr1: 0, exticr: [0; 4], scsr: 0, cfgr2: 0, swpr: 0, imr: 0, emr: 0, rtsr: 0, ftsr: 0, swier: 0, pr: 0, last: [0; 16] };
+        let mut x = Self { layout, irqs: a, sys: [0; WORDS], xr: [0; WORDS], imr: 0, emr: 0, rtsr: 0, ftsr: 0, swier: 0, pr: 0, last: [0; 16] };
         x.set_reset_values();
         x
     }
 
     fn set_reset_values(&mut self) {
-        self.memrmp = 0;
-        self.cfgr1 = 0x7c00_0001;
-        self.exticr = [0; 4];
-        self.scsr = 0;
-        self.cfgr2 = 0;
-        self.swpr = 0;
-        self.imr = 0xff82_0000;
+        self.layout.syscfg_reset(&mut self.sys);
+        self.xr = [0; WORDS];
+        self.imr = self.layout.imr_reset();
         self.emr = 0;
         self.rtsr = 0;
         self.ftsr = 0;
@@ -61,10 +132,16 @@ impl SysExti {
         self.last = [0; 16];
     }
 
+    /// True when window offset `offset` belongs to the EXTI block.
+    #[inline]
+    fn is_exti(&self, offset: u32) -> bool {
+        (offset >= 0x400) == self.layout.exti_high()
+    }
+
     /// GPIO index selected for `line`.
     #[inline]
     fn selected(&self, line: usize) -> usize {
-        let port = (self.exticr[line >> 2] >> (4 * (line & 3))) & 0xf;
+        let port = (self.sys[2 + (line >> 2)] >> (4 * (line & 3))) & 0xf;
         port as usize * 16 + line
     }
 
@@ -94,96 +171,92 @@ impl SysExti {
         }
     }
 
-    fn syscfg_read(&self, off: u32) -> u32 {
-        match off {
-            0x00 => self.memrmp,
-            0x04 => self.cfgr1,
-            0x08 => self.exticr[0],
-            0x0c => self.exticr[1],
-            0x10 => self.exticr[2],
-            0x14 => self.exticr[3],
-            0x18 => self.scsr,
-            0x1c => self.cfgr2,
-            0x20 => self.swpr,
-            _ => 0,
-        }
+    fn syscfg_read(&self, rel: u32) -> u32 {
+        self.sys.get((rel >> 2) as usize).copied().unwrap_or(0)
     }
 
-    fn exti_read(&self, off: u32) -> u32 {
-        match off {
-            0x00 => self.imr,
-            0x04 => self.emr,
-            0x08 => self.rtsr,
-            0x0c => self.ftsr,
-            0x10 => self.swier,
-            0x14 => self.pr,
-            _ => 0,
+    fn exti_read(&self, rel: u32) -> u32 {
+        match self.layout.exti_reg(rel) {
+            Some(Reg::Imr) => self.imr,
+            Some(Reg::Emr) => self.emr,
+            Some(Reg::Rtsr) => self.rtsr,
+            Some(Reg::Ftsr) => self.ftsr,
+            Some(Reg::Swier) => self.swier,
+            Some(Reg::Pr) => self.pr,
+            None if self.layout == ExtiLayout::H7 => self.xr.get((rel >> 2) as usize).copied().unwrap_or(0),
+            None => 0,
         }
     }
 }
 
 impl Mmio for SysExti {
     fn read(&mut self, offset: u32, size: u8, cx: &mut Cx) -> u32 {
-        let v = if offset >= EXTI_OFF {
-            self.exti_read((offset - EXTI_OFF) & !3)
-        } else if cx.sys.clock_on(5, 0) {
-            self.syscfg_read(offset & !3)
+        let rel = offset & 0x3fc;
+        let v = if self.is_exti(offset) {
+            self.exti_read(rel)
         } else {
-            0
+            let (reg, bit) = self.layout.syscfg_clock();
+            if cx.sys.clock_on(reg, bit) { self.syscfg_read(rel) } else { 0 }
         };
         lane_read(v, offset, size)
     }
 
     fn write(&mut self, offset: u32, size: u8, value: u32, cx: &mut Cx) {
-        if offset < EXTI_OFF {
-            if !cx.sys.clock_on(5, 0) {
+        let rel = offset & 0x3fc;
+        if !self.is_exti(offset) {
+            let (reg, bit) = self.layout.syscfg_clock();
+            if !cx.sys.clock_on(reg, bit) {
                 return;
             }
-            let off = offset & !3;
-            let old = self.syscfg_read(off);
-            let v = lane_write(old, offset, size, value);
-            match off {
-                0x00 => self.memrmp = v & 7,
-                0x04 => self.cfgr1 = v,
-                0x08..=0x14 => {
-                    let k = ((off - 8) >> 2) as usize;
-                    self.exticr[k] = v & 0x7777;
-                    for line in 4 * k..4 * k + 4 {
-                        self.baseline(line, cx);
-                    }
+            let mask = self.layout.syscfg_mask(rel);
+            if mask == 0 {
+                return;
+            }
+            let w = (rel >> 2) as usize;
+            let new = (self.sys[w] & !mask) | (lane_write(self.sys[w], offset, size, value) & mask);
+            self.sys[w] = new;
+            if (0x08..=0x14).contains(&rel) {
+                let k = ((rel - 8) >> 2) as usize;
+                for line in 4 * k..4 * k + 4 {
+                    self.baseline(line, cx);
                 }
-                0x18 => self.scsr = v,
-                0x1c => self.cfgr2 = v,
-                0x20 => self.swpr = v,
-                _ => {}
+            } else if self.layout == ExtiLayout::H7 && rel == ODEN_OFF {
+                cx.sys.oden = new & 1 != 0;
             }
             return;
         }
-        let off = (offset - EXTI_OFF) & !3;
-        let v = lane_write(self.exti_read(off), offset, size, value);
-        match off {
-            0x00 => self.imr = v,
-            0x04 => self.emr = v,
-            0x08 => self.rtsr = v,
-            0x0c => self.ftsr = v,
-            0x10 => {
+        let v = lane_write(self.exti_read(rel), offset, size, value);
+        match self.layout.exti_reg(rel) {
+            Some(Reg::Imr) => self.imr = v,
+            Some(Reg::Emr) => self.emr = v,
+            Some(Reg::Rtsr) => self.rtsr = v,
+            Some(Reg::Ftsr) => self.ftsr = v,
+            Some(Reg::Swier) => {
                 let set = v & !self.swier;
                 self.swier = v;
                 self.pr |= set & 0xffff;
             }
-            0x14 => {
+            Some(Reg::Pr) => {
                 // Pending bits are cleared by writing 1; clearing also clears the software request.
                 let clr = lane_write(0, offset, size, value);
                 self.pr &= !clr;
                 self.swier &= !clr;
             }
-            _ => return,
+            None => {
+                if self.layout == ExtiLayout::H7 {
+                    if let Some(x) = self.xr.get_mut((rel >> 2) as usize) {
+                        *x = v;
+                    }
+                }
+                return;
+            }
         }
         self.update_irqs(cx);
     }
 
     fn peek(&mut self, offset: u32, _cx: &mut Cx) -> u32 {
-        if offset >= EXTI_OFF { self.exti_read((offset - EXTI_OFF) & !3) } else { self.syscfg_read(offset & !3) }
+        let rel = offset & 0x3fc;
+        if self.is_exti(offset) { self.exti_read(rel) } else { self.syscfg_read(rel) }
     }
 
     fn on_pin(&mut self, pin: usize, level: u8, _cycle: u64, cx: &mut Cx) {
@@ -203,6 +276,7 @@ impl Mmio for SysExti {
 
     fn reset(&mut self, cx: &mut Cx) {
         self.set_reset_values();
+        cx.sys.oden = false;
         for line in 0..16 {
             self.baseline(line, cx);
         }

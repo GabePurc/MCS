@@ -13,24 +13,44 @@ use crate::pins::{ClockModel, Pin, PinTrace};
 
 /// Number of distinct routed signals (peripheral number << 4 | function).
 pub const NSIG: usize = 256;
+/// Number of RCC peripheral clock-enable registers mirrored in [`ArmSys::enr`] (G4 uses 6, H7 uses 9).
+pub const NENR: usize = 9;
 /// `route` entry meaning "no pin".
 pub const NO_PIN: u16 = u16::MAX;
 
 /// Signal ids of the routed alternate functions. `peripheral << 4 | function`; id 0 is "none".
 pub mod sig {
-    /// UART/USART instances: 1-5 USART1..UART5, 6 LPUART1.
+    /// Number of UART instances (ids 1..=UARTS).
+    pub const UARTS: u8 = 9;
+    /// UART/USART instances: 1-5 USART1..UART5, 6 LPUART1, 7 USART6, 8 UART7, 9 UART8.
     pub const fn uart(p: u8, rx: bool) -> u16 {
         ((p as u16) << 4) | rx as u16
     }
-    /// General-purpose timer channel: `timer` 2..4 (TIMx), `ch` 0..3.
+    /// General-purpose timer channel: `timer` 2..5 (TIMx), `ch` 0..3.
     pub const fn tim(timer: u8, ch: u8) -> u16 {
-        (((timer as u16) + 6) << 4) | (ch as u16 + 2)
+        (((timer as u16) + 10) << 4) | (ch as u16 + 2)
     }
     pub const NONE: u16 = 0;
 
     /// Input signals (UART RX): the pin stays an input, the peripheral samples it.
     pub const fn is_input(s: u16) -> bool {
-        s >> 4 >= 1 && s >> 4 <= 6 && s & 0xf == 1
+        s >> 4 >= 1 && s >> 4 <= UARTS as u16 && s & 0xf == 1
+    }
+}
+
+/// UART instance number (1-9, see [`sig::uart`]) of a peripheral name, 0 when unknown.
+pub fn uart_index(name: &str) -> u8 {
+    match name {
+        "USART1" => 1,
+        "USART2" => 2,
+        "USART3" => 3,
+        "UART4" => 4,
+        "UART5" => 5,
+        "LPUART1" => 6,
+        "USART6" => 7,
+        "UART7" => 8,
+        "UART8" => 9,
+        _ => 0,
     }
 }
 
@@ -46,41 +66,65 @@ pub fn signal_id(name: &str) -> u16 {
         _ => sig::NONE,
     };
     match periph {
-        "USART1" => uart(1),
-        "USART2" => uart(2),
-        "USART3" => uart(3),
-        "UART4" => uart(4),
-        "UART5" => uart(5),
-        "LPUART1" => uart(6),
-        "TIM2" | "TIM3" | "TIM4" => match f.strip_prefix("CH").and_then(|c| c.parse::<u8>().ok()) {
+        "TIM2" | "TIM3" | "TIM4" | "TIM5" => match f.strip_prefix("CH").and_then(|c| c.parse::<u8>().ok()) {
             Some(c @ 1..=4) => sig::tim(periph.as_bytes()[3] - b'0', c - 1),
             _ => sig::NONE,
         },
-        _ => sig::NONE,
+        _ => match uart_index(periph) {
+            0 => sig::NONE,
+            p => uart(p),
+        },
     }
 }
 
 /// Clock frequencies and bus ratios derived from RCC.
+///
+/// The CPU cycle counter counts `hclk_hz` cycles ("HCLK" is the clock of the core: HCLK on the G4,
+/// the CPU clock sys_d1cpre_ck on the H7); `ppre1`-`ppre4` are the number of those cycles per PCLK
+/// cycle of APB1-APB4 (G4: the APB prescaler; H7: AHB prescaler x APB prescaler), and `tim1` /
+/// `tim2` the cycles per timer-kernel clock cycle on APB1 / APB2.
 #[derive(Clone, Copy, Debug)]
 pub struct ClockTree {
     pub sysclk_hz: f64,
     pub hclk_hz: f64,
-    /// APB1 / APB2 prescaler divisors (1, 2, 4, 8, 16).
     pub ppre1: u32,
     pub ppre2: u32,
+    pub ppre3: u32,
+    pub ppre4: u32,
+    pub tim1: u32,
+    pub tim2: u32,
 }
 
 impl ClockTree {
-    /// Ratio HCLK cycles per timer-kernel clock cycle on an APB bus: timers run at PCLK, or at
-    /// 2 x PCLK when the bus prescaler is not 1.
-    pub fn timer_div(&self, apb: u8) -> u32 {
-        let p = if apb == 2 { self.ppre2 } else { self.ppre1 };
-        if p == 1 { 1 } else { p / 2 }
+    /// A tree running everything from one clock, no prescalers (reset state).
+    pub fn flat(hz: f64) -> Self {
+        Self { sysclk_hz: hz, hclk_hz: hz, ppre1: 1, ppre2: 1, ppre3: 1, ppre4: 1, tim1: 1, tim2: 1 }
     }
 
-    /// HCLK cycles per PCLK cycle of an APB bus.
+    /// STM32G4 style tree: timers run at PCLK, or at 2 x PCLK when the bus prescaler is not 1.
+    pub fn with_apb_prescalers(sysclk_hz: f64, hclk_hz: f64, ppre1: u32, ppre2: u32) -> Self {
+        let t = |p: u32| if p == 1 { 1 } else { p / 2 };
+        Self { sysclk_hz, hclk_hz, ppre1, ppre2, ppre3: 1, ppre4: 1, tim1: t(ppre1), tim2: t(ppre2) }
+    }
+
+    /// Ratio of core cycles per timer-kernel clock cycle on an APB bus (1 or 2; other buses have no
+    /// modelled timers and run at PCLK).
+    pub fn timer_div(&self, apb: u8) -> u32 {
+        match apb {
+            1 => self.tim1,
+            2 => self.tim2,
+            _ => self.pclk_div(apb),
+        }
+    }
+
+    /// Core cycles per PCLK cycle of APB bus `apb` (1-4).
     pub fn pclk_div(&self, apb: u8) -> u32 {
-        if apb == 2 { self.ppre2 } else { self.ppre1 }
+        match apb {
+            1 => self.ppre1,
+            2 => self.ppre2,
+            3 => self.ppre3,
+            _ => self.ppre4,
+        }
     }
 }
 
@@ -109,12 +153,17 @@ pub struct ArmSys {
     pub serial_out: Vec<u8>,
     pub messages: Vec<Message>,
     warned: HashSet<String>,
-    /// RCC peripheral clock enable registers mirrored for clock gating: AHB1, AHB2, AHB3, APB1 low,
-    /// APB1 high, APB2.
-    pub enr: [u32; 6],
+    /// RCC peripheral clock enable registers mirrored for clock gating, in the family's order
+    /// (G4: AHB1, AHB2, AHB3, APB1 low, APB1 high, APB2; H7: AHB3, AHB1, AHB2, AHB4, APB3, APB1 low,
+    /// APB1 high, APB2, APB4).
+    pub enr: [u32; NENR],
     pub flash_latency: u8,
-    /// PWR_CR5.R1MODE == 0: Range 1 boost mode.
+    /// PWR_CR5.R1MODE == 0: Range 1 boost mode (G4).
     pub boost: bool,
+    /// STM32H7 PWR_D3CR.VOS (1 = VOS3, 2 = VOS2, 3 = VOS1).
+    pub vos_field: u8,
+    /// STM32H7 SYSCFG_PWRCR.ODEN (overdrive: VOS1 + ODEN = VOS0).
+    pub oden: bool,
     /// Alternate-function table: pin -> AF number -> signal id.
     pub af: Vec<[u16; 16]>,
     /// Signal currently selected on each pin (0 = none or not in alternate-function mode).
@@ -139,7 +188,7 @@ impl ArmSys {
     pub fn new(gpio_count: usize, hsi_hz: f64, vcc: f64, hse_hz: f64) -> Self {
         let words = gpio_count.div_ceil(32).max(1);
         let mut sig_level = [0u8; NSIG];
-        for p in 1..=6u8 {
+        for p in 1..=sig::UARTS {
             sig_level[sig::uart(p, false) as usize] = 1; // idle UART lines are high
         }
         Self {
@@ -148,15 +197,17 @@ impl ArmSys {
             levels: vec![0; words],
             trace: PinTrace::new(1 << 16, gpio_count),
             clock: ClockModel::new(hsi_hz),
-            clk: ClockTree { sysclk_hz: hsi_hz, hclk_hz: hsi_hz, ppre1: 1, ppre2: 1 },
+            clk: ClockTree::flat(hsi_hz),
             vcc,
             hse_hz,
             serial_out: Vec::new(),
             messages: Vec::new(),
             warned: HashSet::new(),
-            enr: [0; 6],
+            enr: [0; NENR],
             flash_latency: 0,
             boost: false,
+            vos_field: 1,
+            oden: false,
             af: vec![[sig::NONE; 16]; gpio_count],
             pin_sig: vec![sig::NONE; gpio_count],
             route: [NO_PIN; NSIG],
@@ -203,12 +254,22 @@ impl ArmSys {
     /// Applies new clock-tree values at cycle `now`. Peripherals are told through
     /// `on_clock_change` once the current bus access completes.
     pub fn set_clock_tree(&mut self, t: ClockTree, now: u64) {
-        let changed = self.clk.hclk_hz != t.hclk_hz || self.clk.ppre1 != t.ppre1 || self.clk.ppre2 != t.ppre2;
+        let changed = self.clk.hclk_hz != t.hclk_hz || self.clk.ppre1 != t.ppre1 || self.clk.ppre2 != t.ppre2 || self.clk.ppre3 != t.ppre3 || self.clk.ppre4 != t.ppre4 || self.clk.tim1 != t.tim1 || self.clk.tim2 != t.tim2;
         self.clk = t;
         self.clock.set_hz(t.hclk_hz, now);
         if changed {
             self.clock_dirty = true;
             self.attn = true;
+        }
+    }
+
+    /// STM32H7 active voltage scaling level: 3 (VOS3, lowest) .. 0 (VOS0 = VOS1 with overdrive).
+    pub fn vos_level(&self) -> u8 {
+        match self.vos_field & 3 {
+            2 => 2,
+            3 if self.oden => 0,
+            3 => 1,
+            _ => 3,
         }
     }
 
@@ -307,11 +368,11 @@ impl ArmSys {
     pub fn reset_pins(&mut self, cycle: u64) {
         self.route = [NO_PIN; NSIG];
         self.pin_sig.iter_mut().for_each(|s| *s = sig::NONE);
-        for p in 1..=6u8 {
+        for p in 1..=sig::UARTS {
             self.sig_level[sig::uart(p, false) as usize] = 1;
             self.sig_level[sig::uart(p, true) as usize] = 0;
         }
-        for t in 2..=4u8 {
+        for t in 2..=5u8 {
             for c in 0..4 {
                 self.sig_level[sig::tim(t, c) as usize] = 0;
             }
@@ -331,10 +392,12 @@ impl ArmSys {
             p.volts = 0.0;
         }
         self.clock.reset(hsi_hz);
-        self.clk = ClockTree { sysclk_hz: hsi_hz, hclk_hz: hsi_hz, ppre1: 1, ppre2: 1 };
-        self.enr = [0; 6];
+        self.clk = ClockTree::flat(hsi_hz);
+        self.enr = [0; NENR];
         self.flash_latency = 0;
         self.boost = false;
+        self.vos_field = 1;
+        self.oden = false;
         self.changed.clear();
         self.resets.clear();
         self.messages.clear();

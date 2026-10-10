@@ -1,7 +1,8 @@
-//! GPIO port (STM32G4, RM0440 section 8): MODER, OTYPER, OSPEEDR, PUPDR, IDR, ODR, BSRR, LCKR,
-//! AFRL/AFRH and BRR driving the electrical pin model in [`ArmSys`](crate::arm::sys::ArmSys).
+//! GPIO port (STM32G4 RM0440 section 8, STM32H7 RM0433 section 11; the same IP): MODER, OTYPER,
+//! OSPEEDR, PUPDR, IDR, ODR, BSRR, LCKR, AFRL/AFRH and BRR driving the electrical pin model in
+//! [`ArmSys`](crate::arm::sys::ArmSys). (The H7 has no BRR; the extra register is harmless.)
 //!
-//! * The port registers are only accessible while the port's AHB2 clock is enabled (RCC_AHB2ENR);
+//! * The port registers are only accessible while the port's clock is enabled (G4: RCC_AHB2ENR, H7: RCC_AHB4ENR);
 //!   with the clock off reads return 0 and writes are ignored (as on silicon).
 //! * Output speed (OSPEEDR) is stored but has no electrical effect.
 //! * The LCKR key sequence (write 1/0/1 of LCKK with the same lock mask, then read) is modelled; locked
@@ -26,7 +27,8 @@ const BRR: u32 = 0x28;
 
 pub struct Gpio {
     port: u8,
-    /// RCC clock-enable bit in AHB2ENR.
+    /// RCC clock-enable register (index in `ArmSys::enr`) and bit: AHB2ENR on the G4, AHB4ENR on the H7.
+    en_reg: u8,
     en_bit: u8,
     moder: u32,
     otyper: u32,
@@ -42,8 +44,8 @@ pub struct Gpio {
 }
 
 impl Gpio {
-    pub fn new(port: u8) -> Self {
-        let mut g = Self { port, en_bit: port, moder: 0, otyper: 0, ospeedr: 0, pupdr: 0, odr: 0, afr: [0; 2], lock_mask: 0, lckk: false, lock_seq: 0, lock_tmp: 0 };
+    pub fn new(port: u8, enable: mcs_core::arm::device::BusEnable) -> Self {
+        let mut g = Self { port, en_reg: enable.reg, en_bit: enable.bit, moder: 0, otyper: 0, ospeedr: 0, pupdr: 0, odr: 0, afr: [0; 2], lock_mask: 0, lckk: false, lock_seq: 0, lock_tmp: 0 };
         g.set_reset_values();
         g
     }
@@ -137,7 +139,7 @@ impl Gpio {
 
 impl Mmio for Gpio {
     fn read(&mut self, offset: u32, size: u8, cx: &mut Cx) -> u32 {
-        if !cx.sys.clock_on(1, self.en_bit) {
+        if !cx.sys.clock_on(self.en_reg, self.en_bit) {
             return 0;
         }
         if offset & !3 == LCKR && self.lock_seq == 3 {
@@ -156,7 +158,7 @@ impl Mmio for Gpio {
     }
 
     fn write(&mut self, offset: u32, size: u8, value: u32, cx: &mut Cx) {
-        if !cx.sys.clock_on(1, self.en_bit) {
+        if !cx.sys.clock_on(self.en_reg, self.en_bit) {
             return;
         }
         let off = offset & !3;

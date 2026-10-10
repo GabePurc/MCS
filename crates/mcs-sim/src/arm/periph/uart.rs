@@ -104,14 +104,7 @@ pub struct Uart {
 
 impl Uart {
     pub fn new(inst: &UartInstance) -> Self {
-        let idx = match inst.name.as_str() {
-            "USART1" => 1,
-            "USART2" => 2,
-            "USART3" => 3,
-            "UART4" => 4,
-            "UART5" => 5,
-            _ => 6,
-        };
+        let idx = crate::arm::sys::uart_index(&inst.name).max(1);
         Self {
             name: inst.name.clone(),
             kind: inst.kind,
