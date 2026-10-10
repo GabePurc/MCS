@@ -2,6 +2,7 @@
 //! run on `mcs_sim::arm::Machine`. Expected values are derived by hand from the instruction
 //! semantics (ARM DDI 0403E.e) and the cycle model documented in `arm/exec.rs`.
 
+mod dsp_fp;
 mod programs;
 
 use mcs_sim::arm::bus::{Cx, Mmio};

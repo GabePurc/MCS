@@ -11,13 +11,14 @@
 //! * taken branches: 1 + 2 (pipeline refill), not-taken conditional branches / CBZ: 1;
 //!   BL/BX/BLX: 3, TBB/TBH: 2 + 2
 //! * MRS/MSR: 2, ISB: 3, other barriers and hints: 1
+//! * DSP-extension instructions: 1; floating point: see `exec_ext.rs`
 //! * the back-to-back load/store pipelining discount (consecutive LDRs after the first cost 1)
 //!   and flash wait states are not modelled.
 
 use mcs_core::arm::disasm::it_advance;
 use mcs_core::arm::thumb::*;
 
-use super::cpu::{CONTROL_NPRIV, CONTROL_SPSEL};
+use super::cpu::{CONTROL_FPCA, CONTROL_NPRIV, CONTROL_SPSEL};
 use super::machine::Machine;
 use super::nvic::*;
 use super::scb::*;
@@ -76,7 +77,7 @@ pub fn shift_c(v: u32, kind: u8, amt: u32, c: bool) -> (u32, bool) {
 }
 
 #[inline(always)]
-fn ssat(v: i32, n: u32) -> (u32, bool) {
+pub(super) fn ssat(v: i32, n: u32) -> (u32, bool) {
     let max = ((1i64 << (n - 1)) - 1) as i32;
     let min = (-(1i64 << (n - 1))) as i32;
     if v > max {
@@ -89,7 +90,7 @@ fn ssat(v: i32, n: u32) -> (u32, bool) {
 }
 
 #[inline(always)]
-fn usat(v: i32, n: u32) -> (u32, bool) {
+pub(super) fn usat(v: i32, n: u32) -> (u32, bool) {
     let max = ((1i64 << n) - 1) as i32 as i64;
     if (v as i64) > max {
         (max as u32, true)
@@ -756,7 +757,10 @@ impl Machine {
                 match i.imm {
                     0..=3 => {
                         if i.aux & 2 != 0 {
-                            self.cpu.set_apsr(v & 0xf800_0000);
+                            self.cpu.set_nzcvq(v);
+                        }
+                        if i.aux & 1 != 0 && self.cfg.features.has(ArmFeatures::DSP) {
+                            self.cpu.ge = ((v >> 16) & 0xf) as u8;
                         }
                     }
                     8 if priv_ => self.cpu.set_msp(v),
@@ -784,6 +788,9 @@ impl Machine {
                     }
                     20 if priv_ => {
                         let mut c = (self.cpu.control & !CONTROL_NPRIV) | (v as u8 & CONTROL_NPRIV);
+                        if self.cfg.features.has_fpu() {
+                            c = (c & !CONTROL_FPCA) | (v as u8 & CONTROL_FPCA);
+                        }
                         if self.cpu.ipsr == 0 {
                             c = (c & !CONTROL_SPSEL) | (v as u8 & CONTROL_SPSEL);
                             self.cpu.select_sp(c & CONTROL_SPSEL != 0);
@@ -849,6 +856,8 @@ impl Machine {
                 self.cpu.cycles += 1;
                 self.raise_fault(pc, EXC_USAGEFAULT, UFSR_UNDEFINSTR);
             }
+            // DSP extension and floating point (out of line).
+            _ => self.exec_ext(i, pc),
         }
     }
 }

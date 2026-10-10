@@ -1,7 +1,8 @@
 //! System Control Block and the rest of the System Control Space dispatcher (0xE000_E000).
 //!
 //! Registers: ACTLR, SysTick (CSR/RVR/CVR/CALIB), NVIC, CPUID, ICSR, VTOR, AIRCR, SCR, CCR,
-//! SHPR1-3, SHCSR, CFSR, HFSR, DFSR, MMFAR, BFAR, AFSR, CPACR and a read-as-zero MPU TYPE; plus the
+//! SHPR1-3, SHCSR, CFSR, HFSR, DFSR, MMFAR, BFAR, AFSR, CPACR, the FP context registers (FPCCR,
+//! FPCAR, FPDSCR, MVFR0-2) and a read-as-zero MPU TYPE; plus the
 //! DWT CTRL/CYCCNT pair (0xE000_1000) many STM32 programs use for cycle counting.
 //!
 //! References: ARM DDI 0403E.e B3.2 (SCB), Cortex-M4 Devices Generic User Guide (ARM DUI 0553)
@@ -15,6 +16,12 @@ pub const CCR_USERSETMPEND: u32 = 1 << 1;
 pub const CCR_UNALIGN_TRP: u32 = 1 << 3;
 pub const CCR_DIV_0_TRP: u32 = 1 << 4;
 pub const CCR_STKALIGN: u32 = 1 << 9;
+
+/// FPCCR bits (floating-point context control, 0xE000_EF34).
+pub const FPCCR_ASPEN: u32 = 1 << 31;
+pub const FPCCR_LSPEN: u32 = 1 << 30;
+/// FPSCR bits stored in FPDSCR (the default loaded on exception entry): AHP, DN, FZ, RMode.
+pub const FPDSCR_MASK: u32 = 0x07c0_0000;
 
 pub const SHCSR_MEMFAULTENA: u32 = 1 << 16;
 pub const SHCSR_BUSFAULTENA: u32 = 1 << 17;
@@ -51,6 +58,10 @@ pub struct Scb {
     pub afsr: u32,
     pub cpacr: u32,
     pub actlr: u32,
+    /// FPCCR: only ASPEN and LSPEN are modelled (lazy stacking is performed eagerly).
+    pub fpccr: u32,
+    pub fpcar: u32,
+    pub fpdscr: u32,
     pub dwt_ctrl: u32,
     pub dwt_off: u64,
 }
@@ -71,6 +82,9 @@ impl Scb {
             afsr: 0,
             cpacr: 0,
             actlr: 0,
+            fpccr: FPCCR_ASPEN | FPCCR_LSPEN,
+            fpcar: 0,
+            fpdscr: 0,
             dwt_ctrl: 0,
             dwt_off: 0,
         }
@@ -102,6 +116,7 @@ impl Machine {
             return Some(0); // ITM / FPB / reserved: RAZ
         }
         let off = addr & 0xfff;
+        let fpu = self.cfg.features.has_fpu();
         Some(match off {
             0x008 => self.scb.actlr,
             0x010 => self.systick.read_csr(),
@@ -154,6 +169,12 @@ impl Machine {
             0xd3c => self.scb.afsr,
             0xd88 => self.scb.cpacr,
             0xf00 => 0,
+            0xf34 if fpu => self.scb.fpccr,
+            0xf38 if fpu => self.scb.fpcar,
+            0xf3c if fpu => self.scb.fpdscr,
+            0xf40 if fpu => self.fp_sysreg(mcs_core::arm::vfp::FPREG_MVFR0),
+            0xf44 if fpu => self.fp_sysreg(mcs_core::arm::vfp::FPREG_MVFR1),
+            0xf48 if fpu && self.cfg.features.has(mcs_core::arm::thumb::ArmFeatures::FPV5_DP) => self.fp_sysreg(mcs_core::arm::vfp::FPREG_MVFR2),
             _ => 0,
         })
     }
@@ -256,7 +277,11 @@ impl Machine {
             0xd34 => self.scb.mmfar = v,
             0xd38 => self.scb.bfar = v,
             0xd3c => self.scb.afsr = v,
-            0xd88 => self.scb.cpacr = v,
+            // CPACR: CP10 / CP11 access (only the FPU coprocessors exist).
+            0xd88 => self.scb.cpacr = if self.cfg.features.has_fpu() { v & 0x00f0_0000 } else { 0 },
+            0xf34 if self.cfg.features.has_fpu() => self.scb.fpccr = v & (FPCCR_ASPEN | FPCCR_LSPEN),
+            0xf38 if self.cfg.features.has_fpu() => self.scb.fpcar = v & !7,
+            0xf3c if self.cfg.features.has_fpu() => self.scb.fpdscr = v & FPDSCR_MASK,
             _ => {}
         }
     }

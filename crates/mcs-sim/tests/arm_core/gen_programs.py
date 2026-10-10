@@ -15,11 +15,19 @@ PROGS = os.path.join(HERE, "programs")
 OBJDUMP = subprocess.check_output(["xcrun", "--find", "llvm-objdump"]).decode().strip()
 
 
+def cpu_flags(src):
+    """Programs assembled for the Cortex-M7 (FPv5-D16) carry a `@ cpu: cortex-m7` line."""
+    with open(src) as f:
+        if "@ cpu: cortex-m7" in f.read():
+            return ["-mcpu=cortex-m7", "-mfpu=fpv5-d16"]
+    return ["-mcpu=cortex-m4"]
+
+
 def assemble(src):
     with tempfile.TemporaryDirectory() as tmp:
         obj = os.path.join(tmp, "a.o")
         subprocess.check_call(
-            ["clang", "--target=thumbv7em-none-eabi", "-mcpu=cortex-m4", "-I", PROGS, "-c", src, "-o", obj]
+            ["clang", "--target=thumbv7em-none-eabi"] + cpu_flags(src) + ["-I", PROGS, "-c", src, "-o", obj]
         )
         dump = subprocess.check_output([OBJDUMP, "-s", "-j", ".text", obj]).decode()
         syms = subprocess.check_output([OBJDUMP, "-t", obj]).decode()

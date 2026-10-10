@@ -7,6 +7,7 @@
 //! * `r[15]` is refreshed with `address + 4` before each instruction (the architectural PC read
 //!   value); `pc` is the address of the *next* instruction to fetch.
 //! * The APSR flags are separate booleans, materialized only for MRS / exception entry.
+//! * The FP register file (`fpr`, S0-S31 with D0-D15 aliased onto pairs) and FPSCR live here too.
 
 use serde::Serialize;
 
@@ -20,6 +21,9 @@ pub const PSR_T: u32 = 1 << 24;
 /// CONTROL register bits.
 pub const CONTROL_NPRIV: u8 = 1;
 pub const CONTROL_SPSEL: u8 = 2;
+/// Floating-point context active: set when an FP instruction runs (FPCCR.ASPEN), selects the
+/// extended exception frame.
+pub const CONTROL_FPCA: u8 = 4;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -48,6 +52,8 @@ pub struct Cpu {
     pub c: bool,
     pub v: bool,
     pub q: bool,
+    /// APSR.GE[3:0] (DSP extension).
+    pub ge: u8,
     /// Current exception number (0 = thread mode).
     pub ipsr: u16,
     /// IT block state (EPSR ITSTATE[7:0]).
@@ -67,6 +73,9 @@ pub struct Cpu {
     pub excl_valid: bool,
     pub excl_addr: u32,
     pub stop: StopReason,
+    /// Floating-point registers S0-S31 (D0-D15 alias pairs: Dn = S(2n) low, S(2n+1) high).
+    pub fpr: [u32; 32],
+    pub fpscr: u32,
 }
 
 impl Cpu {
@@ -81,6 +90,7 @@ impl Cpu {
             c: false,
             v: false,
             q: false,
+            ge: 0,
             ipsr: 0,
             itstate: 0,
             control: 0,
@@ -95,6 +105,8 @@ impl Cpu {
             excl_valid: false,
             excl_addr: 0,
             stop: StopReason::None,
+            fpr: [0; 32],
+            fpscr: 0,
         }
     }
 
@@ -154,18 +166,26 @@ impl Cpu {
         self.ipsr != 0 || self.control & CONTROL_NPRIV == 0
     }
 
-    /// APSR (flags only).
+    /// APSR: flags N Z C V Q and GE[3:0].
     #[inline]
     pub fn apsr(&self) -> u32 {
-        (self.n as u32) << 31 | (self.z as u32) << 30 | (self.c as u32) << 29 | (self.v as u32) << 28 | (self.q as u32) << 27
+        (self.n as u32) << 31 | (self.z as u32) << 30 | (self.c as u32) << 29 | (self.v as u32) << 28 | (self.q as u32) << 27 | (self.ge as u32) << 16
     }
 
-    pub fn set_apsr(&mut self, v: u32) {
+    /// Sets N, Z, C, V and Q from bits 31:27 of `v`.
+    #[inline]
+    pub fn set_nzcvq(&mut self, v: u32) {
         self.n = v & PSR_N != 0;
         self.z = v & PSR_Z != 0;
         self.c = v & PSR_C != 0;
         self.v = v & PSR_V != 0;
         self.q = v & PSR_Q != 0;
+    }
+
+    /// Sets the whole APSR (flags and GE bits).
+    pub fn set_apsr(&mut self, v: u32) {
+        self.set_nzcvq(v);
+        self.ge = ((v >> 16) & 0xf) as u8;
     }
 
     /// Full xPSR: flags, T bit, ITSTATE and exception number.

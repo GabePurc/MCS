@@ -12,7 +12,7 @@
 use crate::scheduler::Scheduler;
 
 use super::bus::{Bus, MemConfig, Mmio, T_PERIPH, T_PPB};
-use super::cpu::{Cpu, StopReason, CONTROL_SPSEL};
+use super::cpu::{Cpu, StopReason, CONTROL_FPCA, CONTROL_SPSEL};
 use super::debug::{is_call, is_return, Dbg, StepCond};
 use super::nvic::*;
 use super::periph::serial::SerialBridge;
@@ -66,6 +66,18 @@ impl Default for ArmConfig {
             systick_calib: 0,
             unmapped_peripherals_raz: false,
         }
+    }
+}
+
+impl ArmConfig {
+    /// Cortex-M7 with the double-precision FPU (FPv5-D16).
+    pub fn cortex_m7() -> Self {
+        Self { features: ArmFeatures::CORTEX_M7, cpuid: 0x411f_c270, ..Self::default() }
+    }
+
+    /// Cortex-M3 (no DSP extension, no FPU).
+    pub fn cortex_m3() -> Self {
+        Self { features: ArmFeatures::BASE, cpuid: 0x411f_c231, ..Self::default() }
     }
 }
 
@@ -616,20 +628,30 @@ impl Machine {
         self.raise_fault(pc, EXC_BUSFAULT, BFSR_PRECISERR | BFSR_BFARVALID);
     }
 
-    /// Exception entry (ARM DDI 0403E.e B1.5.6): stack the 8-word frame, switch to handler mode.
+    /// Exception entry (ARM DDI 0403E.e B1.5.6): stack the 8-word frame (26 words with the
+    /// floating-point context when CONTROL.FPCA is set), switch to handler mode.
+    ///
+    /// Lazy FP stacking (FPCCR.LSPEN) is performed eagerly: the 16 single registers and FPSCR are
+    /// always written at entry, so FPCCR.LSPACT never becomes set and the handler sees the same
+    /// register values either way. The extended frame is 0x68 bytes: R0-R3, R12, LR, ReturnAddress,
+    /// xPSR, S0-S15, FPSCR and one reserved word.
     fn exception_entry(&mut self, exc: u16) {
         let ret_pc = self.cpu.pc;
         let thread = self.cpu.ipsr == 0;
-        let exc_return: u32 = if !thread {
+        let ext = self.cpu.control & CONTROL_FPCA != 0 && self.cfg.features.has_fpu();
+        let mut exc_return: u32 = if !thread {
             0xffff_fff1
         } else if !self.cpu.psp_active {
             0xffff_fff9
         } else {
             0xffff_fffd
         };
+        if ext {
+            exc_return &= !0x10;
+        }
         let mut frame = self.cpu.r[13];
         let align = self.scb.ccr & CCR_STKALIGN != 0 && frame & 4 != 0;
-        frame = frame.wrapping_sub(0x20);
+        frame = frame.wrapping_sub(if ext { 0x68 } else { 0x20 });
         if align {
             frame &= !4;
         }
@@ -642,6 +664,24 @@ impl Machine {
                 self.lockup();
                 return;
             }
+        }
+        if ext {
+            for k in 0..18usize {
+                let w = match k {
+                    16 => self.cpu.fpscr,
+                    17 => 0,
+                    _ => self.cpu.fpr[k],
+                };
+                if !self.mem_write(frame.wrapping_add(0x20 + 4 * k as u32), 4, w) {
+                    self.scb.cfsr |= BFSR_STKERR;
+                    self.lockup();
+                    return;
+                }
+            }
+            // The handler starts with a clean FP state: FPSCR takes the FPDSCR defaults.
+            self.cpu.control &= !CONTROL_FPCA;
+            self.cpu.fpscr = self.scb.fpdscr;
+            self.cpu.cycles += 18;
         }
         self.cpu.r[13] = frame;
         self.exc_stack.push((exc, frame));
@@ -676,7 +716,8 @@ impl Machine {
     pub(crate) fn exception_return(&mut self, v: u32, pc: u32) {
         let exc = self.cpu.ipsr;
         let to_handler = v & 0xf == 1;
-        let ok = matches!(v & 0xf, 0x1 | 0x9 | 0xd) && v >> 4 == 0x0fff_ffff;
+        let ext = v & 0x10 == 0;
+        let ok = matches!(v & 0xf, 0x1 | 0x9 | 0xd) && v >> 5 == 0x07ff_ffff && (!ext || self.cfg.features.has_fpu());
         let remaining = self.nest.len().saturating_sub(1);
         if !ok || (to_handler && remaining == 0) || (!to_handler && remaining > 0 && self.scb.ccr & CCR_NONBASETHRDENA == 0) {
             self.raise_fault(pc, EXC_USAGEFAULT, UFSR_INVPC);
@@ -716,7 +757,25 @@ impl Machine {
                 }
             }
         }
-        let sp_after = frame.wrapping_add(0x20).wrapping_add(if w[7] & (1 << 9) != 0 { 4 } else { 0 });
+        if ext {
+            // Extended frame: S0-S15, FPSCR (the FP context is restored before the core registers).
+            let mut fp = [0u32; 17];
+            for (k, slot) in fp.iter_mut().enumerate() {
+                match self.mem_read(frame.wrapping_add(0x20 + 4 * k as u32), 4) {
+                    Some(x) => *slot = x,
+                    None => {
+                        self.scb.cfsr |= BFSR_UNSTKERR;
+                        self.lockup();
+                        return;
+                    }
+                }
+            }
+            self.cpu.fpr[..16].copy_from_slice(&fp[..16]);
+            self.cpu.fpscr = fp[16] & super::fpu::FPSCR_WMASK;
+            self.cpu.cycles += 18;
+        }
+        let frame_size = if ext { 0x68 } else { 0x20 };
+        let sp_after = frame.wrapping_add(frame_size).wrapping_add(if w[7] & (1 << 9) != 0 { 4 } else { 0 });
         let c = &mut self.cpu;
         c.r[0] = w[0];
         c.r[1] = w[1];
@@ -728,6 +787,7 @@ impl Machine {
         c.set_xpsr(w[7]);
         c.select_sp(use_psp && !to_handler);
         c.r[13] = sp_after;
+        c.control = (c.control & !CONTROL_FPCA) | if ext { CONTROL_FPCA } else { 0 };
         if !to_handler {
             if use_psp {
                 c.control |= SPSEL;
