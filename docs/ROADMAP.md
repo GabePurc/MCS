@@ -55,6 +55,9 @@ Update this file when work is finished (only list items that are done in the rep
 - [x] Symbol View (View > Symbol View, Ctrl+Shift+O): the editor shows one assembly label / C function at a time with a symbol sidebar in file order; one document (real line numbers, one undo history), edits and cursor stay in the shown symbol, jumps (go to line, breakpoints, debugger, search, undo) switch symbols; "+" adds a label / function after the shown one; incremental outline (changed lines only for assembly, top-level syntax tree for C)
 - [x] Device Definitions (.inc) is a tool window (float, dock or pop out) with a line filter
 
+### Multi-architecture (docs/MULTI_ARCH.md, Stage B1)
+- [x] Standalone ARMv7-M core, not yet wired into the session: `mcs_core::arm` Thumb/Thumb-2 decoder + UAL disassembler (all base-ISA encodings, DSP saturating/extend-and-add subset; checked against 1900+ `llvm-objdump` reference lines in `crates/mcs-core/tests/arm_thumb`), `mcs_sim::arm` machine (r0-r15/xPSR/MSP/PSP/CONTROL/PRIMASK/FAULTMASK/BASEPRI, pre-decoded flash, memory bus with `Mmio` peripheral trait, NVIC with priority grouping/preemption/tail-chaining, SysTick, SCB incl. fault escalation/lockup, WFI/WFE sleep with fast-forward, ~300 simulated MHz); tests in `crates/mcs-sim/tests/arm_core` (programs assembled by clang, `gen_programs.py`)
+
 ## Next
 - [ ] DWARF variable/type info (`.debug_info`) for a typed Watch window and locals
 - [ ] Data breakpoints (watchpoints) and conditional / hit-count breakpoints
@@ -64,7 +67,7 @@ Update this file when work is finished (only list items that are done in the rep
 - [ ] More devices (issues #1, #5): ATtiny20/40, then the AVR-0/1 series (new register map)
 - [ ] Virtual I²C/SPI devices on the bus (EEPROM, sensors) so TWI/SPI transfers get answers
 - [ ] SPM self-programming, debugWIRE, timer asynchronous (TOSC) mode, USART synchronous / MSPIM modes
-- [ ] ARM Cortex-M (STM32) targets: needs the architecture abstraction below plus a Thumb-2 core, NVIC/SysTick and per-family peripherals
+- [ ] ARM Cortex-M (STM32) targets: Thumb-2 core, NVIC and SysTick exist (Stage B1); still needs the architecture abstraction below, FPU, ELF/HEX loading at 0x0800_0000 and per-family peripherals
 - [ ] Architecture abstraction for non-AVR targets (machine trait, register descriptions in specs)
 - [ ] Project files (multi-file C builds, per-project device/clock/fuses)
 - [ ] Signed release builds (Apple notarization, Windows code signing)
