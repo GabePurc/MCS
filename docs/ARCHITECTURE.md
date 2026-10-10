@@ -32,6 +32,7 @@ logic is Rust; TypeScript only renders and routes user input.
   registry `devices::get_any` / `list_any` across all architectures. Neutral code (session, API)
   uses these; AVR-only code (assembler, disassembler, definition files, ISA tables) takes the
   spec through `DeviceRef::as_avr()` or `avr::devices` directly.
+* `arm/thumb.rs` + `arm/disasm.rs` — ARMv7-M Thumb/Thumb-2 decoder (encoding -> compact `Insn` with an `Op` id and normalized operands, branch/literal offsets relative to the instruction) and the UAL disassembler formatting the same `Insn`; the simulator's executor consumes the same decode result.
 * `program.rs` — `LoadedProgram`: flash image + symbols + line table + diagnostics. Every
   front-end (assembler, ELF, HEX) produces it; the simulator and UI consume it.
 
@@ -48,6 +49,7 @@ logic is Rust; TypeScript only renders and routes user input.
 * `scheduler.rs` — cycle-stamped events. Peripherals schedule the exact cycle where something
   observable happens (e.g. the timer's next compare match/TOP/BOTTOM tick) and advance lazily
   when software touches their registers, so idle peripherals cost nothing per instruction.
+* `arm/` — standalone ARMv7-M machine (not yet behind the session): `cpu.rs` registers/xPSR/SP banking, `bus.rs` memory map + `Mmio` peripheral trait (event-driven via `Cx::schedule`), `exec.rs` dense-`match` executor with Cortex-M4 cycle counts, `machine.rs` run loop + exception entry/return/tail-chaining/fault escalation, `nvic.rs`, `scb.rs` (System Control Space registers), `systick.rs`.
 * `pins.rs` — electrical model (direction, latch, pull-up, peripheral override, external
   drive incl. analog voltage, Schmitt thresholds, contention detection), the logic-analyzer
   trace ring buffer (`ceil(GPIOs / 32)` words per entry, so the 86-pin ATmega2560 and custom devices trace every pin) and the piecewise clock model (cycles <-> seconds across clock changes).
