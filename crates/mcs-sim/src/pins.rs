@@ -60,6 +60,8 @@ pub struct Pin {
     /// Output latch.
     pub out: u8,
     pub pullup: u8,
+    /// Pull-down resistor enabled (ARM GPIO PUPDR; AVR has none).
+    pub pulldown: u8,
     /// A peripheral (e.g. timer OCx) overrides the output value.
     pub ov_enable: u8,
     pub ov_value: u8,
@@ -128,6 +130,9 @@ impl Pin {
                     if self.pullup != 0 {
                         self.level = 1;
                         self.volts = vcc;
+                    } else if self.pulldown != 0 {
+                        self.level = 0;
+                        self.volts = 0.0;
                     } else {
                         // Floating input: keep the last level (real hardware is undefined).
                         self.volts = if self.level != 0 { vcc } else { 0.0 };

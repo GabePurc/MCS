@@ -267,3 +267,10 @@ a.link:hover { text-decoration: underline; }
 .symview-new { padding: 3px 6px; }
 .symview-new input { width: 100%; box-sizing: border-box; }
 .symview-new .error-text { font-size: 11px; padding-top: 2px; white-space: normal; }
+
+/* ARM peripheral registers are 32 bits wide: wrap the bit boxes in two rows of 16. */
+.bit-boxes.wide { flex-wrap: wrap; max-width: 215px; row-gap: 2px; }
+.reg-grid.fp { grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); }
+.reg-cell .reg-extra { margin-left: 6px; color: #6d7a8a; }
+.psr-row { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; padding: 8px 8px 4px; }
+.psr-info { padding: 0 8px 8px; color: #4c607a; }

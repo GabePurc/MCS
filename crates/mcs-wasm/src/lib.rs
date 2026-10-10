@@ -124,6 +124,11 @@ mod tests {
         assert_eq!(r["result"]["ok"], true);
         let r: Value = serde_json::from_str(&call_json(r#"{"method":"sim","cmd":{"type":"init","deviceId":"attiny10"}}"#)).unwrap();
         assert!(r["result"]["outputs"].as_array().unwrap().len() >= 2);
+        let outs = r["result"]["outputs"].as_array().unwrap();
+        assert_eq!(outs[0]["spec"]["arch"], "avr");
+        let st = &outs[1]["state"];
+        assert_eq!((st["core"]["arch"].as_str(), st["core"]["regs"].as_array().map(|a| a.len()), st["pcBytes"].as_u64()), (Some("avr"), Some(32), Some(0)));
+        assert!(r["result"]["outputs"].as_array().unwrap().len() >= 2);
         let r: Value = serde_json::from_str(&call_json(r#"{"method":"disassemble","deviceId":"attiny10","flash":[0,192],"labels":{"0":"start"}}"#)).unwrap();
         assert_eq!(r["result"][0]["mnemonic"], "rjmp");
         let r: Value = serde_json::from_str(&call_json(r#"{"method":"nope"}"#)).unwrap();

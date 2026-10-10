@@ -7,6 +7,7 @@ import { baseName } from './debugInfo';
 import { EXAMPLES, templateFor } from './examples';
 import { useDevices } from '../state/devices';
 import { selectDevice } from './device';
+import { loadBundledImage } from './build';
 
 const SOURCE_FILTERS = [
   { name: 'Source files', extensions: ['asm', 's', 'S', 'inc', 'c', 'h', 'cpp', 'mc'] },
@@ -47,7 +48,8 @@ export function openExample(name: string): void {
   // C needs the right -mmcu).
   const dev = useDevices.getState().devices.find((d) => d.name === (ex.device ?? 'ATtiny10'));
   if (dev && (ex.device || /\.c$/.test(name))) selectDevice(dev.id);
-  addDoc(ex.name, null, ex.text);
+  if (ex.image) void loadBundledImage(ex.image, ex.name);
+  else addDoc(ex.name, null, ex.text);
 }
 
 export async function saveDoc(doc: Doc | undefined = activeDoc(), forceDialog = false): Promise<boolean> {

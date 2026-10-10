@@ -3,7 +3,7 @@
  * document, reports diagnostics to the Output window/editor and loads the result into the
  * simulator. Also handles HEX/ELF import.
  */
-import { buildAsm, buildC, buildMachineCode, importProgram, pickFile, programToMachineCode } from '../backend/api';
+import { buildAsm, buildC, buildMachineCode, importProgram, importProgramBytes, pickFile, programToMachineCode } from '../backend/api';
 import type { BuildOutcome, Diagnostic, LoadedProgram } from '../backend/types';
 import { getDocText } from '../editor/docText';
 import { useSettings } from '../state/settings';
@@ -11,6 +11,7 @@ import { activeDoc, addDoc, appendOutput, clearOutput, enabledBreakpointPcs, set
 import { useSim } from '../state/sim';
 import { sim } from './simClient';
 import { baseName } from './debugInfo';
+import { archOf } from '../state/devices';
 
 /** Source text the current build was produced from (to detect stale builds). */
 let builtText: string | null = null;
@@ -105,9 +106,25 @@ export async function buildDoc(doc: Doc): Promise<boolean> {
 }
 
 export function loadProgram(program: LoadedProgram, docId: string | null, label: string, deviceId: string): void {
-  setBuild(program, docId, label);
+  setBuild(program, docId, label, archOf(deviceId));
   sim({ type: 'load', deviceId, program });
   sim({ type: 'setBreakpoints', pcs: enabledBreakpointPcs() });
+}
+
+/** Reports an imported image and loads it into the simulator. Returns true on success. */
+function loadImported(r: BuildOutcome, name: string): boolean {
+  logDiagnostics(r.diagnostics, name);
+  if (!r.ok || !r.program) {
+    appendOutput('error', `Import failed: ${name}`);
+    showOutput();
+    return false;
+  }
+  if (r.deviceId !== useSettings.getState().deviceId) useSettings.getState().set({ deviceId: r.deviceId });
+  appendOutput('success', `Imported ${name} (${r.program.format.toUpperCase()}, ${r.program.flashUsed} bytes, ${r.program.lines.length} line-table rows)`);
+  builtText = null;
+  builtDocId = null;
+  loadProgram(r.program, null, name, r.deviceId);
+  return true;
 }
 
 /** File > Import HEX/ELF. */
@@ -117,23 +134,25 @@ export async function importHexOrElf(): Promise<void> {
     { name: 'All files', extensions: ['*'] },
   ]);
   if (!path) return;
-  const settings = useSettings.getState();
   try {
-    const r = await importProgram(path, settings.deviceId);
-    logDiagnostics(r.diagnostics, path);
-    if (!r.ok || !r.program) {
-      appendOutput('error', `Import failed: ${baseName(path)}`);
-      showOutput();
-      return;
-    }
-    if (r.deviceId !== settings.deviceId) useSettings.getState().set({ deviceId: r.deviceId });
-    appendOutput('success', `Imported ${baseName(path)} (${r.program.format.toUpperCase()}, ${r.program.flashUsed} bytes, ${r.program.lines.length} line-table rows)`);
-    builtText = null;
-    builtDocId = null;
-    loadProgram(r.program, null, baseName(path), r.deviceId);
+    loadImported(await importProgram(path, useSettings.getState().deviceId), baseName(path));
   } catch (e) {
     appendOutput('error', `Import failed: ${e instanceof Error ? e.message : String(e)}`);
     showOutput();
+  }
+}
+
+/** Loads a bundled prebuilt image (an example without source) onto the current device. */
+export async function loadBundledImage(url: string, name: string): Promise<boolean> {
+  try {
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const bytes = new Uint8Array(await res.arrayBuffer());
+    return loadImported(await importProgramBytes(bytes, name, useSettings.getState().deviceId), name);
+  } catch (e) {
+    appendOutput('error', `Could not load ${name}: ${e instanceof Error ? e.message : String(e)}`);
+    showOutput();
+    return false;
   }
 }
 

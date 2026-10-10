@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type JSX } from 'react';
 import { useSim } from '../state/sim';
+import type { AvrDeviceSpec } from '../backend/types';
 import { useLayout } from '../state/layout';
 import { openExternal } from '../backend/api';
 import { buildFloorplan, hitTest } from '../chip/floorplan';
@@ -7,6 +8,7 @@ import { drawDieBase, drawDieLabels } from '../chip/dieArt';
 import { formatHz, hex } from '../format';
 import { Icons } from '../icons';
 import { EmptyHint, Section } from './common';
+import { ArmDeviceInfo } from './ArmDeviceInfo';
 
 const kb = (b: number) => (b >= 1024 ? `${b / 1024} KB` : `${b} bytes`);
 
@@ -14,6 +16,7 @@ const kb = (b: number) => (b >= 1024 ? `${b / 1024} KB` : `${b} bytes`);
 export function DeviceInfoPanel(): JSX.Element {
   const spec = useSim((s) => s.spec);
   if (!spec) return <EmptyHint>No device loaded.</EmptyHint>;
+  if (spec.arch === 'arm') return <ArmDeviceInfo spec={spec} />;
   const io = spec.pins.filter((p) => p.kind === 'io');
   const grades = spec.speedGrades.map(([hz, v]) => `${formatHz(hz)} @ ${v.toFixed(1)}-${spec.vccRange[1].toFixed(1)} V`).join(', ');
   const rows: [string, string][] = [
@@ -103,7 +106,7 @@ export function DeviceInfoPanel(): JSX.Element {
 
 /** Static die drawing with block names; hover shows details. */
 function DieDiagram(): JSX.Element {
-  const spec = useSim((s) => s.spec)!;
+  const spec = useSim((s) => s.spec as AvrDeviceSpec)!;
   const plan = useMemo(() => buildFloorplan(spec), [spec]);
   const ref = useRef<HTMLCanvasElement>(null);
   const [tip, setTip] = useState<{ x: number; y: number; text: string } | null>(null);
@@ -148,7 +151,7 @@ function DieDiagram(): JSX.Element {
 }
 
 function MemoryMap(): JSX.Element {
-  const spec = useSim((s) => s.spec)!;
+  const spec = useSim((s) => s.spec as AvrDeviceSpec)!;
   const regions: [string, number, number, string][] = [];
   if (spec.regsInDataSpace) regions.push(['Registers R0-R31', 0, 31, 'regs']);
   regions.push([`I/O registers (${spec.ioSize})`, spec.ioBase, spec.ioBase + spec.ioSize - 1, 'io']);

@@ -1,6 +1,6 @@
 //! Messages between the UI and the simulation session (serialized as camelCase JSON).
 
-use mcs_core::avr::device::AvrDeviceSpec;
+use mcs_core::device::DeviceRef;
 use mcs_core::program::LoadedProgram;
 use serde::{Deserialize, Serialize};
 
@@ -30,9 +30,25 @@ pub enum SpeedMode {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum CpuField {
+    /// Program counter in the architecture's native unit (AVR: word address, ARM: byte address).
     Pc,
+    /// AVR stack pointer / ARM active stack pointer.
     Sp,
     Sreg,
+    /// ARM: xPSR flags (N, Z, C, V, Q).
+    Xpsr,
+    /// ARM: main / process stack pointer.
+    Msp,
+    Psp,
+    /// ARM: link register (r14).
+    Lr,
+    /// ARM: CONTROL (nPRIV, SPSEL, FPCA).
+    Control,
+    Primask,
+    Basepri,
+    Faultmask,
+    /// ARM: floating-point status and control register (FPU devices).
+    Fpscr,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -59,15 +75,21 @@ pub enum Command {
     SetPinGenerator { pin: usize, gen: Option<PinGenerator> },
     /// Per-word execution counting for the chip view's heat map.
     SetProfiling { enabled: bool },
+    /// Selects the extra RAM block (`extra_ram[index - 1]`, ARM) the memory view watches; 0 = none.
+    /// The next state carries its bytes in `ram_extra`, later ones only when they changed.
+    WatchRam { index: usize },
     /// Serial Monitor line settings.
     SetSerial { config: SerialConfig },
     /// Bytes typed in the Serial Monitor (sent into the injection pin).
     SerialSend { bytes: Vec<u8> },
     /// Debugger edit of the EEPROM.
     WriteEeprom { addr: u32, value: u8 },
-    WriteData { addr: u16, value: u8 },
+    WriteData { addr: u32, value: u8 },
+    /// Debugger write of `size` (1, 2 or 4) bytes through the CPU's bus (ARM peripheral registers
+    /// need full-width accesses).
+    WriteMem { addr: u32, size: u8, value: u32 },
     WriteFlash { addr: u32, value: u8 },
-    WriteReg { reg: usize, value: u8 },
+    WriteReg { reg: usize, value: u32 },
     WriteCpu { field: CpuField, value: u32 },
     /// Writes fuse byte `index` (0 = low / the configuration byte) and power-cycles.
     WriteFuse {
@@ -79,6 +101,13 @@ pub enum Command {
     Shutdown,
 }
 
+/// Bytes of one extra RAM block (`extra_ram[index - 1]`).
+#[derive(Clone, Debug, Serialize)]
+pub struct RamExtra {
+    pub index: usize,
+    pub data: Vec<u8>,
+}
+
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PinState {
@@ -86,6 +115,7 @@ pub struct PinState {
     pub dir: u8,
     pub out: u8,
     pub pullup: u8,
+    pub pulldown: u8,
     pub ov_enable: u8,
     pub ext: ExtDrive,
     pub ext_volts: f64,
@@ -115,7 +145,7 @@ pub enum StopKind {
 #[serde(rename_all = "camelCase")]
 pub struct StopInfo {
     pub reason: StopKind,
-    /// Word address.
+    /// Program counter in the architecture's native unit (AVR: word address).
     pub pc: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
@@ -128,13 +158,39 @@ pub struct PeripheralInfo {
     pub values: Vec<(String, String)>,
 }
 
+/// Architecture-specific CPU state (tagged by `arch` in JSON).
+#[derive(Clone, Debug, Serialize)]
+#[serde(tag = "arch", rename_all = "lowercase")]
+pub enum CoreState {
+    Avr { sp: u16, sreg: u8, regs: Vec<u8> },
+    /// ARMv7-M: r0-r15 (r13 = active SP, r15 = PC), xPSR, banked stack pointers, special registers;
+    /// `fpr` (S0-S31 as raw bits) and `fpscr` are filled on devices with an FPU (`fpr` is empty
+    /// otherwise).
+    #[serde(rename_all = "camelCase")]
+    Arm {
+        r: [u32; 16],
+        xpsr: u32,
+        msp: u32,
+        psp: u32,
+        control: u8,
+        primask: bool,
+        basepri: u8,
+        faultmask: bool,
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        fpr: Vec<u32>,
+        fpscr: u32,
+    },
+}
+
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MachineState {
     pub running: bool,
+    /// Program counter in the architecture's native unit (AVR: word address).
     pub pc: u32,
-    pub sp: u16,
-    pub sreg: u8,
+    /// Program counter as a byte address.
+    pub pc_bytes: u64,
+    pub core: CoreState,
     pub cycles: u64,
     pub instructions: u64,
     pub time_sec: f64,
@@ -142,15 +198,27 @@ pub struct MachineState {
     /// Frequency assumed for the external clock input.
     pub ext_clock_hz: f64,
     pub sleeping: bool,
+    /// AVR sleep mode (0 on other architectures).
     pub sleep_mode: u8,
     pub reset_held: bool,
-    pub regs: Vec<u8>,
     /// Data space (I/O + SRAM) as seen by the CPU, including live peripheral register values.
+    ///
+    /// ARM: the SRAM image (main SRAM followed by the CCM SRAM, starting at `sramBase`); empty
+    /// when it did not change since the previous state.
     pub data: Vec<u8>,
+    /// ARM: contents of the extra RAM block selected with `WatchRam`; present only on the first
+    /// state after the selection (or a load) and when the bytes changed since.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ram_extra: Option<RamExtra>,
+    /// ARM: values of the memory-mapped peripheral and core registers, aligned to the device's
+    /// `registers` list (empty on AVR).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub io: Vec<u32>,
     /// Present only when program memory changed since the last state.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub flash: Option<Vec<u8>>,
     pub flash_version: u64,
+    /// Fuse bytes and lock bits (AVR; empty / 0 on architectures without them).
     pub fuses: Vec<u8>,
     pub lock: u8,
     /// EEPROM contents, present only when they changed since the last state.
@@ -183,7 +251,7 @@ pub struct MachineState {
 #[derive(Clone, Debug, Serialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum Output {
-    Device { spec: Box<AvrDeviceSpec> },
+    Device { spec: DeviceRef },
     State { state: Box<MachineState> },
     Error { message: String },
 }

@@ -27,7 +27,7 @@ import { useSim } from '../state/sim';
 import { useSettings } from '../state/settings';
 import { hex } from '../format';
 import { instructionSet } from '../backend/api';
-import type { InsnInfo } from '../backend/types';
+import { armCore, avrCore, type InsnInfo } from '../backend/types';
 
 /** Tab: pads with spaces to the next tab stop at the cursor; with a selection, indents the lines. */
 const softTab = (view: EditorView): boolean => {
@@ -182,7 +182,7 @@ const hoverInfo = hoverTooltip((view, pos) => {
   if (s === e) return null;
   const word = text.slice(s, e);
   const sim = useSim.getState();
-  const spec = sim.spec;
+  const spec = sim.spec?.arch === 'avr' ? sim.spec : null;
   const st = sim.state;
   let info: string | null = null;
   // Instruction mnemonic: first word of the statement (after an optional label).
@@ -190,9 +190,13 @@ const hoverInfo = hoverTooltip((view, pos) => {
     const forms = instructionHelp(spec.id).get(word.toLowerCase());
     if (forms) return { pos: line.from + s, end: line.from + e, above: true, create: () => ({ dom: insnHoverDom(forms) }) };
   }
+  const armReg = sim.spec?.arch === 'arm' && st?.core.arch === 'arm' ? /^(?:r(\d{1,2})|(sp)|(lr)|(pc))$/i.exec(word) : null;
   const reg = /^r(\d{1,2})$/i.exec(word);
-  if (reg && Number(reg[1]) < 32) {
-    info = st ? `${word.toUpperCase()} = ${hex(st.regs[Number(reg[1])])} (${st.regs[Number(reg[1])]})` : `Register ${word}`;
+  if (armReg && st) {
+    const i = armReg[2] ? 13 : armReg[3] ? 14 : armReg[4] ? 15 : Number(armReg[1]);
+    if (i < 16) info = `${word.toUpperCase()} = ${hex(armCore(st).r[i], 8)} (${armCore(st).r[i]})`;
+  } else if (reg && Number(reg[1]) < 32 && spec) {
+    info = st?.core.arch === 'avr' ? `${word.toUpperCase()} = ${hex(avrCore(st).regs[Number(reg[1])])} (${avrCore(st).regs[Number(reg[1])]})` : `Register ${word}`;
   } else if (spec) {
     const r = spec.registers.find((x) => x.name === word.toUpperCase());
     if (r) {
@@ -463,11 +467,11 @@ function syncDecorations(view: EditorView, doc: Doc): void {
   const program = ws.build?.program ?? null;
   const bps: BpInfo[] = ws.breakpoints
     .filter((b): b is Extract<typeof b, { kind: 'source' }> => b.kind === 'source' && b.file === key)
-    .map((b) => ({ line: b.line, enabled: b.enabled, resolved: !program || resolvedSourcePc(program, b.file, b.line) >= 0 }));
+    .map((b) => ({ line: b.line, enabled: b.enabled, resolved: !program || resolvedSourcePc(program, b.file, b.line, ws.build?.arch) >= 0 }));
 
   let execLine: number | null = null;
   if (!sim.running && sim.state && program) {
-    const loc = pcToSource(program, sim.state.pc);
+    const loc = pcToSource(program, sim.state.pc, ws.build?.arch);
     if (loc && sameFile(loc.file, key)) execLine = loc.line;
   }
 

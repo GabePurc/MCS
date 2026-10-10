@@ -2,7 +2,7 @@
  * Workspace state: open documents, build results, breakpoints and the output log.
  */
 import { create } from 'zustand';
-import type { Diagnostic, LoadedProgram } from '../backend/types';
+import type { Arch, Diagnostic, LoadedProgram } from '../backend/types';
 import { SymbolIndex, sourceToPc } from '../services/debugInfo';
 import { forgetDoc, initialTexts } from '../editor/docText';
 
@@ -37,6 +37,8 @@ export interface BuildInfo {
   label: string;
   symbols: SymbolIndex;
   time: number;
+  /** Architecture of the device the program was loaded for (selects the pc unit). */
+  arch: Arch;
 }
 
 interface WorkspaceStore {
@@ -52,7 +54,7 @@ interface WorkspaceStore {
   showOutputSeq: number;
   /** Request to scroll the editor to a location (consumed by the editor). */
   goto: { docId: string; line: number; seq: number } | null;
-  /** Request to scroll the disassembly to a word address. */
+  /** Request to scroll the disassembly to a program counter (native unit). */
   disasmGoto: { pc: number; seq: number } | null;
 }
 
@@ -162,7 +164,7 @@ export function toggleSourceBreakpoint(file: string, line: number): void {
 
 export function toggleAddressBreakpoint(pc: number): void {
   useWorkspace.setState((s) => {
-    const resolved = resolvedPcMap(s.breakpoints, s.build?.program ?? null);
+    const resolved = resolvedPcMap(s.breakpoints, s.build?.program ?? null, s.build?.arch);
     const owners = resolved.get(pc);
     if (owners && owners.length) return { breakpoints: s.breakpoints.filter((b) => !owners.includes(b.id)) };
     return { breakpoints: [...s.breakpoints, { id: nextBpId++, kind: 'address', pc, enabled: true }] };
@@ -181,17 +183,17 @@ export function clearBreakpoints(): void {
   useWorkspace.setState({ breakpoints: [] });
 }
 
-/** Resolved word address per breakpoint (-1 when unresolved). */
-export function resolveBreakpoint(b: Breakpoint, program: LoadedProgram | null): number {
+/** Resolved program counter (native unit) per breakpoint (-1 when unresolved). */
+export function resolveBreakpoint(b: Breakpoint, program: LoadedProgram | null, arch: Arch = 'avr'): number {
   if (b.kind === 'address') return b.pc;
-  return sourceToPc(program, b.file, b.line).pc;
+  return sourceToPc(program, b.file, b.line, arch).pc;
 }
 
 /** pc -> breakpoint ids. */
-export function resolvedPcMap(bps: Breakpoint[], program: LoadedProgram | null): Map<number, number[]> {
+export function resolvedPcMap(bps: Breakpoint[], program: LoadedProgram | null, arch: Arch = 'avr'): Map<number, number[]> {
   const map = new Map<number, number[]>();
   for (const b of bps) {
-    const pc = resolveBreakpoint(b, program);
+    const pc = resolveBreakpoint(b, program, arch);
     if (pc < 0) continue;
     const arr = map.get(pc);
     if (arr) arr.push(b.id);
@@ -206,14 +208,14 @@ export function enabledBreakpointPcs(): number[] {
   const pcs = new Set<number>();
   for (const b of s.breakpoints) {
     if (!b.enabled) continue;
-    const pc = resolveBreakpoint(b, program);
+    const pc = resolveBreakpoint(b, program, s.build?.arch);
     if (pc >= 0) pcs.add(pc);
   }
   return [...pcs];
 }
 
-export function setBuild(program: LoadedProgram, docId: string | null, label: string): void {
-  useWorkspace.setState({ build: { program, docId, label, symbols: new SymbolIndex(program), time: Date.now() } });
+export function setBuild(program: LoadedProgram, docId: string | null, label: string, arch: Arch = 'avr'): void {
+  useWorkspace.setState({ build: { program, docId, label, symbols: new SymbolIndex(program), time: Date.now(), arch } });
 }
 
 export function requestGoto(docId: string, line: number): void {

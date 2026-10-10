@@ -7,6 +7,7 @@
  */
 import { useEffect, useMemo, useRef, useState, type JSX } from 'react';
 import { disassemble } from '../backend/api';
+import { avrCore } from '../backend/types';
 import { Icons } from '../icons';
 import { useSim } from '../state/sim';
 import { useSettings } from '../state/settings';
@@ -48,7 +49,7 @@ function describe(h: Hover['hit']): { title: string; lines: string[] } | null {
   const lines = [b.sub];
   if (st) {
     if (b.kind === 'flash') lines.push(`PC = ${hex(st.pc * 2, 4)} (word ${st.pc}). Bright cells ran recently.`);
-    if (b.kind === 'sram') lines.push(`SP = ${hex(st.sp, 4)}. Orange = just written, blue = stack.`);
+    if (b.kind === 'sram') lines.push(`SP = ${hex(avrCore(st).sp, 4)}. Orange = just written, blue = stack.`);
     if (b.kind === 'control') lines.push(`${st.cycles.toLocaleString()} cycles, ${st.instructions.toLocaleString()} instructions`);
   }
   const target = b.kind === 'clock' ? 'Supply & Clock' : OPEN[b.kind] ? { disasm: 'Disassembly', memory: 'Memory', processor: 'Processor', io: 'I/O View' }[OPEN[b.kind] as string] : null;
@@ -57,8 +58,14 @@ function describe(h: Hover['hit']): { title: string; lines: string[] } | null {
   return { title: b.label, lines };
 }
 
+/** Chip View exists for AVR devices only (die floorplan, 3D package and execution heat map). */
 export function ChipView(): JSX.Element {
-  const spec = useSim((s) => s.spec);
+  const arm = useSim((s) => s.spec?.arch === 'arm');
+  return arm ? <EmptyHint>Chip View is available for AVR devices.</EmptyHint> : <AvrChipView />;
+}
+
+function AvrChipView(): JSX.Element {
+  const spec = useSim((s) => (s.spec?.arch === 'avr' ? s.spec : null));
   const speedMode = useSettings((s) => s.speedMode);
   const speedFactor = useSettings((s) => s.speedFactor);
   const saved = useMemo(() => loadJson<{ mode: Mode; shell: Shell; shading: boolean }>(KEY, { mode: '3d', shell: 'xray', shading: true }), []);
@@ -105,7 +112,8 @@ export function ChipView(): JSX.Element {
     let lastKey = '';
     const feed = () => {
       const s = useSim.getState();
-      if (!s.state) return;
+      // The chip view is AVR-only; skip states of another architecture during a device switch.
+      if (!s.state || s.state.core.arch !== 'avr') return;
       const data = model.data(s.state, s.running);
       lastLive.current = data;
       layers.update(data, model.heatVersion);
@@ -130,7 +138,7 @@ export function ChipView(): JSX.Element {
     model.flash = useSim.getState().flash;
     model.eeprom = useSim.getState().eeprom;
     const st0 = useSim.getState().state;
-    if (st0) model.update(st0);
+    if (st0?.core.arch === 'avr') model.update(st0);
     loadDisasm();
     feed();
     return useSim.subscribe((s, p) => {
@@ -142,7 +150,7 @@ export function ChipView(): JSX.Element {
         model.eeprom = s.eeprom;
         if (s.state === p.state) feed();
       }
-      if (s.state && s.state !== p.state) {
+      if (s.state && s.state !== p.state && s.state.core.arch === 'avr') {
         model.update(s.state);
         feed();
       }

@@ -1,9 +1,9 @@
 import { create } from 'zustand';
-import type { AvrDeviceSpec, MachineState, StopInfo } from '../backend/types';
+import type { DeviceSpec, MachineState, StopInfo } from '../backend/types';
 
 
 export interface SimStore {
-  spec: AvrDeviceSpec | null;
+  spec: DeviceSpec | null;
   state: MachineState | null;
   /** State captured at the previous stop; values differing from it are shown in red. */
   baseline: MachineState | null;

@@ -7,6 +7,7 @@ use std::collections::HashMap;
 use mcs_core::avr::device::AvrDeviceSpec;
 use mcs_core::avr::devices;
 pub use mcs_core::avr::devices::CustomMcuConfig;
+use mcs_core::device::{Arch, DeviceRef};
 use mcs_core::avr::isa::{self, DisasmContext};
 use mcs_core::avr::{isa_docs, isa_usage};
 use mcs_core::program::{Diagnostic, LoadedProgram};
@@ -15,11 +16,12 @@ use serde::Serialize;
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DeviceSummary {
+    pub arch: Arch,
     pub id: String,
     pub name: String,
     pub family: String,
     pub flash_size: u32,
-    pub sram_size: u16,
+    pub sram_size: u32,
     pub package: String,
     pub core_name: String,
 }
@@ -38,8 +40,9 @@ pub struct BuildOutcome {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DisasmLine {
-    /// Word address.
+    /// Word address (AVR) or byte address (ARM).
     pub pc: u32,
+    /// Instruction length in 16-bit words.
     pub words: u8,
     pub raw: Vec<u16>,
     pub mnemonic: String,
@@ -67,17 +70,40 @@ pub struct InsnInfo {
     pub alias_of: String,
 }
 
-pub fn list_devices() -> Vec<DeviceSummary> {
-    devices::list().into_iter().map(summary).collect()
+/// The AVR spec for `device_id`; None for unknown ids and for other architectures (the
+/// disassembler, instruction set and definition files are AVR-only for now).
+fn avr_spec(device_id: &str) -> Option<&'static AvrDeviceSpec> {
+    mcs_core::devices::get_any(device_id)?.as_avr()
 }
 
-fn summary(d: &AvrDeviceSpec) -> DeviceSummary {
+pub fn list_devices() -> Vec<DeviceSummary> {
+    mcs_core::devices::list_any().into_iter().map(summary).collect()
+}
+
+fn summary(d: DeviceRef) -> DeviceSummary {
+    match d {
+        DeviceRef::Avr(s) => avr_summary(s),
+        DeviceRef::Arm(s) => DeviceSummary {
+            arch: Arch::Arm,
+            id: s.id.clone(),
+            name: s.name.clone(),
+            family: s.family.clone(),
+            flash_size: s.flash_size,
+            sram_size: s.ram_total(),
+            package: s.package.clone(),
+            core_name: s.core_name.clone(),
+        },
+    }
+}
+
+fn avr_summary(d: &AvrDeviceSpec) -> DeviceSummary {
     DeviceSummary {
+        arch: Arch::Avr,
         id: d.id.clone(),
         name: d.name.clone(),
         family: d.family.clone(),
         flash_size: d.flash_size,
-        sram_size: d.sram_size,
+        sram_size: d.sram_size as u32,
         package: d.package.clone(),
         core_name: d.core_name.clone(),
     }
@@ -87,13 +113,14 @@ fn summary(d: &AvrDeviceSpec) -> DeviceSummary {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CustomRegistration {
+    pub arch: Arch,
     pub id: String,
     pub error: Option<String>,
 }
 
 /// Registers (or replaces) user-defined devices in this process.
 pub fn register_custom_devices(configs: &[CustomMcuConfig]) -> Vec<CustomRegistration> {
-    configs.iter().map(|c| CustomRegistration { id: c.id.clone(), error: devices::register_custom(c).err() }).collect()
+    configs.iter().map(|c| CustomRegistration { arch: Arch::Avr, id: c.id.clone(), error: devices::register_custom(c).err() }).collect()
 }
 
 /// What a custom configuration turns into (for the editor's live summary).
@@ -139,16 +166,18 @@ pub fn build_asm(source: &str, file_name: &str, device_id: &str, includes: &Hash
 
 /// Parses an ELF or Intel HEX image. The device embedded in an ELF wins when known.
 pub fn import_program(bytes: &[u8], file_name: &str, device_id: &str) -> BuildOutcome {
-    let flash = devices::get(device_id).map(|s| s.flash_size as usize).unwrap_or(1024);
-    let program = mcs_formats::load_program_file(bytes, file_name, flash);
-    let device = program.device.clone().filter(|d| devices::get(d).is_some()).unwrap_or_else(|| device_id.to_string());
+    let dev = mcs_core::devices::get_any(device_id);
+    let flash = dev.map(|s| s.flash_size() as usize).unwrap_or(1024);
+    let program = mcs_formats::load_program_file_at(bytes, file_name, flash, dev.map_or(0, |d| d.flash_base()));
+    let device = program.device.clone().filter(|d| mcs_core::devices::get_any(d).is_some()).unwrap_or_else(|| device_id.to_string());
     BuildOutcome { ok: !program.has_errors(), diagnostics: program.diagnostics.clone(), program: Some(program), output: String::new(), listing: None, device_id: device }
 }
 
 /// Parses the ELF produced by an external compiler (C builds).
 pub fn program_from_elf(elf: &[u8], file_name: &str, device_id: &str, extra: Vec<Diagnostic>, output: String) -> BuildOutcome {
-    let flash = devices::get(device_id).map(|s| s.flash_size as usize).unwrap_or(1024);
-    let mut program = mcs_formats::parse_elf(elf, flash, file_name);
+    let dev = mcs_core::devices::get_any(device_id);
+    let flash = dev.map(|s| s.flash_size() as usize).unwrap_or(1024);
+    let mut program = mcs_formats::parse_elf_at(elf, flash, file_name, dev.map(|d| d.flash_base()).filter(|&b| b != 0));
     program.diagnostics.extend(extra);
     BuildOutcome { ok: !program.has_errors(), diagnostics: program.diagnostics.clone(), program: Some(program), output, listing: None, device_id: device_id.to_string() }
 }
@@ -175,7 +204,10 @@ pub fn machine_code_hints(source: &str, device_id: &str) -> McAnnotations {
 /// Renders a program image as an editable machine-code source: one instruction per line with
 /// its disassembly as a comment, labels as comment lines.
 pub fn program_to_machine_code(device_id: &str, flash: &[u8], used: usize, labels: &HashMap<u32, String>, title: &str) -> String {
-    let name = devices::get(device_id).map(|d| d.name.as_str()).unwrap_or(device_id);
+    if mcs_core::devices::get_any(device_id).is_some_and(|d| d.as_avr().is_none()) {
+        return "; Machine-code sources are available for AVR devices only.\n".to_string();
+    }
+    let name = mcs_core::devices::get_any(device_id).map(|d| d.name()).unwrap_or(device_id);
     let mut out = format!(
         "; Machine code for {name}{}\n; One instruction per line as 16-bit words in hex (two words for 32-bit instructions).\n; Edit the words and build (F7) to run them. '@0x0010' moves to a byte address.\n\n@0x0000\n",
         if title.is_empty() { String::new() } else { format!(" - generated from {title}") },
@@ -205,7 +237,10 @@ pub fn program_to_machine_code(device_id: &str, flash: &[u8], used: usize, label
 
 /// Disassembles a whole program image. `labels` maps code byte addresses to names.
 pub fn disassemble(device_id: &str, flash: &[u8], labels: &HashMap<u32, String>) -> Vec<DisasmLine> {
-    let Some(spec) = devices::get(device_id) else { return Vec::new() };
+    if let Some(arm) = mcs_core::devices::get_any(device_id).and_then(|d| d.as_arm()) {
+        return disassemble_arm(arm, flash, labels);
+    }
+    let Some(spec) = avr_spec(device_id) else { return Vec::new() };
     let table = isa::decode_table(spec.features);
     let io_names: HashMap<u32, String> = spec.registers.iter().rev().filter_map(|r| spec.data_to_io(r.addr).map(|io| (io as u32, r.name.clone()))).collect();
     let data_names: HashMap<u32, String> = spec.registers.iter().rev().map(|r| (r.addr as u32, r.name.clone())).collect();
@@ -226,8 +261,41 @@ pub fn disassemble(device_id: &str, flash: &[u8], labels: &HashMap<u32, String>)
     out
 }
 
+/// ARM disassembly: `pc` is the absolute byte address (flash base included), `raw` holds the one or
+/// two Thumb halfwords, `words` counts them. Branch targets found in the operands are resolved
+/// through `labels` (code byte addresses).
+fn disassemble_arm(spec: &mcs_core::arm::device::ArmDeviceSpec, flash: &[u8], labels: &HashMap<u32, String>) -> Vec<DisasmLine> {
+    let features = mcs_core::arm::thumb::ArmFeatures(spec.features);
+    let len = flash.len() & !1;
+    mcs_core::arm::disasm::disassemble(&flash[..len], spec.flash_base, features)
+        .into_iter()
+        .map(|(addr, n, text)| {
+            let off = (addr - spec.flash_base) as usize;
+            let raw: Vec<u16> = (0..n / 2).map(|k| u16::from_le_bytes([flash[off + 2 * k], flash[off + 2 * k + 1]])).collect();
+            let (mnemonic, mut operands) = match text.split_once([' ', '\t']) {
+                Some((m, o)) => (m.to_string(), o.trim().to_string()),
+                None => (text.clone(), String::new()),
+            };
+            let valid = !text.starts_with("<undefined>");
+            // Direct branch targets are printed as 0x<hex>.
+            let is_branch = mnemonic.starts_with('b') && !mnemonic.starts_with("bf") && !mnemonic.starts_with("bic") && !mnemonic.starts_with("bkpt") && !mnemonic.starts_with("bx") && !mnemonic.starts_with("blx") || mnemonic.starts_with("cb");
+            let target = if is_branch {
+                operands.rsplit([' ', ',']).next().and_then(|t| t.strip_prefix("0x")).and_then(|h| u32::from_str_radix(h, 16).ok())
+            } else {
+                None
+            };
+            if let Some(name) = target.and_then(|t| labels.get(&t)) {
+                if let Some(i) = operands.rfind("0x") {
+                    operands.replace_range(i.., name);
+                }
+            }
+            DisasmLine { pc: addr, words: (n / 2) as u8, raw, mnemonic, operands, target, valid }
+        })
+        .collect()
+}
+
 pub fn instruction_set(device_id: &str) -> Vec<InsnInfo> {
-    let Some(spec) = devices::get(device_id) else { return Vec::new() };
+    let Some(spec) = avr_spec(device_id) else { return Vec::new() };
     let rc = spec.features & isa::feature::RC != 0;
     let mut out: Vec<InsnInfo> = isa::insns()
         .iter()
@@ -289,7 +357,7 @@ fn operand_label(k: isa::OperandKind) -> String {
 
 /// (include file name, generated avrasm2 definitions) for a device.
 pub fn def_include(device_id: &str) -> Option<(String, String)> {
-    devices::get(device_id).map(|s| (mcs_asm::def_include_name(s), mcs_asm::generate_def_include(s)))
+    avr_spec(device_id).map(|s| (mcs_asm::def_include_name(s), mcs_asm::generate_def_include(s)))
 }
 
 /// `.include` names referenced by a source that are not built-in device definitions.
@@ -305,6 +373,41 @@ pub fn to_intel_hex(flash: &[u8], used: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const BLINK_ELF: &[u8] = include_bytes!("../../mcs-formats/tests/data/stm32g4_blink.elf");
+
+    #[test]
+    fn arm_devices_listing_import_and_disassembly() {
+        let devs = list_devices();
+        let g4 = devs.iter().find(|d| d.id == "stm32g474re").expect("STM32G474RE is listed");
+        assert_eq!((g4.arch, g4.flash_size, g4.sram_size, g4.core_name.as_str(), g4.package.as_str()), (Arch::Arm, 512 * 1024, 128 * 1024, "Cortex-M4F", "LQFP64"));
+        assert!(devs.iter().any(|d| d.id == "stm32g431kb" && d.arch == Arch::Arm));
+        assert!(devs.iter().any(|d| d.id == "attiny10" && d.arch == Arch::Avr));
+
+        // The AVR-only assemblers refuse ARM devices with a clear message.
+        let a = build_asm("nop", "t.s", "stm32g474re", &HashMap::new());
+        assert!(!a.ok && a.diagnostics[0].message.contains("AVR devices only"), "{:?}", a.diagnostics);
+        let m = build_machine_code("0000", "t.mc", "stm32g431kb");
+        assert!(!m.ok && m.diagnostics[0].message.contains("ARM Cortex-M"), "{:?}", m.diagnostics);
+
+        // ELF import places the image relative to the flash base; symbols stay absolute.
+        let r = import_program(BLINK_ELF, "blink.elf", "stm32g474re");
+        assert!(r.ok, "{:?}", r.diagnostics);
+        let p = r.program.unwrap();
+        assert_eq!((p.flash_base, p.flash.len(), p.entry), (0x0800_0000, 512 * 1024, 0x0800_00e8));
+
+        // Disassembly: byte addresses, Thumb halfwords, labels substituted in branch targets.
+        let delay = p.symbols.iter().find(|s| s.name == "delay").unwrap().address;
+        let labels = HashMap::from([(delay, "delay".to_string())]);
+        let lines = disassemble("stm32g474re", &p.flash[..p.flash_used as usize], &labels);
+        let reset = lines.iter().find(|l| l.pc == 0x0800_00e8).expect("reset handler");
+        assert_eq!((reset.mnemonic.as_str(), reset.operands.as_str(), reset.words, reset.raw.len()), ("movw", "r0, #0x1000", 2, 2));
+        let bl = lines.iter().find(|l| l.mnemonic == "bl").expect("a call");
+        assert_eq!((bl.operands.as_str(), bl.target), ("delay", Some(delay)));
+        assert!(lines.iter().all(|l| l.valid || l.pc < 0x0800_00e8), "code after the vector table decodes");
+        // Machine-code export is AVR-only.
+        assert!(program_to_machine_code("stm32g474re", &p.flash, 16, &HashMap::new(), "x").contains("AVR devices only"));
+    }
 
     #[test]
     fn machine_code_round_trip() {

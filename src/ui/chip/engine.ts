@@ -6,7 +6,7 @@
  *   blocks whose visible content changed (each one doubles as a 3D texture).
  * * `Die2D` draws the die flat on a canvas with zoom and pan.
  */
-import type { AvrDeviceSpec, MachineState } from '../backend/types';
+import { avrCore, type AvrDeviceSpec, type MachineState } from '../backend/types';
 import { blockSignature, drawBlockLive, drawDieBase, drawMemoryDetail, memoryGrid, pinColor, type LiveData, type MemGrid } from './dieArt';
 import { hitTest, type Block, type Floorplan } from './floorplan';
 
@@ -79,16 +79,17 @@ export class LiveModel {
     }
     if (io) this.activity.set('*io', 1);
     const rp = this.prevRegs;
+    const regs = avrCore(st).regs;
     for (let r = 0; r < 32; r++) {
-      if (rp && rp[r] !== st.regs[r]) this.regWrites[r] = 1;
+      if (rp && rp[r] !== regs[r]) this.regWrites[r] = 1;
       else if (this.regWrites[r]) this.regWrites[r] = this.regWrites[r] * WRITE_DECAY < 0.03 ? 0 : this.regWrites[r] * WRITE_DECAY;
     }
     this.prevData = d;
-    this.prevRegs = st.regs;
+    this.prevRegs = regs;
   }
 
   data(st: MachineState, running: boolean): LiveData {
-    return { spec: this.spec, st, running, heat: this.heat, writes: this.writes, regWrites: this.regWrites, activity: this.activity, disasm: this.disasm, flash: this.flash, eeprom: this.eeprom, hot: this.hot };
+    return { spec: this.spec, st, core: avrCore(st), running, heat: this.heat, writes: this.writes, regWrites: this.regWrites, activity: this.activity, disasm: this.disasm, flash: this.flash, eeprom: this.eeprom, hot: this.hot };
   }
 }
 

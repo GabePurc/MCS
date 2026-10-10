@@ -99,6 +99,12 @@ export const importProgram = (path: string, deviceId: string) => {
   return wasm<BuildOutcome>({ method: 'importProgram', bytes: Array.from(f.bytes), fileName: f.name, deviceId });
 };
 
+/** Parses an ELF / Intel HEX image held in memory (bundled examples). */
+export const importProgramBytes = (bytes: Uint8Array, fileName: string, deviceId: string) =>
+  inTauri
+    ? call<BuildOutcome>('import_program_bytes', { bytes: Array.from(bytes), fileName, deviceId })
+    : wasm<BuildOutcome>({ method: 'importProgram', bytes: Array.from(bytes), fileName, deviceId });
+
 export const detectToolchain = (gccPath: string | null) => call<ToolchainInfo | null>('detect_toolchain', { gccPath });
 
 /** Disassembles the programmed part of `flash` (trailing erased words are left out: large parts have megabytes of them). */

@@ -1,5 +1,7 @@
 /** Bundled example programs (repo `examples/` folder) and new-file templates. */
 const files = import.meta.glob('../../../examples/*.{asm,c,mc}', { query: '?raw', import: 'default', eager: true }) as Record<string, string>;
+/** Prebuilt program images (ELF): bundled as assets, loaded without a source document. */
+const images = import.meta.glob('../../../examples/*.elf', { query: '?url', import: 'default', eager: true }) as Record<string, string>;
 
 export interface Example {
   name: string;
@@ -8,6 +10,8 @@ export interface Example {
   text: string;
   /** Device the example is written for (display name), when not the ATtiny10. */
   device?: string;
+  /** URL of a prebuilt ELF image (examples without source: they load straight into the simulator). */
+  image?: string;
   /** Set for the documents used as "New file" templates. */
   template?: 'asm' | 'c' | 'mc';
 }
@@ -24,6 +28,8 @@ const META: Record<string, { title: string; description: string; device?: string
   'm328p_blink.asm': { title: 'Uno LED blink (assembly)', description: 'Timer1 interrupt blinks PB5 / pin 13', device: 'ATmega328P' },
   'm328p_serial.c': { title: 'Serial hello + echo (C)', description: 'USART at 9600 baud: open View > Serial Monitor', device: 'ATmega328P' },
   't85_pwm.asm': { title: 'Pot to PWM via the PLL (assembly)', description: 'ADC on PB2 sets the 64 MHz-PLL PWM on PB1', device: 'ATtiny85' },
+  'stm32g4_blink.elf': { title: 'Blink (prebuilt ELF)', description: 'Cortex-M4F: PA5 toggled by a delay loop; no toolchain needed', device: 'STM32G474RE' },
+  'stm32h7_blink.elf': { title: 'Nucleo-H743 blink (prebuilt ELF)', description: 'Cortex-M7: PB0 (LD1, green) toggled by a delay loop; no toolchain needed', device: 'STM32H743ZIT6' },
   't85_blink.c': { title: 'Timer blink (C)', description: 'Timer0 overflow interrupt toggles PB3', device: 'ATtiny85' },
 };
 
@@ -76,6 +82,10 @@ export const EXAMPLES: Example[] = [
       return { name, text, ...meta };
     })
     .sort((a, b) => Object.keys(META).indexOf(a.name) - Object.keys(META).indexOf(b.name)),
+  ...Object.entries(images).map(([path, image]) => {
+    const name = path.slice(path.lastIndexOf('/') + 1);
+    return { name, text: '', image, ...(META[name] ?? { title: name, description: '' }) };
+  }),
   { name: 'template.asm', title: 'Assembly template', description: '', text: ASM_TEMPLATE, template: 'asm' as const },
   { name: 'template.c', title: 'C template', description: '', text: C_TEMPLATE, template: 'c' as const },
   { name: 'template.mc', title: 'Machine code template', description: '', text: MC_TEMPLATE, template: 'mc' as const },

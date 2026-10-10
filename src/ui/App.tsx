@@ -83,8 +83,8 @@ export function App(): JSX.Element {
     () =>
       useSim.subscribe((s, p) => {
         if (s.revealSeq === p.revealSeq || !s.lastStop || s.lastStop.reason === 'load' || !s.state) return;
-        const program = useWorkspace.getState().build?.program;
-        const loc = pcToSource(program, s.state.pc);
+        const build = useWorkspace.getState().build;
+        const loc = pcToSource(build?.program, s.state.pc, build?.arch);
         if (!loc) return;
         const ws = useWorkspace.getState();
         const doc = ws.docs.find((d) => sameFile(loc.file, d.path ?? d.name));

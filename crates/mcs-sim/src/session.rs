@@ -1,4 +1,4 @@
-//! Debugger session: owns one machine, drives it in time slices (real-time or max speed),
+//! Debugger session: owns one simulation target (any architecture), drives it in time slices (real-time or max speed),
 //! implements stepping and produces state snapshots. Transport agnostic — [`spawn`] runs it on
 //! a dedicated thread; tests drive it directly.
 
@@ -10,12 +10,12 @@ use std::time::Duration;
 
 use crate::clock::now_ms;
 
-use mcs_core::avr::devices;
-use mcs_core::avr::isa::op;
+use mcs_core::devices;
 use mcs_core::program::LoadedProgram;
 
-use crate::avr::{Machine, ResetSource, StopReason};
+use crate::avr::Machine;
 use crate::protocol::*;
+use crate::target::{new_target, Sent, StepPlan, StopReason, Target};
 
 const SLICE_MS: f64 = 8.0;
 const STATE_INTERVAL_MS: f64 = 33.0;
@@ -25,8 +25,7 @@ const MAX_CATCHUP_SEC: f64 = 0.25;
 const MAX_TRACE_PER_STATE: usize = 50_000;
 
 pub struct Session {
-    machine: Option<Machine>,
-    program: Option<LoadedProgram>,
+    machine: Option<Box<dyn Target>>,
     running: bool,
     speed: SpeedMode,
     factor: f64,
@@ -38,12 +37,10 @@ pub struct Session {
     /// Cycle count of the last published state (skip unchanged publishes at slow speeds).
     published_cycles: u64,
     last_publish: f64,
-    trace_sent: u64,
+    /// Incremental data (pin trace, EEPROM) already delivered to the UI.
+    sent: Sent,
     flash_version: u64,
     flash_sent: u64,
-    eeprom_sent: u64,
-    /// (file << 20 | line) per word address at statement starts, -1 elsewhere.
-    line_key: Vec<i32>,
     breakpoints: Vec<u32>,
     pending_stop: Option<StopInfo>,
     run_to: Option<u32>,
@@ -62,7 +59,6 @@ impl Session {
         let now = now_ms();
         Self {
             machine: None,
-            program: None,
             running: false,
             speed: SpeedMode::Realtime,
             factor: 1.0,
@@ -72,11 +68,9 @@ impl Session {
             cycle_start: 0,
             published_cycles: u64::MAX,
             last_publish: now,
-            trace_sent: 0,
+            sent: Sent { trace: 0, eeprom: u64::MAX },
             flash_version: 0,
             flash_sent: u64::MAX,
-            eeprom_sent: u64::MAX,
-            line_key: Vec::new(),
             breakpoints: Vec::new(),
             pending_stop: None,
             run_to: None,
@@ -85,8 +79,17 @@ impl Session {
         }
     }
 
-    pub fn machine(&mut self) -> Option<&mut Machine> {
-        self.machine.as_mut()
+    /// The simulation target (any architecture).
+    pub fn target(&mut self) -> Option<&mut dyn Target> {
+        match self.machine.as_mut() {
+            Some(m) => Some(&mut **m),
+            None => None,
+        }
+    }
+
+    /// The concrete AVR machine, when the session simulates an AVR device (tests, tooling).
+    pub fn avr_machine(&mut self) -> Option<&mut Machine> {
+        self.machine.as_mut()?.as_any_mut().downcast_mut::<Machine>()
     }
 
     pub fn is_running(&self) -> bool {
@@ -117,22 +120,24 @@ impl Session {
         match cmd {
             Command::Run => self.start(),
             Command::Pause => {
-                let pc = self.m().cpu.pc;
+                let pc = self.m().pc();
                 self.stop(StopInfo { reason: StopKind::Pause, pc, message: None });
             }
             Command::Reset => {
-                self.m().reset(ResetSource::Debugger);
-                self.stop(StopInfo { reason: StopKind::Reset, pc: 0, message: None });
+                self.m().debugger_reset();
+                let pc = self.m().pc();
+                self.stop(StopInfo { reason: StopKind::Reset, pc, message: None });
             }
             Command::PowerCycle => {
-                self.m().power_on();
-                self.trace_sent = 0;
-                self.stop(StopInfo { reason: StopKind::Reset, pc: 0, message: None });
+                self.m().power_cycle();
+                self.sent.trace = 0;
+                let pc = self.m().pc();
+                self.stop(StopInfo { reason: StopKind::Reset, pc, message: None });
             }
             Command::Step { kind, source } => self.step(kind, source),
             Command::RunTo { pc } => {
                 self.run_to = Some(pc);
-                self.m().step_predicate = Some(Box::new(move |cpu| cpu.pc == pc));
+                self.m().run_to(pc);
                 self.start();
             }
             Command::SetBreakpoints { pcs } => {
@@ -158,7 +163,7 @@ impl Session {
                 self.publish_if_idle();
             }
             Command::SetClockConfig { source, prescale_log2 } => {
-                self.m().debug_set_clock(source, prescale_log2);
+                self.m().set_clock_config(source, prescale_log2)?;
                 self.resync_clock();
                 self.publish_if_idle();
             }
@@ -167,48 +172,44 @@ impl Session {
                 self.publish_if_idle();
             }
             Command::SetProfiling { enabled } => self.m().set_profiling(enabled),
+            Command::WatchRam { index } => {
+                self.m().watch_ram(index)?;
+                self.publish_if_idle();
+            }
             Command::SetSerial { config } => {
                 self.m().set_serial(config);
                 self.publish_if_idle();
             }
             Command::SerialSend { bytes } => self.m().serial_send(&bytes),
             Command::WriteEeprom { addr, value } => {
-                let m = self.m();
-                if let Some(c) = m.cpu.eeprom.get_mut(addr as usize) {
-                    *c = value;
-                    m.cpu.eeprom_version += 1;
-                }
+                self.m().write_eeprom(addr, value)?;
                 self.publish_if_idle();
             }
             Command::WriteData { addr, value } => {
-                self.m().poke_data(addr, value);
+                self.m().write_data(addr, value)?;
+                self.publish_if_idle();
+            }
+            Command::WriteMem { addr, size, value } => {
+                self.m().write_mem(addr, size, value)?;
                 self.publish_if_idle();
             }
             Command::WriteFlash { addr, value } => {
-                self.m().cpu.write_flash_byte(addr, value);
+                self.m().write_flash(addr, value)?;
                 self.flash_version += 1;
                 self.publish_if_idle();
             }
             Command::WriteReg { reg, value } => {
-                self.m().cpu.r[reg & 31] = value;
+                self.m().write_reg(reg, value)?;
                 self.publish_if_idle();
             }
             Command::WriteCpu { field, value } => {
-                let m = self.m();
-                match field {
-                    CpuField::Pc => m.cpu.pc = (value >> 1) & m.cpu.pc_mask,
-                    CpuField::Sp => m.cpu.sp = value as u16,
-                    CpuField::Sreg => m.cpu.sreg = value as u8,
-                }
+                self.m().write_cpu(field, value)?;
                 self.publish_if_idle();
             }
             Command::WriteFuse { index, value } => {
-                let m = self.m();
-                if let Some(f) = m.cpu.fuses.get_mut(index) {
-                    *f = value;
-                }
-                self.m().power_on();
-                self.stop(StopInfo { reason: StopKind::Reset, pc: 0, message: None });
+                self.m().write_fuse(index, value)?;
+                let pc = self.m().pc();
+                self.stop(StopInfo { reason: StopKind::Reset, pc, message: None });
             }
             Command::RequestState => self.publish(),
             Command::Init { .. } | Command::Load { .. } | Command::Shutdown => unreachable!(),
@@ -216,61 +217,31 @@ impl Session {
         Ok(())
     }
 
-    fn m(&mut self) -> &mut Machine {
-        self.machine.as_mut().expect("machine")
+    fn m(&mut self) -> &mut dyn Target {
+        &mut **self.machine.as_mut().expect("machine")
     }
 
     fn create_machine(&mut self, device_id: &str, program: Option<LoadedProgram>) -> Result<(), String> {
-        let spec = devices::get(device_id).ok_or_else(|| format!("Unknown device '{device_id}'"))?;
+        let dev = devices::get_any(device_id).ok_or_else(|| format!("Unknown device '{device_id}'"))?;
         self.running = false;
-        if self.machine.as_ref().map(|m| m.spec.id != spec.id).unwrap_or(true) {
-            self.machine = Some(Machine::new(spec));
-            self.out.push(Output::Device { spec: Box::new(spec.clone()) });
+        if self.machine.as_ref().map(|m| !m.device().same_as(&dev)).unwrap_or(true) {
+            self.machine = Some(new_target(dev));
+            self.out.push(Output::Device { spec: dev });
         }
-        match &program {
-            Some(p) => self.m().load(p),
-            None => self.m().power_on(),
-        }
-        self.program = program;
-        self.trace_sent = 0;
+        self.m().load_program(program.as_ref());
+        self.m().set_source_map(program.as_ref());
+        self.sent = Sent { trace: 0, eeprom: u64::MAX };
         self.flash_version += 1;
-        self.eeprom_sent = u64::MAX;
-        self.build_line_map();
         self.apply_breakpoints();
-        self.stop(StopInfo { reason: StopKind::Load, pc: 0, message: None });
+        let pc = self.m().pc();
+        self.stop(StopInfo { reason: StopKind::Load, pc, message: None });
         Ok(())
     }
 
-    fn build_line_map(&mut self) {
-        let words = self.m().cpu.pc_mask as usize + 1;
-        let mut key = vec![-1i32; words];
-        if let Some(p) = &self.program {
-            // Several statement rows can share an address (`for(;;)` + its first statement,
-            // or a call site + inlined header code). Use the file of the first one and the
-            // last row from that file: the most specific statement in the user's file.
-            for row in p.lines.iter().filter(|r| r.is_stmt) {
-                let w = (row.address >> 1) as usize;
-                if w >= words {
-                    continue;
-                }
-                let k = ((row.file as i32) << 20) | (row.line as i32 & 0xfffff);
-                if key[w] == -1 || key[w] >> 20 == k >> 20 {
-                    key[w] = k;
-                }
-            }
-        }
-        self.line_key = key;
-    }
-
     fn apply_breakpoints(&mut self) {
-        let bps = self.breakpoints.clone();
-        if let Some(m) = self.machine.as_mut() {
-            m.cpu.breakpoints.fill(false);
-            for pc in bps {
-                if let Some(b) = m.cpu.breakpoints.get_mut(pc as usize) {
-                    *b = true;
-                }
-            }
+        let Self { machine, breakpoints, .. } = self;
+        if let Some(m) = machine.as_deref_mut() {
+            m.set_breakpoints(breakpoints);
         }
     }
 
@@ -284,7 +255,7 @@ impl Session {
         }
         self.running = true;
         self.resync_clock();
-        let cycles = self.m().cpu.cycles;
+        let cycles = self.m().cycles();
         self.speed_sample = (now_ms(), cycles, 0.0);
         self.publish();
     }
@@ -292,7 +263,7 @@ impl Session {
     fn stop(&mut self, info: StopInfo) {
         self.running = false;
         if let Some(m) = self.machine.as_mut() {
-            m.step_predicate = None;
+            m.clear_stop_condition();
         }
         self.run_to = None;
         self.pending_stop = Some(info);
@@ -301,8 +272,8 @@ impl Session {
 
     fn resync_clock(&mut self) {
         self.wall_start = now_ms();
-        self.sim_start = self.machine.as_ref().map(|m| m.time_seconds()).unwrap_or(0.0);
-        self.cycle_start = self.machine.as_ref().map(|m| m.cpu.cycles).unwrap_or(0);
+        self.sim_start = self.machine.as_ref().map(|m| m.elapsed_seconds()).unwrap_or(0.0);
+        self.cycle_start = self.machine.as_ref().map(|m| m.cycles()).unwrap_or(0);
     }
 
     /// Runs one time slice when running. Returns outputs (periodic state / stop events).
@@ -316,11 +287,12 @@ impl Session {
         let mut sim_start = self.sim_start;
         let mut cycle_start = self.cycle_start;
         let m = self.m();
+        let now_cycles = m.cycles();
         let target = match speed {
-            SpeedMode::Max => m.cpu.cycles + cps,
+            SpeedMode::Max => now_cycles + cps,
             SpeedMode::Clock => {
                 let want = cycle_start as f64 + wall * factor;
-                let cap = m.cpu.cycles as f64 + (MAX_CATCHUP_SEC * factor).max(1.0);
+                let cap = now_cycles as f64 + (MAX_CATCHUP_SEC * factor).max(1.0);
                 if want > cap {
                     cycle_start = (cap - wall * factor).max(0.0) as u64;
                 }
@@ -328,15 +300,15 @@ impl Session {
             }
             SpeedMode::Realtime => {
                 let sim_target = sim_start + wall * factor;
-                let max_target = m.time_seconds() + MAX_CATCHUP_SEC * factor;
+                let max_target = m.elapsed_seconds() + MAX_CATCHUP_SEC * factor;
                 if sim_target > max_target {
                     // Fell behind (slow host): drop the backlog instead of spiralling.
                     sim_start = max_target - wall * factor;
                 }
-                m.sys.clock.cycle_at(sim_target.min(max_target))
+                m.cycle_at(sim_target.min(max_target))
             }
         };
-        let reason = if target > m.cpu.cycles { m.run(target) } else { StopReason::Limit };
+        let reason = if target > now_cycles { m.run_until(target) } else { StopReason::Limit };
         self.sim_start = sim_start;
         self.cycle_start = cycle_start;
         let elapsed = now_ms() - t0;
@@ -352,7 +324,7 @@ impl Session {
             // Slow fixed-rate modes advance a few cycles per slice: only publish real changes
             // (plus a periodic refresh for the speed readout).
             let since = now_ms() - self.last_publish;
-            let changed = self.machine.as_ref().is_some_and(|m| m.cpu.cycles != self.published_cycles);
+            let changed = self.machine.as_ref().is_some_and(|m| m.cycles() != self.published_cycles);
             if since >= STATE_INTERVAL_MS && (changed || since >= 500.0) {
                 self.publish();
             }
@@ -377,11 +349,12 @@ impl Session {
     }
 
     fn stop_info(&mut self, reason: StopReason) -> StopInfo {
-        let pc = self.m().cpu.pc;
+        let pc = self.m().pc();
         match reason {
             StopReason::Breakpoint => StopInfo { reason: StopKind::Breakpoint, pc, message: None },
             StopReason::BreakInsn => StopInfo { reason: StopKind::Break, pc, message: Some("BREAK instruction executed".into()) },
             StopReason::InvalidOpcode => StopInfo { reason: StopKind::Invalid, pc, message: Some("Invalid opcode".into()) },
+            StopReason::Lockup => StopInfo { reason: StopKind::Invalid, pc, message: Some("CPU locked up (fault while handling a fault)".into()) },
             _ => StopInfo { reason: if self.run_to.is_some() { StopKind::RunTo } else { StopKind::Step }, pc, message: None },
         }
     }
@@ -394,83 +367,21 @@ impl Session {
         if self.running {
             return;
         }
-        let use_lines = source && self.program.as_ref().is_some_and(|p| !p.lines.is_empty());
-        let start_key = self.current_line_key();
-        let line_key = self.line_key.clone();
-        let m = self.m();
-        let depth0 = m.cpu.shadow_stack.len();
-
-        let single = |s: &mut Self| {
-            let r = s.m().step();
-            let info = if r == StopReason::Limit {
-                let pc = s.m().cpu.pc;
-                StopInfo { reason: StopKind::Step, pc, message: None }
-            } else {
-                s.stop_info(r)
-            };
-            s.stop(info);
-        };
-
-        match (kind, use_lines) {
-            (StepKind::Into, false) => return single(self),
-            (StepKind::Over, false) => {
-                let pc = m.cpu.pc;
-                let o = m.cpu.op_at(pc);
-                if !matches!(o, op::RCALL | op::ICALL | op::CALL | op::EICALL) {
-                    return single(self);
-                }
-                let ret = (pc + m.cpu.insn_words_at(pc)) & m.cpu.pc_mask;
-                m.step_predicate = Some(Box::new(move |cpu| cpu.pc == ret && cpu.shadow_stack.len() <= depth0));
-            }
-            (StepKind::Out, _) => {
-                if depth0 == 0 {
-                    let c = m.cpu.cycles;
-                    m.sys.warn_key(c, "stepout-empty", "Step Out: not inside a function call (call stack empty)");
-                    self.publish();
-                    return;
-                }
-                m.step_predicate = Some(if use_lines {
-                    Box::new(move |cpu| cpu.shadow_stack.len() < depth0 && line_key[cpu.pc as usize] != -1)
+        match self.m().begin_step(kind, source) {
+            StepPlan::Single => {
+                let r = self.m().step_one();
+                let info = if r == StopReason::Limit {
+                    let pc = self.m().pc();
+                    StopInfo { reason: StopKind::Step, pc, message: None }
                 } else {
-                    Box::new(move |cpu| cpu.shadow_stack.len() < depth0)
-                });
+                    self.stop_info(r)
+                };
+                self.stop(info);
             }
-            (StepKind::Into, true) => {
-                m.step_predicate = Some(Box::new(move |cpu| {
-                    let k = line_key[cpu.pc as usize];
-                    k != -1 && (k != start_key || cpu.shadow_stack.len() != depth0)
-                }));
-            }
-            (StepKind::Over, true) => {
-                // Source-level step over:
-                // * without a source context (e.g. at the reset vector, before the C runtime
-                //   calls main) stop at the first line with debug info, at any call depth;
-                // * skip called functions (deeper frames) and stop when the current one returns;
-                // * stay in the current file, so code inlined from headers (e.g. _delay_ms)
-                //   is stepped over as part of its call-site line.
-                m.step_predicate = Some(Box::new(move |cpu| {
-                    let k = line_key[cpu.pc as usize];
-                    if k == -1 {
-                        return false;
-                    }
-                    if start_key == -1 {
-                        return true;
-                    }
-                    let d = cpu.shadow_stack.len();
-                    if d != depth0 {
-                        return d < depth0;
-                    }
-                    (k >> 20) == (start_key >> 20) && k != start_key
-                }));
-            }
+            // Long steps run through the normal slicing so they stay pausable.
+            StepPlan::Run => self.start(),
+            StepPlan::Refused => self.publish(),
         }
-        // Long steps run through the normal slicing so they stay pausable.
-        self.start();
-    }
-
-    fn current_line_key(&mut self) -> i32 {
-        let pc = self.machine.as_ref().map(|m| m.cpu.pc as usize).unwrap_or(0);
-        (0..=pc.min(self.line_key.len().saturating_sub(1))).rev().map(|w| self.line_key[w]).find(|&k| k != -1).unwrap_or(-1)
     }
 
     // ---------------------------------------------------------------------------------
@@ -485,87 +396,26 @@ impl Session {
 
     pub fn publish(&mut self) {
         let running = self.running;
-        let (trace_sent, flash_version, flash_sent, eeprom_sent) = (self.trace_sent, self.flash_version, self.flash_sent, self.eeprom_sent);
+        let (flash_version, flash_sent) = (self.flash_version, self.flash_sent);
         let now = now_ms();
         let (sample_t, sample_c, sample_hz) = self.speed_sample;
-        let Some(m) = self.machine.as_mut() else { return };
-        let data: Vec<u8> = (0..m.cpu.data_end).map(|a| m.peek_data(a)).collect();
-        let (trace_from, trace_cycles, trace_levels) = m.sys.trace.read_since_wide(trace_sent, MAX_TRACE_PER_STATE);
-        let trace_words = m.sys.trace.words() as u32;
-        let new_trace_sent = m.sys.trace.seq;
+        let Some(m) = self.machine.as_deref_mut() else { return };
+        let mut state = m.snapshot(&mut self.sent, flash_sent != flash_version, MAX_TRACE_PER_STATE);
         let dt = (now - sample_t) / 1000.0;
         let speed = if dt >= 0.25 || !running {
-            let hz = if running && dt > 0.0 { (m.cpu.cycles - sample_c) as f64 / dt } else { 0.0 };
-            Some((now, m.cpu.cycles, hz))
+            let hz = if running && dt > 0.0 { (state.cycles - sample_c) as f64 / dt } else { 0.0 };
+            Some((now, state.cycles, hz))
         } else {
             None
         };
-        let flash = (flash_sent != flash_version).then(|| m.cpu.flash.clone());
-        let eeprom_version = m.cpu.eeprom_version;
-        let eeprom = (eeprom_sent != eeprom_version).then(|| m.cpu.eeprom.clone());
-        let serial = std::mem::take(&mut m.sys.serial_out);
-        let serial_config = m.serial_config();
-        let pins = m
-            .sys
-            .pins
-            .iter()
-            .map(|p| PinState {
-                level: p.level,
-                dir: p.effective_dir(),
-                out: p.out,
-                pullup: p.pullup,
-                ov_enable: p.ov_enable,
-                ext: p.ext,
-                ext_volts: p.ext_volts,
-                volts: p.volts,
-                reserved: p.reserved,
-                reserved_by: p.reserved_by,
-                gen: p.gen,
-            })
-            .collect();
-        let peripherals = m.inspect_peripherals().into_iter().map(|(name, values)| PeripheralInfo { name, values }).collect();
-        let stack = &m.cpu.shadow_stack;
-        let state = MachineState {
-            running,
-            pc: m.cpu.pc,
-            sp: m.cpu.sp,
-            sreg: m.cpu.sreg,
-            cycles: m.cpu.cycles,
-            instructions: m.cpu.instructions,
-            time_sec: m.time_seconds(),
-            hz: m.sys.clock.hz,
-            ext_clock_hz: m.sys.ext_clock_hz,
-            sleeping: m.cpu.sleeping,
-            sleep_mode: m.cpu.sleep_mode,
-            reset_held: m.sys.reset_held,
-            regs: m.cpu.r.to_vec(),
-            data,
-            flash,
-            flash_version,
-            fuses: m.cpu.fuses.clone(),
-            eeprom,
-            serial,
-            serial_config,
-            lock: m.cpu.lock_bits,
-            pins,
-            vcc: m.sys.vcc,
-            call_stack: stack[stack.len().saturating_sub(64)..].to_vec(),
-            peripherals,
-            speed_hz: speed.map(|s| s.2).unwrap_or(sample_hz),
-            trace_from,
-            trace_cycles,
-            trace_words,
-            trace_levels,
-            exec_heat: m.take_exec_counts(),
-            messages: m.messages(),
-            stop: self.pending_stop.take(),
-        };
+        state.running = running;
+        state.flash_version = flash_version;
+        state.speed_hz = speed.map(|s| s.2).unwrap_or(sample_hz);
+        state.stop = self.pending_stop.take();
         if let Some(s) = speed {
             self.speed_sample = s;
         }
         self.published_cycles = state.cycles;
-        self.eeprom_sent = eeprom_version;
-        self.trace_sent = new_trace_sent;
         self.flash_sent = flash_version;
         self.last_publish = now;
         self.out.push(Output::State { state: Box::new(state) });

@@ -80,7 +80,7 @@ export function PinsPanel(): JSX.Element {
     <div className="panel">
       <div className="panel-scroll">
         <Section title={`${spec.name} - ${spec.package}`}>
-          <ChipDiagram pins={spec.pins} states={st.pins} name={spec.name} vcc={st.vcc} />
+          {spec.arch === 'arm' ? <QuadDiagram pins={spec.pins} states={st.pins} name={spec.name} pkg={spec.package} vcc={st.vcc} /> : <ChipDiagram pins={spec.pins} states={st.pins} name={spec.name} vcc={st.vcc} />}
         </Section>
         <Section title="Pin stimulus">
           <table className="grid-table pin-table">
@@ -173,8 +173,8 @@ export function PinsPanel(): JSX.Element {
             <input
               type="range"
               className="w7-slider"
-              min={1.8}
-              max={5.5}
+              min={spec.arch === 'arm' ? spec.vccRange[0] : 1.8}
+              max={spec.arch === 'arm' ? spec.vccRange[1] : 5.5}
               step={0.05}
               value={vcc}
               onChange={(e) => {
@@ -188,6 +188,91 @@ export function PinsPanel(): JSX.Element {
         </Section>
       </div>
     </div>
+  );
+}
+
+const PIN_GRADIENTS = (
+  <>
+    <linearGradient id="chip-body" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stopColor="#4a5563" />
+      <stop offset="0.5" stopColor="#2b333d" />
+      <stop offset="1" stopColor="#1b2027" />
+    </linearGradient>
+    <linearGradient id="pin-idle" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stopColor="#f2f4f6" /><stop offset="1" stopColor="#a8b0ba" /></linearGradient>
+    <linearGradient id="pin-high-out" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stopColor="#c6ffbe" /><stop offset="1" stopColor="#24a524" /></linearGradient>
+    <linearGradient id="pin-high-in" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stopColor="#d6ecff" /><stop offset="1" stopColor="#3d8fe0" /></linearGradient>
+    <linearGradient id="pin-analog" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stopColor="#fff2c4" /><stop offset="1" stopColor="#e3a21a" /></linearGradient>
+    <linearGradient id="pin-vcc" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stopColor="#ffd0c4" /><stop offset="1" stopColor="#d2462b" /></linearGradient>
+    <linearGradient id="pin-gnd" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stopColor="#9aa6b3" /><stop offset="1" stopColor="#3b4552" /></linearGradient>
+  </>
+);
+
+function pinFill(p: PinSpec, states: PinState[]): string {
+  if (p.kind === 'vcc') return 'url(#pin-vcc)';
+  if (p.kind === 'gnd') return 'url(#pin-gnd)';
+  if (p.kind === 'ref') return 'url(#pin-analog)';
+  const s = p.gpio !== undefined ? states[p.gpio] : undefined;
+  if (!s) return 'url(#pin-idle)';
+  if (s.ext === 'analog' && !s.dir) return 'url(#pin-analog)';
+  return s.level ? (s.dir ? 'url(#pin-high-out)' : 'url(#pin-high-in)') : 'url(#pin-idle)';
+}
+
+/**
+ * Quad flat package (LQFP) drawing: pin 1 at the top of the left side, numbering counter-clockwise
+ * (left side down, bottom left to right, right side up, top right to left). Labels on the top and
+ * bottom sides are rotated.
+ */
+function QuadDiagram({ pins, states, name, pkg, vcc }: { pins: PinSpec[]; states: PinState[]; name: string; pkg: string; vcc: number }): JSX.Element {
+  const n = pins.length;
+  const per = Math.ceil(n / 4);
+  const pitch = 17;
+  const side = per * pitch + 8;
+  const label = 74;
+  const W = side + 2 * (label + 22);
+  const H = W;
+  const x0 = label + 22;
+  const y0 = label + 22;
+  const sorted = [...pins].sort((a, b) => a.number - b.number);
+  return (
+    <svg className="chip-svg" viewBox={`0 0 ${W} ${H}`} width="100%" style={{ maxWidth: 560 }}>
+      <defs>{PIN_GRADIENTS}</defs>
+      <rect x={x0} y={y0} width={side} height={side} rx="6" fill="url(#chip-body)" stroke="#11161c" />
+      <circle cx={x0 + 12} cy={y0 + 12} r="4" fill="#5c6878" stroke="#11161c" strokeWidth="0.5" />
+      <text x={W / 2} y={H / 2 - 2} textAnchor="middle" fill="#cfd8e2" fontSize="14" fontFamily="var(--font-ui)">{name}</text>
+      <text x={W / 2} y={H / 2 + 14} textAnchor="middle" fill="#8e9bab" fontSize="11" fontFamily="var(--font-ui)">{pkg}</text>
+      {sorted.map((p, idx) => {
+        const edge = Math.floor(idx / per);
+        const k = idx % per;
+        const along = 4 + k * pitch + pitch / 2;
+        // 0 left (top -> bottom), 1 bottom (left -> right), 2 right (bottom -> top), 3 top (right -> left)
+        const cx = edge === 0 ? x0 : edge === 1 ? x0 + along : edge === 2 ? x0 + side : x0 + side - along;
+        const cy = edge === 0 ? y0 + along : edge === 1 ? y0 + side : edge === 2 ? y0 + side - along : y0;
+        const horizontal = edge === 0 || edge === 2;
+        const s = p.gpio !== undefined ? states[p.gpio] : undefined;
+        const interactive = p.kind === 'io' && s && !s.reserved;
+        const text = p.kind === 'io' ? p.name.split('-')[0] : p.kind === 'vcc' ? `${p.name} ${vcc.toFixed(1)}V` : p.name;
+        const dir = edge === 0 ? -1 : edge === 2 ? 1 : 0;
+        const dirY = edge === 3 ? -1 : edge === 1 ? 1 : 0;
+        const w = horizontal ? 14 : 5;
+        const h = horizontal ? 5 : 14;
+        return (
+          <g
+            key={p.number}
+            className={interactive ? 'chip-pin interactive' : 'chip-pin'}
+            onClick={() => interactive && setDrive(p.gpio!, NEXT_DRIVE[s!.ext], s!.extVolts)}
+            data-tip={p.kind === 'io' ? `${p.name} (pin ${p.number}): ${p.functions.slice(0, 12).join(', ')}\nClick to cycle the external source: Z -> 1 -> 0` : `${p.name} (pin ${p.number})`}
+          >
+            <rect x={horizontal ? cx + (dir < 0 ? -w : 0) : cx - w / 2} y={horizontal ? cy - h / 2 : cy + (dirY < 0 ? -h : 0)} width={w} height={h} rx="1" fill={pinFill(p, states)} stroke="#3b4552" strokeWidth="0.6" />
+            {horizontal ? (
+              <text x={cx + dir * (w + 4)} y={cy + 3} textAnchor={dir < 0 ? 'end' : 'start'} fontSize="9.5" fontWeight="600" fill="#1e395b" fontFamily="var(--font-mono)">{text}</text>
+            ) : (
+              <text transform={`translate(${cx + 3},${cy + dirY * (h + 4)}) rotate(-90)`} textAnchor={dirY < 0 ? 'start' : 'end'} fontSize="9.5" fontWeight="600" fill="#1e395b" fontFamily="var(--font-mono)">{text}</text>
+            )}
+            {s && s.dir === 1 && <circle cx={horizontal ? cx + dir * (w + 1) : cx} cy={horizontal ? cy : cy + dirY * (h + 1)} r="1.6" fill="#24a524" />}
+          </g>
+        );
+      })}
+    </svg>
   );
 }
 

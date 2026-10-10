@@ -4,6 +4,7 @@ import { sim } from '../services/simClient';
 import { bin8, hex } from '../format';
 import { EditableValue, EmptyHint } from './common';
 import type { IoRegisterSpec } from '../backend/types';
+import { ArmIoView } from './ArmIoView';
 
 const expandedGroups = new Set<string>(['PORTB', 'TC0']);
 const expandedRegs = new Set<string>();
@@ -16,9 +17,15 @@ function popcount(m: number): number {
   return c;
 }
 
-/** Atmel Studio style I/O view: peripherals > registers > bits, live values, editable. */
+/** Peripheral register view: the AVR (Atmel Studio style) or the ARM variant. */
 export function IoViewPanel(): JSX.Element {
-  const spec = useSim((s) => s.spec);
+  const arm = useSim((s) => s.spec?.arch === 'arm');
+  return arm ? <ArmIoView /> : <AvrIoView />;
+}
+
+/** Atmel Studio style I/O view: peripherals > registers > bits, live values, editable. */
+function AvrIoView(): JSX.Element {
+  const spec = useSim((s) => (s.spec?.arch === 'avr' ? s.spec : null));
   const st = useSim((s) => s.state);
   const base = useSim((s) => s.baseline);
   const [, force] = useState(0);

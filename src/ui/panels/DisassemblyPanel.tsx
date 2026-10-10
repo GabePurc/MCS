@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type JSX } from 'react';
 import { disassemble } from '../backend/api';
-import type { DisasmLine } from '../backend/types';
+import { flashBaseOf, pcToBytes, type DisasmLine } from '../backend/types';
 import { useSim } from '../state/sim';
 import { appendOutput, requestGoto, resolvedPcMap, toggleAddressBreakpoint, useWorkspace } from '../state/workspace';
 import { sim } from '../services/simClient';
@@ -22,6 +22,9 @@ export function DisassemblyPanel(): JSX.Element {
   const running = useSim((s) => s.running);
   const revealSeq = useSim((s) => s.revealSeq);
   const build = useWorkspace((s) => s.build);
+  const arch = spec?.arch ?? 'avr';
+  const flashBase = spec ? flashBaseOf(spec) : 0;
+  const addrDigits = arch === 'arm' ? 8 : 4;
   const bps = useWorkspace((s) => s.breakpoints);
   const disasmGoto = useWorkspace((s) => s.disasmGoto);
   const [lines, setLines] = useState<DisasmLine[]>([]);
@@ -55,10 +58,10 @@ export function DisassemblyPanel(): JSX.Element {
     }
     let lastSrc = '';
     for (const l of lines) {
-      const byte = l.pc * 2;
-      if (!showAll && byte >= used && l.raw[0] === 0xffff) continue;
+      const byte = pcToBytes(arch, l.pc);
+      if (!showAll && byte - flashBase >= used && l.raw[0] === 0xffff) continue;
       for (const n of labelAt.get(byte) ?? []) out.push({ kind: 'label', text: `${n}:` });
-      const src = build ? pcToSource(build.program, l.pc) : null;
+      const src = build ? pcToSource(build.program, l.pc, arch) : null;
       if (src) {
         const key = `${src.file}:${src.line}`;
         if (key !== lastSrc) {
@@ -69,7 +72,7 @@ export function DisassemblyPanel(): JSX.Element {
       out.push({ kind: 'insn', line: l });
     }
     return out;
-  }, [lines, build, used, showAll]);
+  }, [lines, build, used, showAll, arch, flashBase]);
 
   const rowOfPc = useMemo(() => {
     const m = new Map<number, number>();
@@ -77,7 +80,7 @@ export function DisassemblyPanel(): JSX.Element {
     return m;
   }, [rows]);
 
-  const bpMap = useMemo(() => resolvedPcMap(bps, build?.program ?? null), [bps, build]);
+  const bpMap = useMemo(() => resolvedPcMap(bps, build?.program ?? null, build?.arch), [bps, build]);
 
   // Scroll the current PC into view whenever execution stops.
   useEffect(() => {
@@ -100,7 +103,7 @@ export function DisassemblyPanel(): JSX.Element {
   const last = Math.min(rows.length, first + Math.ceil(height / ROW_H) + 4);
 
   const gotoSource = (wpc: number) => {
-    const loc = build ? pcToSource(build.program, wpc) : null;
+    const loc = build ? pcToSource(build.program, wpc, arch) : null;
     if (!loc) return;
     const ws = useWorkspace.getState();
     const doc = ws.docs.find((d) => sameFile(loc.file, d.path ?? d.name));
@@ -143,7 +146,7 @@ export function DisassemblyPanel(): JSX.Element {
                   openContextMenu(e, [
                     { kind: 'action', label: 'Toggle Breakpoint', icon: 'Breakpoint', run: () => toggleAddressBreakpoint(l.pc) },
                     { kind: 'action', label: 'Run To Here', icon: 'RunToCursor', disabled: running, run: () => sim({ type: 'runTo', pc: l.pc }) },
-                    { kind: 'action', label: 'Set Next Statement (PC)', disabled: running, run: () => sim({ type: 'writeCpu', field: 'pc', value: l.pc * 2 }) },
+                    { kind: 'action', label: 'Set Next Statement (PC)', disabled: running, run: () => sim({ type: 'writeCpu', field: 'pc', value: pcToBytes(arch, l.pc) }) },
                     { kind: 'sep' },
                     { kind: 'action', label: 'Go To Source', run: () => gotoSource(l.pc) },
                   ])
@@ -153,7 +156,7 @@ export function DisassemblyPanel(): JSX.Element {
                   {bp && <span className="cm-bp" />}
                   {isPc && !running && <span className="cm-exec-arrow" />}
                 </span>
-                <span className="dis-addr">{hexRaw(l.pc * 2, 4)}</span>
+                <span className="dis-addr">{hexRaw(pcToBytes(arch, l.pc), addrDigits)}</span>
                 <span className="dis-raw dim">{l.raw.map((w) => hexRaw(w, 4)).join(' ')}</span>
                 <span className="dis-mn">{l.mnemonic}</span>
                 <span className="dis-ops">{l.operands}</span>

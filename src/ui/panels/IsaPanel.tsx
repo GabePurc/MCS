@@ -80,6 +80,7 @@ export function IsaPanel(): JSX.Element {
   }, [rows, filter, showAliases]);
   const current = rows.find((r) => `${r.mnemonic} ${r.operands}` === sel);
   if (!spec) return <EmptyHint>No device loaded.</EmptyHint>;
+  if (spec.arch !== 'avr') return <EmptyHint>The instruction set reference is available for AVR devices.</EmptyHint>;
   const insert = (r: InsnInfo) => {
     const doc = activeDoc();
     const api = editorApi();

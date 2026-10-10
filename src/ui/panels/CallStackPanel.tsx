@@ -4,6 +4,7 @@ import { requestDisasmGoto, requestGoto, useWorkspace } from '../state/workspace
 import { useLayout } from '../state/layout';
 import { pcToSource, sameFile, baseName } from '../services/debugInfo';
 import { hex } from '../format';
+import { pcToBytes } from '../backend/types';
 import { EmptyHint } from './common';
 
 /** Shadow call stack tracked by the simulator (calls and interrupt entries). */
@@ -12,14 +13,16 @@ export function CallStackPanel(): JSX.Element {
   const spec = useSim((s) => s.spec);
   const build = useWorkspace((s) => s.build);
   if (!st) return <EmptyHint>No program running.</EmptyHint>;
+  const arch = spec?.arch ?? 'avr';
+  const addrDigits = arch === 'arm' ? 8 : 4;
   const frames = [...st.callStack].reverse();
-  const describe = (wpc: number) => build?.symbols.describeCode(wpc * 2) ?? hex(wpc * 2, 4);
+  const describe = (pc: number) => build?.symbols.describeCode(pcToBytes(arch, pc)) ?? hex(pcToBytes(arch, pc), addrDigits);
   const srcOf = (wpc: number) => {
-    const s = build ? pcToSource(build.program, wpc) : null;
+    const s = build ? pcToSource(build.program, wpc, arch) : null;
     return s ? `${baseName(s.file)}:${s.line}` : '';
   };
   const go = (wpc: number) => {
-    const s = build ? pcToSource(build.program, wpc) : null;
+    const s = build ? pcToSource(build.program, wpc, arch) : null;
     const doc = s && useWorkspace.getState().docs.find((d) => sameFile(s.file, d.path ?? d.name));
     if (s && doc) requestGoto(doc.id, s.line);
     else {
@@ -48,7 +51,7 @@ export function CallStackPanel(): JSX.Element {
               <tr key={i} className="row-hot" onDoubleClick={() => go(r.pc)}>
                 <td>{i === 0 && <span className="cm-exec-arrow inline" />}</td>
                 <td>{r.name}</td>
-                <td className="mono">{hex(r.pc * 2, 4)}</td>
+                <td className="mono">{hex(pcToBytes(arch, r.pc), addrDigits)}</td>
                 <td className="dim">{r.src}</td>
                 <td className="dim">{r.note}</td>
               </tr>
