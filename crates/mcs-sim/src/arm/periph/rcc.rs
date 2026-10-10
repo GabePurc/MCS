@@ -56,6 +56,7 @@ impl Rcc {
         self.r[CFGR] = 0x5; // SW = SWS = HSI16
         self.r[PLLCFGR] = 0x0000_1000;
         self.r[0x48 >> 2] = 0x100; // AHB1ENR: FLASHEN
+        self.r[0x58 >> 2] = 0x400; // APB1ENR1: RTCAPBEN
         self.r[0x68 >> 2] = 0x0000_1303; // AHB1SMENR
         self.r[0x6c >> 2] = 0x0001_20ff; // AHB2SMENR (reset values per RM0440 6.4)
         self.r[0x94 >> 2] = 0x0c00_0000; // CSR: reset flags
@@ -299,7 +300,7 @@ impl FlashIf {
     }
 
     fn set_reset_values(&mut self) {
-        self.acr = 0x0004_0601;
+        self.acr = 0x0004_0600; // DBG_SWEN, DCEN, ICEN; LATENCY = 0 (STM32G474xx.svd)
         self.sr = 0;
         self.cr = 0xc000_0000; // LOCK and OPTLOCK set
         self.keyr_state = 0;

@@ -31,13 +31,14 @@ TEMPLATES = [
     ("TIM_BASIC", "TIM", "TIM", "CR1 CR2 DIER SR EGR CNT PSC ARR".split()),
 ]
 
-# Reset values (RM0440 register descriptions); everything else resets to 0.
+# Reset values (RM0440 register descriptions, checked against ST's STM32G474xx.svd; its RCC_CR
+# value 0x63 sets bits reserved on the G4, so 0x500 = HSION | HSIRDY is used); everything else 0.
 RESET = {
-    "RCC": {"CR": 0x500, "ICSCR": 0x40000000, "PLLCFGR": 0x1000, "AHB1ENR": 0x100, "AHB2ENR": 0, "CSR": 0x0C000000},
-    "FLASH": {"ACR": 0x40601, "CR": 0xC0000000, "SR": 0},
+    "RCC": {"CR": 0x500, "ICSCR": 0x40000000, "PLLCFGR": 0x1000, "AHB1ENR": 0x100, "AHB2ENR": 0, "APB1ENR1": 0x400, "CSR": 0x0C000000},
+    "FLASH": {"ACR": 0x40600, "CR": 0xC0000000, "SR": 0},
     "PWR": {"CR1": 0x200, "CR3": 0x8000, "CR5": 0x100},
     "SYSCFG": {"CFGR1": 0x7C000001},
-    "EXTI": {"IMR1": 0xFF020000},
+    "EXTI": {"IMR1": 0xFF820000},
     "GPIO": {},
     "USART": {"ISR": 0xC0},
     "TIM_GP": {"ARR": 0xFFFF},

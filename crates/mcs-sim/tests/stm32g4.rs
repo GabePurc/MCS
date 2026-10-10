@@ -206,7 +206,7 @@ fn peripheral_clock_gating_and_reset_through_rcc() {
 fn flash_latency_and_unlock_sequence() {
     let mut m = Machine::from_spec(spec(G474));
     let flash = 0x4002_2000;
-    assert_eq!(rd(&mut m, flash) & 0xf, 1, "reset latency");
+    assert_eq!(rd(&mut m, flash) & 0xf, 0, "reset latency");
     wr(&mut m, flash, 0x0004_0608);
     assert_eq!(rd(&mut m, flash) & 0xf, 8);
     assert_ne!(rd(&mut m, flash + 0x14) & 1 << 31, 0, "locked after reset");

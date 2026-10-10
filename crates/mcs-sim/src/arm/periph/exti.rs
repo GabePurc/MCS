@@ -52,7 +52,7 @@ impl SysExti {
         self.scsr = 0;
         self.cfgr2 = 0;
         self.swpr = 0;
-        self.imr = 0xff02_0000;
+        self.imr = 0xff82_0000;
         self.emr = 0;
         self.rtsr = 0;
         self.ftsr = 0;
