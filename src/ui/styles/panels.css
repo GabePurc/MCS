@@ -232,6 +232,9 @@ a.link:hover { text-decoration: underline; }
 
 /* ---------------------------------------------------------------- updates */
 .update-notes { max-height: 220px; overflow: auto; margin: 6px 0 0; padding: 6px 8px; border: 1px solid var(--border-soft); background: #fff; white-space: pre-wrap; font-family: var(--font-ui); }
+.whats-new { max-height: 420px; overflow: auto; }
+.whats-new-list { margin: 4px 0 2px; padding-left: 18px; }
+.whats-new-list li { margin: 3px 0; line-height: 1.4; }
 .update-badge { color: #fff; background: linear-gradient(#5fb85a, #2f8f2b); font-weight: 600; }
 
 /* ---------------------------------------------------------------- serial monitor */

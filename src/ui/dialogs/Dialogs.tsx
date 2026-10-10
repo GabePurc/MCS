@@ -10,6 +10,7 @@ import { setSpeed, speedLabel } from '../services/commands';
 import { formatHz, hex, parseHz } from '../format';
 import { CustomDeviceDialog } from './CustomDeviceDialog';
 import { APP_VERSION, checkForUpdates, installUpdate, useUpdates } from '../services/updater';
+import { whatsNewSections } from '../services/whatsNew';
 
 /** Aero-framed modal dialog with a Windows 7 TaskDialog-style button area. */
 export function Dialog({ title, children, buttons, width = 460, gray }: { title: string; children: ReactNode; buttons?: ReactNode; width?: number; gray?: boolean }): JSX.Element {
@@ -56,8 +57,42 @@ export function DialogHost(): JSX.Element | null {
     case 'speed': return <SpeedDialog />;
     case 'update': return <UpdateDialog />;
     case 'customDevice': return <CustomDeviceDialog />;
+    case 'whatsNew': return <WhatsNewDialog />;
     default: return null;
   }
+}
+
+/** `**bold**` spans of a changelog line. */
+function inlineMd(text: string): ReactNode[] {
+  return text.split(/\*\*(.+?)\*\*/g).map((part, i) => (i % 2 ? <b key={i}>{part}</b> : part));
+}
+
+/** Changelog bullets ("- " items whose continuation lines are indented) as a list. */
+function ChangelogBody({ body }: { body: string }): JSX.Element {
+  const items: string[] = [];
+  for (const line of body.split('\n')) {
+    if (/^\s*[-*] /.test(line)) items.push(line.replace(/^\s*[-*] /, ''));
+    else if (line.trim() && items.length) items[items.length - 1] += ' ' + line.trim();
+    else if (line.trim()) items.push(line.trim());
+  }
+  return <ul className="whats-new-list">{items.map((t, i) => <li key={i}>{inlineMd(t)}</li>)}</ul>;
+}
+
+function WhatsNewDialog(): JSX.Element {
+  const sections = whatsNewSections();
+  return (
+    <Dialog title="What's New" width={600} gray buttons={<button className="w7-btn default" onClick={closeDialog}><span>OK</span></button>}>
+      <h2 className="dialog-main-instruction">MCS has been updated to version {APP_VERSION}</h2>
+      <div className="whats-new selectable">
+        {sections.map((s) => (
+          <div key={s.version} className="w7-group">
+            <span className="w7-group-title">Version {s.version}</span>
+            <ChangelogBody body={s.body} />
+          </div>
+        ))}
+      </div>
+    </Dialog>
+  );
 }
 
 function AboutDialog(): JSX.Element {

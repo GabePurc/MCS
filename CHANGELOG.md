@@ -5,6 +5,21 @@ the in-app updater shows it as the update notes.
 
 ## [Unreleased]
 
+## [0.3.0]
+
+- **STM32 microcontrollers (ARM Cortex-M)**: STM32G431KB and STM32G474RE (Cortex-M4F), and the
+  big STM32H743IIT6 / STM32H743ZIT6 (Cortex-M7, 2 MB flash, 1 MB RAM, as on the Nucleo-H743ZI).
+  Full Thumb-2 instruction set with DSP and floating point, clocks and PLLs, GPIO, EXTI,
+  USART / UART, timers with PWM, SysTick and interrupts. Load a program as an ELF or Intel HEX
+  file; try the bundled Blink examples.
+- **ESP32-C3 (RISC-V)**: ESP32-C3 and ESP32-C3FH4 with GPIO, UART (Serial Monitor), USB serial,
+  system timer, timer groups and the interrupt matrix. Load an ELF or ESP-IDF .bin file; try the
+  bundled Blink and Hello (UART) examples.
+- **More AVRs**: ATtiny13A, ATtiny24A/44A/84A, ATtiny2313A/4313, ATmega8/16/32,
+  ATmega164PA/324PA/644PA/1284P and ATmega640/1280/2560 (the Arduino Mega chip).
+- **ARM and RISC-V debugging**: processor panels for their registers, peripheral registers with
+  bit fields, memory views for every RAM block, chip pinout drawings and disassembly.
+- **What's New**: this window appears once after an update (also in the Help menu).
 - **Custom microcontrollers** (Device > Custom Microcontroller...): choose flash, SRAM and
   EEPROM sizes, ports, timers, USARTs, SPI, I²C, ADC channels and more, from a few bytes up to
   8 MB of flash. The simulator generates the registers, interrupts and pins.

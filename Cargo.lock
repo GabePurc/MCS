@@ -2090,7 +2090,7 @@ dependencies = [
 
 [[package]]
 name = "mcs-api"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "mcs-asm",
  "mcs-core",
@@ -2100,7 +2100,7 @@ dependencies = [
 
 [[package]]
 name = "mcs-app"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "mcs-api",
  "mcs-core",
@@ -2118,7 +2118,7 @@ dependencies = [
 
 [[package]]
 name = "mcs-asm"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "mcs-core",
  "serde",
@@ -2127,7 +2127,7 @@ dependencies = [
 
 [[package]]
 name = "mcs-core"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -2135,14 +2135,14 @@ dependencies = [
 
 [[package]]
 name = "mcs-formats"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "mcs-core",
 ]
 
 [[package]]
 name = "mcs-sim"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "mcs-asm",
  "mcs-core",
@@ -2153,7 +2153,7 @@ dependencies = [
 
 [[package]]
 name = "mcs-wasm"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "mcs-api",
  "mcs-sim",

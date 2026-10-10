@@ -3,7 +3,7 @@ resolver = "2"
 members = ["crates/mcs-core", "crates/mcs-sim", "crates/mcs-asm", "crates/mcs-formats", "crates/mcs-api", "crates/mcs-wasm", "src-tauri"]
 
 [workspace.package]
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 license = "MIT"
 authors = ["Gabe Purcell"]

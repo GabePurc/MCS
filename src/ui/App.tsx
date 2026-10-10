@@ -13,6 +13,7 @@ import { renderPanel } from './panels/registry';
 import { FloatingWindows } from './dock/FloatingWindows';
 import { initMainWindowBridge } from './services/windows';
 import { scheduleStartupCheck } from './services/updater';
+import { showWhatsNewAfterUpdate } from './services/whatsNew';
 import { startSerial } from './state/serial';
 import { handleShortcut } from './services/commands';
 import { connectSim, sim } from './services/simClient';
@@ -41,6 +42,7 @@ export function App(): JSX.Element {
     void connectSim();
     void initMainWindowBridge();
     scheduleStartupCheck();
+    showWhatsNewAfterUpdate();
     startSerial();
     sim({ type: 'init', deviceId: s.deviceId });
     sim({ type: 'setSpeed', mode: s.speedMode, factor: s.speedFactor });
