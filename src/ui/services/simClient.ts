@@ -63,6 +63,20 @@ export function watchRam(index: number): void {
   sim({ type: 'watchRam', index });
 }
 
+/** Program memory image from a state: the backend leaves out the erased (0xFF) tail, pad it back to the flash size. */
+function flashImage(bytes: number[]): Uint8Array {
+  const f = new Uint8Array(Math.max(latest.spec?.flashSize ?? 0, bytes.length)).fill(0xff);
+  f.set(bytes);
+  return f;
+}
+
+/** `flash` without its erased (0xFF) tail, as the backend sends it (pop-out snapshots). */
+export function flashWithoutErasedTail(flash: Uint8Array): Uint8Array {
+  let end = flash.length;
+  while (end > 0 && flash[end - 1] === 0xff) end--;
+  return flash.subarray(0, end);
+}
+
 /** Raw backend state -> UI state (typed arrays). */
 export function convertState(r: RawMachineState): MachineState {
   return {
@@ -71,7 +85,7 @@ export function convertState(r: RawMachineState): MachineState {
     data: Uint8Array.from(r.data),
     io: Uint32Array.from(r.io ?? []),
     ramExtra: r.ramExtra ? { index: r.ramExtra.index, data: Uint8Array.from(r.ramExtra.data) } : undefined,
-    flash: r.flash ? Uint8Array.from(r.flash) : undefined,
+    flash: r.flash ? flashImage(r.flash) : undefined,
     traceCycles: Float64Array.from(r.traceCycles),
     traceLevels: Uint32Array.from(r.traceLevels),
     execHeat: r.execHeat ? Uint32Array.from(r.execHeat) : undefined,

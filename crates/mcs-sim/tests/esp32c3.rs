@@ -479,3 +479,19 @@ fn a_breakpoint_is_hit_when_a_run_starts_on_it_unless_it_just_fired() {
     assert_eq!(b.m.pc(), middle);
     assert!(b.snap().instructions > 8);
 }
+
+/// GitHub issue #6: a blank part's flash reads erased (0xFF) and the state carries no image for it (a zero-filled
+/// 4 MiB image disassembled into two million rows and stalled the UI); a loaded program's image ends at its last byte.
+#[test]
+fn blank_flash_is_erased_and_not_sent() {
+    let mut m = Esp32c3::from_spec(devices::get("esp32-c3").unwrap());
+    let st = m.snapshot(&mut Sent { trace: 0, eeprom: u64::MAX }, true, 100);
+    assert_eq!(st.flash.as_ref().map(Vec::len), Some(0));
+    assert_eq!(m.machine.bus.peek(IROM, 4), Some(0xffff_ffff));
+
+    let mut b = bench(CALLS);
+    let st = b.m.snapshot(&mut b.sent, true, 100);
+    let image = st.flash.unwrap();
+    assert!(!image.is_empty() && image.len() < 64 * 1024, "{}", image.len());
+    assert_ne!(image.last(), Some(&0xff));
+}

@@ -13,7 +13,7 @@ use super::{Esp32c3, RunStop};
 use crate::avr::peripherals::serial::SerialConfig;
 use crate::avr::CallFrame;
 use crate::pins::{ExtDrive, PinGenerator};
-use crate::protocol::{CoreState, CpuField, MachineState, PeripheralInfo, PinState, RamExtra, StepKind};
+use crate::protocol::{flash_image, CoreState, CpuField, MachineState, PeripheralInfo, PinState, RamExtra, StepKind};
 use crate::riscv::bus::{STIM_OWNER, BRIDGE_OWNER};
 use crate::riscv::debug::{is_call, StepCond, Stepper};
 use crate::target::{Sent, StepPlan, StopReason, Target};
@@ -422,7 +422,7 @@ impl Target for Esp32c3 {
         let io: Vec<u32> = spec.registers.iter().map(|r| self.machine.bus.peek_register(r.addr, now).unwrap_or(0)).collect();
         let call_stack = self.call_stack();
         let peripherals = self.machine.bus.inspect_all(now).into_iter().map(|(name, values)| PeripheralInfo { name, values }).collect();
-        let flash = include_flash.then(|| self.machine.bus.mem_data(self.flash).to_vec());
+        let flash = include_flash.then(|| flash_image(self.machine.bus.mem_data(self.flash)));
         let m = &mut self.machine;
         let sys = &mut m.bus.cx.sys;
         let (trace_from, trace_cycles, trace_levels) = sys.trace.read_since_wide(sent.trace, max_trace);

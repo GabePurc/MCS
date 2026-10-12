@@ -5,6 +5,10 @@ the in-app updater shows it as the update notes.
 
 ## [Unreleased]
 
+- **Fixed**: selecting an ESP32-C3 or ESP32-C3FH4 no longer freezes the app for up to a minute
+  (issue #6). A blank chip's flash now reads erased (FF), and program memory is sent to the
+  interface without its empty tail, so switching to big-flash parts is instant.
+
 ## [0.3.0]
 
 - **STM32 microcontrollers (ARM Cortex-M)**: STM32G431KB and STM32G474RE (Cortex-M4F), and the

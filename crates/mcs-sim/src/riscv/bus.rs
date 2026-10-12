@@ -446,6 +446,8 @@ impl Bus {
     pub fn esp32c3(flash_size: u32) -> (Bus, MemId, MemId) {
         let mut bus = Bus::new();
         let flash = bus.add_mem(flash_size.clamp(PAGE_SIZE, 8 << 20));
+        // Erased NOR flash reads 0xFF (like a blank chip before the first program load).
+        bus.mem_data_mut(flash).fill(0xff);
         let sram = bus.add_mem(0x64000);
         let rom0 = bus.add_mem(0x60000);
         let rom1 = bus.add_mem(0x20000);
