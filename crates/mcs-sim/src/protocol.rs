@@ -233,9 +233,11 @@ pub struct MachineState {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub io: Vec<u32>,
     /// Present only when program memory changed since the last state. Trailing erased (0xFF) bytes are
-    /// left out (see [`flash_image`]): the receiver pads the image to the device's flash size.
+    /// left out (see [`flash_image`]): the receiver pads the image to `flash_len` bytes.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub flash: Option<Vec<u8>>,
+    /// Size of program memory in bytes: the receiver pads `flash` to it with 0xFF.
+    pub flash_len: u32,
     pub flash_version: u64,
     /// Fuse bytes and lock bits (AVR; empty / 0 on architectures without them).
     pub fuses: Vec<u8>,

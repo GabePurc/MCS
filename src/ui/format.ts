@@ -3,6 +3,13 @@ export const hex = (v: number, digits = 2) => '0x' + v.toString(16).toUpperCase(
 export const hexRaw = (v: number, digits = 2) => v.toString(16).toUpperCase().padStart(digits, '0');
 export const bin8 = (v: number) => v.toString(2).padStart(8, '0');
 
+/** Length of `bytes` without its erased (0xFF) tail. */
+export function erasedEnd(bytes: ArrayLike<number>): number {
+  let end = bytes.length;
+  while (end > 0 && bytes[end - 1] === 0xff) end--;
+  return end;
+}
+
 export function formatHz(hz: number): string {
   if (hz >= 1e9) return `${+(hz / 1e9).toFixed(2)} GHz`;
   if (hz >= 1e6) return `${(hz / 1e6).toFixed(hz % 1e6 === 0 ? 0 : 2)} MHz`;

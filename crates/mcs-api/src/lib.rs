@@ -245,7 +245,41 @@ pub fn program_to_machine_code(device_id: &str, flash: &[u8], used: usize, label
     out
 }
 
-/// Disassembles a whole program image. `labels` maps code byte addresses to names.
+/// Most rows a disassembly returns: bounds the work and the payload for multi-megabyte images (the UI
+/// mirrors the value in `backend/api.ts` and warns when it is reached).
+pub const DISASM_MAX_ROWS: usize = 1 << 17;
+/// Erased (0xFF) runs of at least this many bytes are left out of ARM / RISC-V disassembly.
+const ERASED_GAP: usize = 256;
+
+/// Programmed byte ranges of `flash` (2-aligned): erased runs of `ERASED_GAP` bytes or more separate them,
+/// leading / trailing erased bytes are left out.
+fn programmed_ranges(flash: &[u8]) -> Vec<std::ops::Range<usize>> {
+    let end_of = |e: usize| ((e + 1) & !1).min(flash.len() & !1);
+    let mut out = Vec::new();
+    // (start, end after the last programmed byte) of the current range.
+    let mut cur: Option<(usize, usize)> = None;
+    let mut i = 0;
+    while let Some(k) = flash[i..].iter().position(|&b| b != 0xff) {
+        let at = i + k;
+        let run = flash[at..].iter().position(|&b| b == 0xff).unwrap_or(flash.len() - at);
+        cur = match cur {
+            Some((s, e)) if at - e < ERASED_GAP => Some((s, at + run)),
+            prev => {
+                if let Some((s, e)) = prev {
+                    out.push(s..end_of(e));
+                }
+                Some((at & !1, at + run))
+            }
+        };
+        i = at + run;
+    }
+    if let Some((s, e)) = cur {
+        out.push(s..end_of(e));
+    }
+    out
+}
+
+/// Disassembles a whole program image (at most `DISASM_MAX_ROWS` rows). `labels` maps code byte addresses to names.
 pub fn disassemble(device_id: &str, flash: &[u8], labels: &HashMap<u32, String>) -> Vec<DisasmLine> {
     if let Some(arm) = mcs_core::devices::get_any(device_id).and_then(|d| d.as_arm()) {
         return disassemble_arm(arm, flash, labels);
@@ -265,7 +299,7 @@ pub fn disassemble(device_id: &str, flash: &[u8], labels: &HashMap<u32, String>)
     let word = |i: u32| if i < words { u16::from_le_bytes([flash[i as usize * 2], flash[i as usize * 2 + 1]]) } else { 0xffff };
     let mut out = Vec::with_capacity(words as usize);
     let mut pc = 0;
-    while pc < words {
+    while pc < words && out.len() < DISASM_MAX_ROWS {
         let d = isa::disassemble(&table, pc, word(pc), word(pc + 1), &ctx);
         let n = d.words.max(1) as u32;
         out.push(DisasmLine { pc, words: n as u8, raw: (0..n).map(|k| word(pc + k)).collect(), mnemonic: d.mnemonic, operands: d.operands, target: d.target, valid: d.valid });
@@ -274,13 +308,23 @@ pub fn disassemble(device_id: &str, flash: &[u8], labels: &HashMap<u32, String>)
     out
 }
 
-/// ARM disassembly: `pc` is the absolute byte address (flash base included), `raw` holds the one or
-/// two Thumb halfwords, `words` counts them. Branch targets found in the operands are resolved
+/// ARM disassembly of the programmed ranges: `pc` is the absolute byte address (flash base included), `raw`
+/// holds the one or two Thumb halfwords, `words` counts them. Branch targets found in the operands are resolved
 /// through `labels` (code byte addresses).
 fn disassemble_arm(spec: &mcs_core::arm::device::ArmDeviceSpec, flash: &[u8], labels: &HashMap<u32, String>) -> Vec<DisasmLine> {
     let features = mcs_core::arm::thumb::ArmFeatures(spec.features);
-    let len = flash.len() & !1;
-    mcs_core::arm::disasm::disassemble(&flash[..len], spec.flash_base, features)
+    let mut insns = Vec::new();
+    for r in programmed_ranges(flash) {
+        let left = DISASM_MAX_ROWS.saturating_sub(insns.len());
+        if left == 0 {
+            break;
+        }
+        // Thumb instructions take at most 4 bytes: this many bytes yield at least `left` rows.
+        let end = r.end.min(r.start + 4 * left);
+        insns.extend(mcs_core::arm::disasm::disassemble(&flash[r.start..end], spec.flash_base + r.start as u32, features));
+    }
+    insns.truncate(DISASM_MAX_ROWS);
+    insns
         .into_iter()
         .map(|(addr, n, text)| {
             let off = (addr - spec.flash_base) as usize;
@@ -312,31 +356,33 @@ fn disassemble_arm(spec: &mcs_core::arm::device::ArmDeviceSpec, flash: &[u8], la
 /// `labels` (code byte addresses).
 fn disassemble_riscv(base: u32, flash: &[u8], labels: &HashMap<u32, String>) -> Vec<DisasmLine> {
     use mcs_core::riscv::{decode, Op};
-    // The erased tail of a multi-megabyte flash would only add a million useless rows.
-    let flash = &flash[..flash.iter().rposition(|&b| b != 0xff).map_or(0, |p| p + 1)];
     let half = |o: usize| -> u32 { flash.get(o..o + 2).map_or(0xffff, |b| u16::from_le_bytes([b[0], b[1]]) as u32) };
-    let mut out = Vec::with_capacity(flash.len() / 3);
-    let mut off = 0usize;
-    while off + 2 <= flash.len() {
-        let lo = half(off);
-        let word = if lo & 3 == 3 { lo | half(off + 2) << 16 } else { lo };
-        let insn = decode(word);
-        let n = insn.len as usize;
-        let pc = base.wrapping_add(off as u32);
-        let text = mcs_core::riscv::disassemble(word, pc).1;
-        let (mnemonic, mut operands) = match text.split_once([' ', '\t']) {
-            Some((m, o)) => (m.to_string(), o.trim().to_string()),
-            None => (text.clone(), String::new()),
-        };
-        let target = matches!(insn.op, Op::Jal | Op::Beq | Op::Bne | Op::Blt | Op::Bge | Op::Bltu | Op::Bgeu).then(|| pc.wrapping_add(insn.imm as u32));
-        if let Some(name) = target.and_then(|t| labels.get(&t)) {
-            if let Some(i) = operands.rfind("0x") {
-                operands.replace_range(i.., name);
+    // Erased stretches of a multi-megabyte flash would only add a million useless rows.
+    let ranges = programmed_ranges(flash);
+    let mut out = Vec::with_capacity(ranges.iter().map(|r| r.len() / 3).sum::<usize>().min(DISASM_MAX_ROWS));
+    for r in ranges {
+        let mut off = r.start;
+        while off + 2 <= r.end && out.len() < DISASM_MAX_ROWS {
+            let lo = half(off);
+            let word = if lo & 3 == 3 { lo | half(off + 2) << 16 } else { lo };
+            let insn = decode(word);
+            let n = insn.len as usize;
+            let pc = base.wrapping_add(off as u32);
+            let text = mcs_core::riscv::disassemble(word, pc).1;
+            let (mnemonic, mut operands) = match text.split_once([' ', '\t']) {
+                Some((m, o)) => (m.to_string(), o.trim().to_string()),
+                None => (text.clone(), String::new()),
+            };
+            let target = matches!(insn.op, Op::Jal | Op::Beq | Op::Bne | Op::Blt | Op::Bge | Op::Bltu | Op::Bgeu).then(|| pc.wrapping_add(insn.imm as u32));
+            if let Some(name) = target.and_then(|t| labels.get(&t)) {
+                if let Some(i) = operands.rfind("0x") {
+                    operands.replace_range(i.., name);
+                }
             }
+            let raw = (0..n / 2).map(|k| half(off + 2 * k) as u16).collect();
+            out.push(DisasmLine { pc, words: (n / 2) as u8, raw, mnemonic, operands, target, valid: insn.op != Op::Illegal });
+            off += n;
         }
-        let raw = (0..n / 2).map(|k| half(off + 2 * k) as u16).collect();
-        out.push(DisasmLine { pc, words: (n / 2) as u8, raw, mnemonic, operands, target, valid: insn.op != Op::Illegal });
-        off += n;
     }
     out
 }
@@ -422,6 +468,36 @@ mod tests {
     use super::*;
 
     const BLINK_ELF: &[u8] = include_bytes!("../../mcs-formats/tests/data/stm32g4_blink.elf");
+
+    #[test]
+    fn programmed_ranges_split_at_long_erased_runs() {
+        let mut f = vec![0xff; 4096];
+        f[3] = 0;
+        f[100] = 1; // short gap: same range
+        f[1001] = 2; // long gap: new range, end rounded up to a halfword
+        assert_eq!(programmed_ranges(&f), vec![2..102, 1000..1002]);
+        assert!(programmed_ranges(&[0xff; 64]).is_empty());
+    }
+
+    /// GitHub issue #6: big images disassemble only their programmed parts and never more than DISASM_MAX_ROWS rows.
+    #[test]
+    fn big_flash_disassembly_is_bounded() {
+        let none = HashMap::new();
+        // Code at both ends of a 4 MiB ESP32-C3 flash, erased in between (c.nop = 0x0001).
+        let mut f = vec![0xff; 4 << 20];
+        f[..8].copy_from_slice(&[1, 0, 1, 0, 1, 0, 1, 0]);
+        let n = f.len();
+        f[n - 4..].copy_from_slice(&[1, 0, 1, 0]);
+        let rows = disassemble("esp32-c3", &f, &none);
+        assert_eq!(rows.len(), 6);
+        assert_eq!(rows[4].pc, 0x4200_0000 + n as u32 - 4);
+        // Fully programmed (zeros): capped.
+        assert_eq!(disassemble("esp32-c3", &vec![0; 4 << 20], &none).len(), DISASM_MAX_ROWS);
+        assert_eq!(disassemble("stm32h743zit6", &vec![0; 2 << 20], &none).len(), DISASM_MAX_ROWS);
+        // A short erased gap stays inside the range (0xFFFF starts a 32-bit Thumb encoding).
+        let arm = disassemble("stm32g474re", &[0, 0xbf, 0xff, 0xff, 0, 0xbf], &none);
+        assert_eq!(arm.iter().map(|l| (l.pc, l.words)).collect::<Vec<_>>(), vec![(0x0800_0000, 1), (0x0800_0002, 2)]);
+    }
 
     #[test]
     fn arm_devices_listing_import_and_disassembly() {

@@ -404,8 +404,10 @@ export interface RawMachineState {
   io?: number[];
   /** ARM / RISC-V: bytes of the extra RAM block selected with `watchRam`; present on the first state after the selection and when they changed. */
   ramExtra?: { index: number; data: number[] };
-  /** Program memory, present only when it changed; the erased (0xFF) tail is left out. */
+  /** Program memory, present only when it changed; the erased (0xFF) tail is left out (pad to `flashLen`). */
   flash?: number[];
+  /** Size of program memory in bytes. */
+  flashLen: number;
   flashVersion: number;
   fuses: number[];
   lock: number;

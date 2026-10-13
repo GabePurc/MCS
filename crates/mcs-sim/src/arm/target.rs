@@ -497,6 +497,7 @@ impl Target for Machine {
             ram_extra,
             io,
             flash,
+            flash_len: self.bus.flash.len() as u32,
             flash_version: 0,
             fuses: Vec::new(),
             eeprom: None,

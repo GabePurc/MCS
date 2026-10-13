@@ -487,6 +487,7 @@ fn blank_flash_is_erased_and_not_sent() {
     let mut m = Esp32c3::from_spec(devices::get("esp32-c3").unwrap());
     let st = m.snapshot(&mut Sent { trace: 0, eeprom: u64::MAX }, true, 100);
     assert_eq!(st.flash.as_ref().map(Vec::len), Some(0));
+    assert_eq!(st.flash_len, 4 << 20);
     assert_eq!(m.machine.bus.peek(IROM, 4), Some(0xffff_ffff));
 
     let mut b = bench(CALLS);

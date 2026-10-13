@@ -292,6 +292,7 @@ impl Target for Machine {
             ram_extra: None,
             io: Vec::new(),
             flash,
+            flash_len: m.cpu.flash.len() as u32,
             flash_version: 0,
             fuses: m.cpu.fuses.clone(),
             eeprom,

@@ -7,6 +7,7 @@ import { getCurrentWindow } from '@tauri-apps/api/window';
 import { open, save, ask, message } from '@tauri-apps/plugin-dialog';
 import type { BuildOutcome, CustomMcuConfig, CustomPreview, CustomRegistration, DeviceSummary, DisasmLine, InsnInfo, McAnnotations, SimCommand, SimOutput, ToolchainInfo } from './types';
 import { core, wasmUrl } from './wasmHost';
+import { erasedEnd } from '../format';
 
 /** True when running inside the Tauri shell (false in a plain browser during `npm run dev:web`). */
 export const inTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
@@ -107,10 +108,12 @@ export const importProgramBytes = (bytes: Uint8Array, fileName: string, deviceId
 
 export const detectToolchain = (gccPath: string | null) => call<ToolchainInfo | null>('detect_toolchain', { gccPath });
 
+/** Most rows `disassemble` returns (`mcs_api::DISASM_MAX_ROWS`). */
+export const DISASM_MAX_ROWS = 1 << 17;
+
 /** Disassembles the programmed part of `flash` (trailing erased words are left out: large parts have megabytes of them). */
 export function disassemble(deviceId: string, flash: number[] | Uint8Array, labels: Record<number, string>): Promise<DisasmLine[]> {
-  let end = flash.length;
-  while (end > 512 && flash[end - 1] === 0xff) end--;
+  const end = Math.max(Math.min(512, flash.length), erasedEnd(flash));
   const bytes = Array.from(flash.slice(0, Math.min(flash.length, (end + 3) & ~1)));
   return inTauri ? call<DisasmLine[]>('disassemble', { deviceId, flash: bytes, labels }) : wasm<DisasmLine[]>({ method: 'disassemble', deviceId, flash: bytes, labels });
 }

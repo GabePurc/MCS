@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { f32FromBits, f64FromBits, formatFloat, formatHz, formatTime, hex, parseHz, parseNumber } from './format';
+import { erasedEnd, f32FromBits, f64FromBits, formatFloat, formatHz, formatTime, hex, parseHz, parseNumber } from './format';
 
 describe('format', () => {
   it('parses numbers in the notations the debugger accepts', () => {
@@ -46,5 +46,11 @@ describe('format', () => {
     expect(formatFloat(NaN)).toBe('NaN');
     expect(formatFloat(-Infinity)).toBe('-Inf');
     expect(formatFloat(-0)).toBe('-0');
+  });
+
+  it('finds the end of the programmed bytes', () => {
+    expect(erasedEnd(Uint8Array.of(1, 0xff, 2, 0xff, 0xff))).toBe(3);
+    expect(erasedEnd([0xff, 0xff])).toBe(0);
+    expect(erasedEnd([])).toBe(0);
   });
 });
