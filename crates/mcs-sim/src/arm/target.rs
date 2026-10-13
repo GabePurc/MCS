@@ -16,7 +16,7 @@ use super::{StopReason as ArmStop, systick};
 use crate::avr::peripherals::serial::SerialConfig;
 use crate::avr::CallFrame;
 use crate::pins::{ExtDrive, PinGenerator};
-use crate::protocol::{CoreState, CpuField, MachineState, PeripheralInfo, PinState, RamExtra, StepKind};
+use crate::protocol::{flash_image, CoreState, CpuField, MachineState, PeripheralInfo, PinState, RamExtra, StepKind};
 use crate::target::{Sent, StepPlan, StopReason, Target};
 
 /// Words of stack scanned when reconstructing the call stack (from SP up, bounded by the stack's
@@ -442,7 +442,7 @@ impl Target for Machine {
         let (trace_from, trace_cycles, trace_levels) = self.sys.trace.read_since_wide(sent.trace, max_trace);
         let trace_words = self.sys.trace.words() as u32;
         sent.trace = self.sys.trace.seq;
-        let flash = include_flash.then(|| self.bus.flash.clone());
+        let flash = include_flash.then(|| flash_image(&self.bus.flash));
         let serial = std::mem::take(&mut self.sys.serial_out);
         let serial_config = self.bridge.config();
         let pins = self
@@ -497,6 +497,7 @@ impl Target for Machine {
             ram_extra,
             io,
             flash,
+            flash_len: self.bus.flash.len() as u32,
             flash_version: 0,
             fuses: Vec::new(),
             eeprom: None,

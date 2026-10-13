@@ -596,7 +596,15 @@ fn snapshot_reports_registers_and_pins() {
     let mut sent = Sent { trace: 0, eeprom: u64::MAX };
     let st = m.snapshot(&mut sent, true, 100);
     assert_eq!(st.data.len(), 128 * 1024);
-    assert_eq!(st.flash.as_ref().map(|f| f.len()), Some(512 * 1024));
+    // Blank flash: the erased tail is left out of the image.
+    assert_eq!(st.flash.as_ref().map(|f| f.len()), Some(0));
+    assert_eq!(st.flash_len, 512 * 1024);
+    // A loaded program's image ends at its last programmed byte.
+    let mut m = boot(&BOOT);
+    let st = m.snapshot(&mut Sent { trace: 0, eeprom: u64::MAX }, true, 100);
+    let end = BOOT.code.iter().rposition(|&b| b != 0xff).map_or(0, |p| p + 1);
+    assert_eq!(st.flash.as_deref(), Some(&BOOT.code[..end]));
+    assert_eq!(st.flash_len, 512 * 1024);
     let at = |name: &str| spec(G474).registers.iter().position(|r| r.name == name).unwrap_or_else(|| panic!("{name}"));
     assert_eq!(st.io[at("RCC_CR")], 0x500);
     assert_eq!(st.io[at("RCC_CFGR")], 5);

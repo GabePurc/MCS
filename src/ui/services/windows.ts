@@ -18,6 +18,7 @@ import { requestGoto, useWorkspace, type Breakpoint, type Doc, type OutputLine }
 import { SymbolIndex, sameFile } from './debugInfo';
 import { commandHooks, PANEL_TITLES, runCommand } from './commands';
 import { handleOutput, latest, outputTaps, setMirror, sim } from './simClient';
+import { erasedEnd } from '../format';
 import { openPath } from './files';
 
 const params = new URLSearchParams(typeof location === 'undefined' ? '' : location.search);
@@ -216,7 +217,8 @@ export async function initMainWindowBridge(): Promise<void> {
   await openTransport((m, from) => {
     switch (m.k) {
       case 'hello': {
-        const st = latest.state && useSim.getState().flash ? { ...latest.state, flash: Array.from(useSim.getState().flash!), traceCycles: [], traceLevels: [], messages: [], stop: undefined } : latest.state;
+        const flash = useSim.getState().flash;
+        const st = latest.state && flash ? { ...latest.state, flash: Array.from(flash.subarray(0, erasedEnd(flash))), flashLen: flash.length, traceCycles: [], traceLevels: [], messages: [], stop: undefined } : latest.state;
         send(from, { k: 'snapshot', spec: latest.spec, state: st, trace: trace.export(100_000), ws: wsPatch(useWorkspace.getState()), settings: settingsPatch(useSettings.getState()) });
         return;
       }

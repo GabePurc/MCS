@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type JSX } from 'react';
-import { disassemble } from '../backend/api';
+import { DISASM_MAX_ROWS, disassemble } from '../backend/api';
 import { flashBaseOf, pcToBytes, type DisasmLine } from '../backend/types';
 import { useSim } from '../state/sim';
 import { appendOutput, requestGoto, resolvedPcMap, toggleAddressBreakpoint, useWorkspace } from '../state/workspace';
@@ -40,7 +40,11 @@ export function DisassemblyPanel(): JSX.Element {
     for (const s of build?.symbols.code ?? []) if (!(s.address in labels)) labels[s.address] = s.name;
     let cancelled = false;
     disassemble(spec.id, flash, labels)
-      .then((l) => !cancelled && setLines(l))
+      .then((l) => {
+        if (cancelled) return;
+        if (l.length >= DISASM_MAX_ROWS) appendOutput('warning', `Disassembly shows the first ${DISASM_MAX_ROWS} instructions only.`);
+        setLines(l);
+      })
       .catch((e) => appendOutput('error', `Disassembly failed: ${e instanceof Error ? e.message : String(e)}`));
     return () => {
       cancelled = true;

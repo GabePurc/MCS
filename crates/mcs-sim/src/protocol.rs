@@ -8,6 +8,12 @@ use crate::avr::{CallFrame, Message};
 use crate::avr::peripherals::serial::SerialConfig;
 use crate::pins::{ExtDrive, PinGenerator};
 
+/// Program memory image for [`MachineState::flash`]: `flash` without its erased (0xFF) tail. Multi-megabyte
+/// parts (ESP32-C3: 4 MiB) would otherwise send millions of bytes of nothing with every program load.
+pub fn flash_image(flash: &[u8]) -> Vec<u8> {
+    flash[..flash.iter().rposition(|&b| b != 0xff).map_or(0, |p| p + 1)].to_vec()
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum StepKind {
@@ -226,9 +232,12 @@ pub struct MachineState {
     /// `registers` list (empty on AVR).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub io: Vec<u32>,
-    /// Present only when program memory changed since the last state.
+    /// Present only when program memory changed since the last state. Trailing erased (0xFF) bytes are
+    /// left out (see [`flash_image`]): the receiver pads the image to `flash_len` bytes.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub flash: Option<Vec<u8>>,
+    /// Size of program memory in bytes: the receiver pads `flash` to it with 0xFF.
+    pub flash_len: u32,
     pub flash_version: u64,
     /// Fuse bytes and lock bits (AVR; empty / 0 on architectures without them).
     pub fuses: Vec<u8>,

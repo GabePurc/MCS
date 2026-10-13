@@ -10,7 +10,7 @@ use mcs_core::program::LoadedProgram;
 use super::peripherals::serial::SerialConfig;
 use super::{Machine, ResetSource, StopReason};
 use crate::pins::{ExtDrive, PinGenerator};
-use crate::protocol::{CoreState, CpuField, MachineState, PeripheralInfo, PinState, StepKind};
+use crate::protocol::{flash_image, CoreState, CpuField, MachineState, PeripheralInfo, PinState, StepKind};
 use crate::target::{Sent, StepPlan, Target};
 
 impl Machine {
@@ -248,7 +248,7 @@ impl Target for Machine {
         let (trace_from, trace_cycles, trace_levels) = m.sys.trace.read_since_wide(sent.trace, max_trace);
         let trace_words = m.sys.trace.words() as u32;
         sent.trace = m.sys.trace.seq;
-        let flash = include_flash.then(|| m.cpu.flash.clone());
+        let flash = include_flash.then(|| flash_image(&m.cpu.flash));
         let eeprom_version = m.cpu.eeprom_version;
         let eeprom = (sent.eeprom != eeprom_version).then(|| m.cpu.eeprom.clone());
         sent.eeprom = eeprom_version;
@@ -292,6 +292,7 @@ impl Target for Machine {
             ram_extra: None,
             io: Vec::new(),
             flash,
+            flash_len: m.cpu.flash.len() as u32,
             flash_version: 0,
             fuses: m.cpu.fuses.clone(),
             eeprom,
