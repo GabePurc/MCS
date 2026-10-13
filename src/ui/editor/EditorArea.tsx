@@ -11,6 +11,7 @@ import { SourceEditor } from './SourceEditor';
 import { SymbolSidebar } from './SymbolSidebar';
 import { openContextMenu } from '../controls/Menu';
 import { runCommand } from '../services/commands';
+import { ErrorBoundary } from '../controls/ErrorBoundary';
 
 /** Document tab strip + editor (or the start page when nothing is open). */
 export function EditorArea(): JSX.Element {
@@ -38,7 +39,7 @@ export function EditorArea(): JSX.Element {
               openContextMenu(e, [
                 { kind: 'action', label: 'Save', icon: 'Save', run: () => runCommand('file.save') },
                 { kind: 'action', label: 'Close', run: () => void closeDocument(d.id) },
-                { kind: 'action', label: 'Close All But This', run: () => docs.filter((x) => x.id !== d.id).forEach((x) => void closeDocument(x.id)) },
+                { kind: 'action', label: 'Close All But This', run: () => void closeOthers(d.id) },
               ])
             }
           >
@@ -53,11 +54,21 @@ export function EditorArea(): JSX.Element {
         <div className="tabs-spacer" />
       </div>
       <div className="dock-body editor-body">
-        {active && symbolView && <SymbolSidebar />}
-        {active ? <div className="editor-main"><SourceEditor doc={active} /></div> : <StartPage />}
+        {/* The tab strip stays outside: a crashed editor can still be closed or switched away from. */}
+        <ErrorBoundary name="The editor" resetKey={activeId}>
+          {active && symbolView && <SymbolSidebar />}
+          {active ? <div className="editor-main"><SourceEditor doc={active} /></div> : <StartPage />}
+        </ErrorBoundary>
       </div>
     </div>
   );
+}
+
+/** Closes every other document, one unsaved-changes prompt at a time (stops on Cancel). */
+async function closeOthers(keepId: string): Promise<void> {
+  for (const d of useWorkspace.getState().docs) {
+    if (d.id !== keepId && !(await closeDocument(d.id))) return;
+  }
 }
 
 function StartPage(): JSX.Element {

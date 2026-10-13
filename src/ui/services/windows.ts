@@ -14,12 +14,13 @@ import { useLayout, windowHooks, type PanelId } from '../state/layout';
 import { useSettings, type Settings } from '../state/settings';
 import { useSim } from '../state/sim';
 import { trace } from '../state/trace';
-import { requestGoto, useWorkspace, type Breakpoint, type Doc, type OutputLine } from '../state/workspace';
+import { appendOutput, requestGoto, useWorkspace, type Breakpoint, type Doc, type OutputLine } from '../state/workspace';
 import { SymbolIndex, sameFile } from './debugInfo';
 import { commandHooks, PANEL_TITLES, runCommand } from './commands';
 import { handleOutput, latest, outputTaps, setMirror, sim } from './simClient';
 import { erasedEnd } from '../format';
 import { openPath } from './files';
+import { errorHooks } from './errors';
 
 const params = new URLSearchParams(typeof location === 'undefined' ? '' : location.search);
 /** Panel shown by this window when it is a pop-out. */
@@ -65,6 +66,7 @@ type Msg =
   | { k: 'goto'; file: string; line: number; docId: string | null }
   | { k: 'show'; panel: PanelId }
   | { k: 'command'; id: string }
+  | { k: 'report'; text: string }
   | { k: 'bye'; panel: PanelId; dock: boolean };
 
 interface Envelope {
@@ -245,6 +247,9 @@ export async function initMainWindowBridge(): Promise<void> {
       case 'command':
         runCommand(m.id);
         return;
+      case 'report':
+        appendOutput('error', m.text);
+        return;
       case 'bye':
         browserPopups.delete(m.panel);
         useLayout.getState().popoutClosed(m.panel, m.dock);
@@ -294,6 +299,7 @@ export function leavePopout(dock: boolean): void {
 export async function initPopoutBridge(panel: PanelId, close: () => void): Promise<void> {
   setMirror((cmd) => send('main', { k: 'sim', cmd }));
   commandHooks.remote = (id) => send('main', { k: 'command', id });
+  errorHooks.remote = (text) => send('main', { k: 'report', text });
   windowHooks.remoteShow = (p) => send('main', { k: 'show', panel: p });
 
   let resolve: () => void = () => {};

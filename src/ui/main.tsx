@@ -7,6 +7,10 @@ import './styles/panels.css';
 import { App } from './App';
 import { PopoutApp } from './PopoutApp';
 import { popoutPanel } from './services/windows';
+import { ErrorBoundary, showFatalFallback } from './controls/ErrorBoundary';
+import { installGlobalErrorHandlers, reportError } from './services/errors';
+
+installGlobalErrorHandlers();
 
 // Suppress the browser context menu outside of editable fields (the app provides its own).
 window.addEventListener('contextmenu', (e) => {
@@ -14,8 +18,17 @@ window.addEventListener('contextmenu', (e) => {
   if (!t.closest('input, textarea, .cm-content, .selectable')) e.preventDefault();
 });
 
-createRoot(document.getElementById('root')!).render(
+createRoot(document.getElementById('root')!, {
+  // Error boundaries log through reportError (with the component stack): no second console entry.
+  onCaughtError: () => {},
+  onUncaughtError: (error) => {
+    reportError('MCS', error);
+    showFatalFallback();
+  },
+}).render(
   <StrictMode>
-    {popoutPanel ? <PopoutApp panel={popoutPanel} /> : <App />}
+    <ErrorBoundary name="MCS" window>
+      {popoutPanel ? <PopoutApp panel={popoutPanel} /> : <App />}
+    </ErrorBoundary>
   </StrictMode>,
 );

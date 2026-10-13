@@ -376,7 +376,7 @@ export function SourceEditor({ doc }: { doc: Doc }): JSX.Element {
     return () => {
       unsubSettings();
       clearOutline();
-      if (currentDocId) editorStates.set(currentDocId, view.state);
+      saveCurrentState(view);
       currentDocId = null;
       setEditorApi(null);
       view.destroy();
@@ -386,7 +386,7 @@ export function SourceEditor({ doc }: { doc: Doc }): JSX.Element {
   // Swap document state when the active document changes.
   useEffect(() => {
     const view = viewRef.current!;
-    if (currentDocId && currentDocId !== doc.id) editorStates.set(currentDocId, view.state);
+    if (currentDocId !== doc.id) saveCurrentState(view);
     let st = editorStates.get(doc.id);
     if (!st) {
       st = createState(doc, initialTexts.get(doc.id) ?? '');
@@ -454,6 +454,14 @@ export function SourceEditor({ doc }: { doc: Doc }): JSX.Element {
   return <div className="editor-host" ref={host} style={{ height: '100%' }} />;
 }
 
+/**
+ * Keeps the shown document's state (undo history, selection) for when it is shown again. A closed
+ * document's state was already dropped (`forgetDoc`) and must not be brought back.
+ */
+function saveCurrentState(view: EditorView): void {
+  if (currentDocId && editorStates.has(currentDocId)) editorStates.set(currentDocId, view.state);
+}
+
 function popcount(m: number): number {
   let c = 0;
   for (; m; m &= m - 1) c++;
@@ -472,7 +480,8 @@ function syncDecorations(view: EditorView, doc: Doc): void {
   let execLine: number | null = null;
   if (!sim.running && sim.state && program) {
     const loc = pcToSource(program, sim.state.pc, ws.build?.arch);
-    if (loc && sameFile(loc.file, key)) execLine = loc.line;
+    // The file may have lost lines since the build.
+    if (loc && sameFile(loc.file, key) && loc.line >= 1 && loc.line <= view.state.doc.lines) execLine = loc.line;
   }
 
   const total = view.state.doc.length;
