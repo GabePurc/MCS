@@ -16,6 +16,8 @@ import { IsaPanel } from './IsaPanel';
 import { SerialPanel } from './SerialPanel';
 import { DefinitionsPanel } from './DefinitionsPanel';
 import { EmptyHint } from './common';
+import { ErrorBoundary } from '../controls/ErrorBoundary';
+import { PANEL_TITLES } from '../services/commands';
 
 // The 3D view pulls in three.js: load it only when the panel is first shown.
 const ChipView = lazy(() => import('../chip/ChipView').then((m) => ({ default: m.ChipView })));
@@ -48,5 +50,9 @@ const PANELS: Record<PanelId, () => JSX.Element> = {
 
 export function renderPanel(id: PanelId): JSX.Element {
   const P = PANELS[id];
-  return <P />;
+  return (
+    <ErrorBoundary name={PANEL_TITLES[id]}>
+      <P />
+    </ErrorBoundary>
+  );
 }

@@ -9,6 +9,13 @@ the in-app updater shows it as the update notes.
   (issue #6). A blank chip's flash now reads erased (FF), and program memory is sent to the
   interface without its empty tail, so switching to big-flash parts is instant.
 
+- **Fixed**: an internal error can no longer turn the window blank with no way to close it
+  (issue #10). A failing panel or the editor now shows an error box in its place (with Try
+  Again), a failing window falls back to a page that can save your files, reload and close, and
+  the error is written to the Output window. If the window stops responding entirely, closing it
+  (Alt+F4 / taskbar) offers to close it anyway. Closing a document also frees its editor memory,
+  and "Close All But This" asks about unsaved files one at a time.
+
 ## [0.3.0]
 
 - **STM32 microcontrollers (ARM Cortex-M)**: STM32G431KB and STM32G474RE (Cortex-M4F), and the

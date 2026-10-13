@@ -223,6 +223,8 @@ export const win = {
   onCloseRequested: (allow: () => Promise<boolean>) =>
     inTauri
       ? getCurrentWindow().onCloseRequested(async (e) => {
+          // Tells the backend the UI is alive; it offers a forced close otherwise (src-tauri/src/lib.rs).
+          void invoke('close_ack');
           if (!(await allow())) e.preventDefault();
         })
       : Promise.resolve(() => {}),

@@ -6,13 +6,16 @@ mod toolchain;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Mutex;
+use std::time::Duration;
 
 use mcs_api::{BuildOutcome, DeviceSummary, DisasmLine, InsnInfo, McAnnotations};
 use mcs_sim::protocol::{Command, Output};
 use mcs_sim::session::{self, SessionThread};
 use tauri::ipc::Channel;
 use tauri::{Manager, State};
+use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 
 #[derive(Default)]
 struct AppState {
@@ -178,6 +181,51 @@ fn def_include(device_id: String) -> Option<(String, String)> {
     mcs_api::def_include(&device_id)
 }
 
+/// Close requests of the main window that its UI has answered (`close_ack`). The UI asks about
+/// unsaved files before it closes; when it does not answer at all (its web view crashed or hangs)
+/// the user is offered to close the window anyway, so a broken window can always be closed
+/// (GitHub issue #10).
+#[derive(Default)]
+struct CloseWatch {
+    requested: AtomicU64,
+    acked: AtomicU64,
+    prompting: AtomicBool,
+}
+
+/// How long the UI gets to acknowledge a close request (it answers within milliseconds).
+const CLOSE_ACK_TIMEOUT: Duration = Duration::from_secs(3);
+
+#[tauri::command]
+fn close_ack(watch: State<'_, CloseWatch>) {
+    watch.acked.store(watch.requested.load(Ordering::Relaxed), Ordering::Relaxed);
+}
+
+fn watch_close_request(window: &tauri::Window) {
+    let seq = window.state::<CloseWatch>().requested.fetch_add(1, Ordering::Relaxed) + 1;
+    let window = window.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(CLOSE_ACK_TIMEOUT);
+        let watch = window.state::<CloseWatch>();
+        if watch.acked.load(Ordering::Relaxed) >= seq || watch.prompting.swap(true, Ordering::Relaxed) {
+            return;
+        }
+        let target = window.clone();
+        window
+            .dialog()
+            .message("MCS is not responding.\n\nClose the window anyway? Unsaved changes will be lost.")
+            .title("MCS")
+            .kind(MessageDialogKind::Warning)
+            .buttons(MessageDialogButtons::OkCancelCustom("Close".into(), "Wait".into()))
+            .parent(&window)
+            .show(move |close| {
+                target.state::<CloseWatch>().prompting.store(false, Ordering::Relaxed);
+                if close {
+                    let _ = target.destroy();
+                }
+            });
+    });
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -186,6 +234,7 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .manage(AppState::default())
+        .manage(CloseWatch::default())
         .setup(|app| {
             if let Some(w) = app.get_webview_window("main") {
                 let _ = w.show();
@@ -194,8 +243,13 @@ pub fn run() {
         })
         // Pop-out tool windows belong to the main window: quit when it goes away.
         .on_window_event(|window, event| {
-            if window.label() == "main" && matches!(event, tauri::WindowEvent::Destroyed) {
-                window.app_handle().exit(0);
+            if window.label() != "main" {
+                return;
+            }
+            match event {
+                tauri::WindowEvent::Destroyed => window.app_handle().exit(0),
+                tauri::WindowEvent::CloseRequested { .. } => watch_close_request(window),
+                _ => {}
             }
         })
         .invoke_handler(tauri::generate_handler![
@@ -219,6 +273,7 @@ pub fn run() {
             custom_device_preview,
             custom_device_defaults,
             def_include,
+            close_ack,
         ])
         .run(tauri::generate_context!())
         .expect("error while running MCS");
