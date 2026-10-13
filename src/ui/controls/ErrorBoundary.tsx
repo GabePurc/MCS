@@ -4,12 +4,13 @@
  * A crashed panel or editor now shows an error box in its place; if the window itself fails it
  * falls back to a minimal window that can still save, reload and close.
  */
-import { Component, type ErrorInfo, type JSX, type ReactNode } from 'react';
-import { CaptionGlyph, Icons } from '../icons';
+import { Component, useEffect, type ErrorInfo, type JSX, type ReactNode } from 'react';
+import { Icons } from '../icons';
+import { Caption, useMaximized } from '../chrome/TitleBar';
 import { inTauri, win } from '../backend/api';
 import { confirmQuit, saveAll } from '../services/files';
 import { describeError, reportError } from '../services/errors';
-import { popoutPanel } from '../services/windows';
+import { leavePopout, popoutPanel } from '../services/windows';
 import { useWorkspace } from '../state/workspace';
 
 interface Props {
@@ -66,12 +67,15 @@ function details(error: unknown, componentStack: string): string {
   return `${stack}\n\nComponents:${componentStack}`;
 }
 
+/** Closes the crashed window: the main window asks about unsaved files first. */
 async function closeWindow(): Promise<void> {
-  // The window's close guard went away with the crashed tree: ask about unsaved files here.
-  if (popoutPanel || (await confirmQuit())) win.destroy();
+  if (popoutPanel) leavePopout(false);
+  else if (!(await confirmQuit())) return;
+  win.destroy();
 }
 
 function CrashedWindow({ error, componentStack }: { error: unknown; componentStack: string }): JSX.Element {
+  const maximized = useMaximized();
   // The fallback must not fail itself: the workspace may be what broke.
   const dirty = useWorkspace((s) => {
     try {
@@ -80,25 +84,17 @@ function CrashedWindow({ error, componentStack }: { error: unknown; componentSta
       return false;
     }
   });
+  // The window's close guard went away with the crashed tree: Alt+F4 / taskbar close still asks.
+  useEffect(() => {
+    const unsub = win.onCloseRequested(async () => {
+      if (popoutPanel) leavePopout(false);
+      return popoutPanel ? true : confirmQuit();
+    });
+    return () => void unsub.then((f) => f());
+  }, []);
   return (
-    <div className="app crashed">
-      <div className="titlebar" onMouseDown={(e) => e.button === 0 && !(e.target as HTMLElement).closest('.caption-buttons') && win.startDragging()}>
-        <Icons.App className="titlebar-icon" />
-        <div className="titlebar-title">MCS Microcontroller Simulator</div>
-        {inTauri && (
-          <div className="caption-buttons">
-            <button className="caption-btn" title="Minimize" onClick={() => win.minimize()}>
-              <CaptionGlyph.Min />
-            </button>
-            <button className="caption-btn" title="Maximize" onClick={() => win.toggleMaximize()}>
-              <CaptionGlyph.Max />
-            </button>
-            <button className="caption-btn close" title="Close" onClick={() => void closeWindow()}>
-              <CaptionGlyph.Close />
-            </button>
-          </div>
-        )}
-      </div>
+    <div className={`app crashed${maximized ? ' maximized' : ''}`}>
+      <Caption icon={<Icons.App className="titlebar-icon" />} title="MCS Microcontroller Simulator" maximized={maximized} onClose={() => void closeWindow()} />
       <div className="crash-page">
         <h1>MCS ran into a problem</h1>
         <p>

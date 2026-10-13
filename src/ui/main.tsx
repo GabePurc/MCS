@@ -19,6 +19,8 @@ window.addEventListener('contextmenu', (e) => {
 });
 
 createRoot(document.getElementById('root')!, {
+  // Error boundaries log through reportError (with the component stack): no second console entry.
+  onCaughtError: () => {},
   onUncaughtError: (error) => {
     reportError('MCS', error);
     showFatalFallback();

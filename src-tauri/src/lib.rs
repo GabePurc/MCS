@@ -192,12 +192,16 @@ struct CloseWatch {
     prompting: AtomicBool,
 }
 
-/// How long the UI gets to acknowledge a close request (it answers within milliseconds).
-const CLOSE_ACK_TIMEOUT: Duration = Duration::from_secs(3);
+/// How long the UI gets to acknowledge a close request. A live UI answers within milliseconds;
+/// like Windows' "not responding" detection, a UI that is only busy gets a generous margin.
+const CLOSE_ACK_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[tauri::command]
-fn close_ack(watch: State<'_, CloseWatch>) {
-    watch.acked.store(watch.requested.load(Ordering::Relaxed), Ordering::Relaxed);
+fn close_ack(window: tauri::Window, watch: State<'_, CloseWatch>) {
+    // Pop-out windows have close guards too; only the main window's requests are watched.
+    if window.label() == "main" {
+        watch.acked.store(watch.requested.load(Ordering::Relaxed), Ordering::Relaxed);
+    }
 }
 
 fn watch_close_request(window: &tauri::Window) {
@@ -218,8 +222,10 @@ fn watch_close_request(window: &tauri::Window) {
             .buttons(MessageDialogButtons::OkCancelCustom("Close".into(), "Wait".into()))
             .parent(&window)
             .show(move |close| {
-                target.state::<CloseWatch>().prompting.store(false, Ordering::Relaxed);
-                if close {
+                let watch = target.state::<CloseWatch>();
+                watch.prompting.store(false, Ordering::Relaxed);
+                // A UI that answered meanwhile handles the close itself (and asks about unsaved files).
+                if close && watch.acked.load(Ordering::Relaxed) < seq {
                     let _ = target.destroy();
                 }
             });

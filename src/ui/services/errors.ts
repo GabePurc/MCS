@@ -7,8 +7,13 @@ import { appendOutput } from '../state/workspace';
 /** Browser noise that is not a fault of the app. */
 const BENIGN = /ResizeObserver loop/;
 
-let lastText = '';
-let repeats = 0;
+/** Each distinct error is shown at most FLOOD_LIMIT times per FLOOD_WINDOW_MS. */
+const FLOOD_LIMIT = 3;
+const FLOOD_WINDOW_MS = 10_000;
+const recent = new Map<string, { count: number; since: number }>();
+
+/** Pop-out windows send their reports to the main window's Output (set by services/windows.ts). */
+export const errorHooks: { remote: ((text: string) => void) | null } = { remote: null };
 
 /** One-line description of a thrown value. */
 export function describeError(e: unknown): string {
@@ -17,11 +22,12 @@ export function describeError(e: unknown): string {
 }
 
 /** Whether a report is worth showing (skips benign browser noise and floods of the same error). */
-export function shouldReport(text: string): boolean {
+export function shouldReport(text: string, now = Date.now()): boolean {
   if (BENIGN.test(text)) return false;
-  if (text === lastText) return ++repeats < 3;
-  lastText = text;
-  repeats = 0;
+  const r = recent.get(text);
+  if (r && now - r.since < FLOOD_WINDOW_MS) return ++r.count <= FLOOD_LIMIT;
+  if (recent.size >= 64) recent.clear();
+  recent.set(text, { count: 1, since: now });
   return true;
 }
 
@@ -29,8 +35,10 @@ export function reportError(where: string, e: unknown, componentStack?: string):
   const text = `Internal error in ${where}: ${describeError(e)}`;
   console.error(text, e, componentStack ?? '');
   if (!shouldReport(text)) return;
+  const line = `${text}. Please report this on GitHub with what you were doing.`;
   try {
-    appendOutput('error', `${text}. Please report this on GitHub with what you were doing.`);
+    if (errorHooks.remote) errorHooks.remote(line);
+    else appendOutput('error', line);
   } catch {
     // The output store itself failed: the console line above is all we can do.
   }

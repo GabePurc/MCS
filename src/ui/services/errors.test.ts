@@ -10,11 +10,12 @@ describe('error reports', () => {
   });
 
   it('skips browser noise and floods of the same error', () => {
-    expect(shouldReport('ResizeObserver loop completed with undelivered notifications.')).toBe(false);
-    expect(shouldReport('Internal error in Memory: A')).toBe(true);
-    expect(shouldReport('Internal error in Memory: A')).toBe(true);
-    expect(shouldReport('Internal error in Memory: A')).toBe(true);
-    expect(shouldReport('Internal error in Memory: A')).toBe(false);
-    expect(shouldReport('Internal error in Memory: B')).toBe(true);
+    expect(shouldReport('ResizeObserver loop completed with undelivered notifications.', 0)).toBe(false);
+    // Alternating errors are limited per message, not just consecutive repeats.
+    const shown = [];
+    for (let i = 0; i < 8; i++) shown.push(shouldReport(i % 2 ? 'Internal error in A' : 'Internal error in B', 1000 + i));
+    expect(shown).toEqual([true, true, true, true, true, true, false, false]);
+    // The limit lifts after the flood window.
+    expect(shouldReport('Internal error in A', 1001 + 10_000)).toBe(true);
   });
 });
