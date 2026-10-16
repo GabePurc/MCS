@@ -5,7 +5,7 @@
 import { Channel, invoke } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { open, save, ask, message } from '@tauri-apps/plugin-dialog';
-import type { BuildOutcome, CustomMcuConfig, CustomPreview, CustomRegistration, DeviceSummary, DisasmLine, InsnInfo, McAnnotations, SimCommand, SimOutput, ToolchainInfo } from './types';
+import type { BuildOutcome, CustomMcuConfig, CustomPreview, CustomRegistration, DeviceSummary, DisasmLine, InsnInfo, McAnnotations, SimCommand, SimOutput, SourceSymbol, ToolchainInfo } from './types';
 import { core, wasmUrl } from './wasmHost';
 import { erasedEnd } from '../format';
 
@@ -122,6 +122,10 @@ export function disassemble(deviceId: string, flash: number[] | Uint8Array, labe
 }
 
 export const instructionSet = (deviceId: string) => (inTauri ? call<InsnInfo[]>('instruction_set', { deviceId }) : wasm<InsnInfo[]>({ method: 'instructionSet', deviceId }));
+
+/** Symbols (labels, constants, functions, variables ...) of a source text; `language` is 'asm' or 'c'. */
+export const sourceSymbols = (source: string, language: string, deviceId: string) =>
+  inTauri ? call<SourceSymbol[]>('source_symbols', { source, language, deviceId }) : wasm<SourceSymbol[]>({ method: 'sourceSymbols', source, language, deviceId });
 
 export const defInclude = (deviceId: string) => (inTauri ? call<[string, string] | null>('def_include', { deviceId }) : wasm<[string, string] | null>({ method: 'defInclude', deviceId }));
 

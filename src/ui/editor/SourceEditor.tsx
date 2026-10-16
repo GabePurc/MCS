@@ -4,7 +4,7 @@
  * hover info for registers/symbols and assembly completion.
  */
 import { useEffect, useRef, type JSX } from 'react';
-import { Compartment, EditorSelection, EditorState, RangeSet, StateEffect, StateField, type Extension } from '@codemirror/state';
+import { Compartment, EditorSelection, EditorState, RangeSet, StateEffect, StateField, type Extension, type Text } from '@codemirror/state';
 import {
   Decoration, EditorView, GutterMarker, crosshairCursor, drawSelection, dropCursor, gutter, highlightActiveLine, highlightActiveLineGutter,
   highlightSpecialChars, hoverTooltip, keymap, lineNumbers, rectangularSelection, type DecorationSet,
@@ -26,8 +26,9 @@ import { docKey, toggleSourceBreakpoint, useWorkspace, type Doc } from '../state
 import { useSim } from '../state/sim';
 import { useSettings } from '../state/settings';
 import { hex } from '../format';
-import { instructionSet } from '../backend/api';
-import { armCore, avrCore, type InsnInfo } from '../backend/types';
+import { instructionSet, sourceSymbols } from '../backend/api';
+import { armCore, avrCore, type InsnInfo, type SourceSymbol } from '../backend/types';
+import { createSymbolCache, pickSymbol, symbolText } from './hoverSymbols';
 
 /** Tab: pads with spaces to the next tab stop at the cursor; with a selection, indents the lines. */
 const softTab = (view: EditorView): boolean => {
@@ -172,6 +173,43 @@ function insnHoverDom(forms: InsnInfo[]): HTMLElement {
   return dom;
 }
 
+const cachedSymbols = createSymbolCache(sourceSymbols);
+
+// Documents are immutable: the text of an unchanged document is not rebuilt on every hover.
+let lastDoc: Text | null = null;
+let lastDocText = '';
+function docString(doc: Text): string {
+  if (doc !== lastDoc) [lastDoc, lastDocText] = [doc, doc.toString()];
+  return lastDocText;
+}
+
+/** Tooltip body for a source symbol, with live values from the running simulation when known. */
+function symbolHoverDom(s: SourceSymbol): HTMLElement {
+  const t = symbolText(s);
+  const dom = document.createElement('div');
+  dom.className = 'cm-hover-info cm-hover-sym';
+  const add = (text: string, cls?: string) => {
+    if (!text) return;
+    const el = document.createElement('div');
+    el.textContent = text;
+    if (cls) el.className = cls;
+    dom.appendChild(el);
+  };
+  add(t.detail, 'mono');
+  add(t.meta, 'dim');
+  add(t.doc);
+  const st = useSim.getState().state;
+  if (st?.core.arch === 'avr' && s.value !== null) {
+    if (s.kind === 'register alias' && s.value < 32) add(`Now: r${s.value} = ${hex(avrCore(st).regs[s.value])} (${avrCore(st).regs[s.value]})`, 'dim');
+    else if ((s.kind === 'variable' && s.detail.includes('SRAM')) || (s.kind === 'label' && s.detail.includes('data segment'))) {
+      const n = Math.max(1, Math.min(8, Number(/^(\d+) byte/.exec(s.detail)?.[1] ?? 1)));
+      const bytes = Array.from(st.data.slice(s.value, s.value + n), (b) => hex(b));
+      if (bytes.length) add(`Now: ${bytes.join(' ')}`, 'dim');
+    }
+  }
+  return dom;
+}
+
 const hoverInfo = hoverTooltip((view, pos) => {
   const line = view.state.doc.lineAt(pos);
   const text = line.text;
@@ -185,13 +223,14 @@ const hoverInfo = hoverTooltip((view, pos) => {
   const spec = sim.spec?.arch === 'avr' ? sim.spec : null;
   const st = sim.state;
   let info: string | null = null;
+  const lang = useWorkspace.getState().docs.find((d) => d.id === currentDocId)?.language;
   // Instruction mnemonic: first word of the statement (after an optional label).
-  if (spec && /^\s*(?:[A-Za-z_.]\w*:\s*)?$/.test(text.slice(0, s))) {
+  if (spec && lang !== 'c' && /^\s*(?:[A-Za-z_.]\w*:\s*)?$/.test(text.slice(0, s))) {
     const forms = instructionHelp(spec.id).get(word.toLowerCase());
     if (forms) return { pos: line.from + s, end: line.from + e, above: true, create: () => ({ dom: insnHoverDom(forms) }) };
   }
   const armReg = sim.spec?.arch === 'arm' && st?.core.arch === 'arm' ? /^(?:r(\d{1,2})|(sp)|(lr)|(pc))$/i.exec(word) : null;
-  const reg = /^r(\d{1,2})$/i.exec(word);
+  const reg = lang !== 'c' ? /^r(\d{1,2})$/i.exec(word) : null;
   if (armReg && st) {
     const i = armReg[2] ? 13 : armReg[3] ? 14 : armReg[4] ? 15 : Number(armReg[1]);
     if (i < 16) info = `${word.toUpperCase()} = ${hex(armCore(st).r[i], 8)} (${armCore(st).r[i]})`;
@@ -206,28 +245,41 @@ const hoverInfo = hoverTooltip((view, pos) => {
       if (r.bits.length) info += `\nBits: ${r.bits.map((b) => b.name).join(' ')}`;
     } else {
       const bitOwner = spec.registers.find((x) => x.bits.some((b) => b.name === word.toUpperCase() || (b.mask !== 0 && word.toUpperCase().startsWith(b.name))));
-      const sym = useWorkspace.getState().build?.program.symbols.find((x) => x.name.toLowerCase() === word.toLowerCase());
-      if (sym) {
-        const val = sym.space === 'data' && st && sym.address < st.data.length ? ` = ${hex(st.data[sym.address])}` : '';
-        info = `${sym.name}: ${sym.kind} at ${sym.space} ${hex(sym.address, 4)}${sym.size ? ` (${sym.size} bytes)` : ''}${val}`;
-      } else if (bitOwner) {
+      if (bitOwner) {
         const b = bitOwner.bits.find((x) => x.name === word.toUpperCase());
         if (b) info = `${b.name} — bit mask ${hex(b.mask)} in ${bitOwner.name}${b.desc ? `\n${b.desc}` : ''}`;
       }
     }
   }
-  if (!info) return null;
-  return {
+  const textTip = (text: string) => ({
     pos: line.from + s,
     end: line.from + e,
     above: true,
     create: () => {
       const dom = document.createElement('div');
       dom.className = 'cm-hover-info';
-      dom.textContent = info;
+      dom.textContent = text;
       return { dom };
     },
+  });
+  if (info) return textTip(info);
+  // Symbol of the last successful build (address / live value).
+  const buildTip = () => {
+    const sym = useWorkspace.getState().build?.program.symbols.find((x) => x.name.toLowerCase() === word.toLowerCase());
+    if (!sym) return null;
+    const cur = useSim.getState().state;
+    const val = sym.space === 'data' && cur && sym.address < cur.data.length ? ` = ${hex(cur.data[sym.address])}` : '';
+    return textTip(`${sym.name}: ${sym.kind} at ${sym.space} ${hex(sym.address, 4)}${sym.size ? ` (${sym.size} bytes)` : ''}${val}`);
   };
+  if (lang !== 'asm' && lang !== 'c') return buildTip();
+  // Symbols of the source itself (works without building).
+  return cachedSymbols(docString(view.state.doc), lang, spec?.id ?? sim.spec?.id ?? '')
+    .then((syms) => {
+      const hit = pickSymbol(syms, word, line.number, lang === 'asm');
+      if (!hit) return buildTip();
+      return { pos: line.from + s, end: line.from + e, above: true, create: () => ({ dom: symbolHoverDom(hit) }) };
+    })
+    .catch(() => buildTip());
 });
 
 // ------------------------------------------------------------------ theme

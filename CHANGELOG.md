@@ -5,6 +5,11 @@ the in-app updater shows it as the update notes.
 
 ## [Unreleased]
 
+- **Hover info** (issue #12): hovering a name in an assembly or C file now shows what it is,
+  without building first: the signature of a function, the type and initial value of a variable,
+  parameters and locals (respecting scope), constants and macros with their values, labels,
+  `.def` register aliases and device constants such as `RAMEND`, plus the comment written above
+  the definition. While the simulation runs, registers and SRAM variables also show their current value.
 - **Convert to Machine Code** (issue #11): a toolbar button and Build menu command that assembles
   (or compiles) the open source file and opens it as an editable machine code file `<name>.mc`.
 - **Custom MCU pins** (issue #9): set the exact number of GPIO pins instead of whole ports, and in

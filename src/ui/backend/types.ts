@@ -609,3 +609,16 @@ export interface CustomRegistration {
   id: string;
   error: string | null;
 }
+
+/** A named thing found in a source file (`mcs_api::SourceSymbol`): hover info that needs no build. */
+export interface SourceSymbol {
+  name: string;
+  kind: string;
+  detail: string;
+  value: number | null;
+  /** 1-based definition line (0 for device constants). */
+  line: number;
+  /** Inclusive line range where the symbol is visible; null = whole file. */
+  scope: [number, number] | null;
+  doc: string;
+}

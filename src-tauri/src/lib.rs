@@ -162,6 +162,11 @@ fn disassemble(device_id: String, flash: Vec<u8>, labels: HashMap<u32, String>) 
 }
 
 #[tauri::command]
+fn source_symbols(source: String, language: String, device_id: String) -> Vec<mcs_api::SourceSymbol> {
+    mcs_api::source_symbols(&source, &language, &device_id)
+}
+
+#[tauri::command]
 fn instruction_set(device_id: String) -> Vec<InsnInfo> {
     mcs_api::instruction_set(&device_id)
 }
@@ -280,6 +285,7 @@ pub fn run() {
             export_hex,
             disassemble,
             instruction_set,
+            source_symbols,
             register_custom_devices,
             custom_device_preview,
             custom_device_defaults,
