@@ -2,6 +2,9 @@
 //! images, disassembly and device information. The Tauri app and the WebAssembly build are
 //! thin adapters over these functions, so both front-ends behave identically.
 
+pub mod hover;
+pub use hover::{source_symbols, SourceSymbol};
+
 use std::collections::HashMap;
 
 use mcs_core::avr::device::AvrDeviceSpec;
@@ -72,7 +75,7 @@ pub struct InsnInfo {
 
 /// The AVR spec for `device_id`; None for unknown ids and for other architectures (the
 /// disassembler, instruction set and definition files are AVR-only for now).
-fn avr_spec(device_id: &str) -> Option<&'static AvrDeviceSpec> {
+pub(crate) fn avr_spec(device_id: &str) -> Option<&'static AvrDeviceSpec> {
     mcs_core::devices::get_any(device_id)?.as_avr()
 }
 

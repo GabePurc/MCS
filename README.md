@@ -60,6 +60,7 @@ Assembly programs work out of the box. To build C programs, also install avr-gcc
   - Signal generators on any pin: square waves from 0.01 Hz to 20 MHz, or bursts of N pulses (active high or low). They are event driven and keep their frequency when the firmware changes the CPU clock.
   - Momentary push buttons, logic levels and analog voltages per pin
   - Execution profiling (per-instruction counts) for the Chip View heat map; it costs nothing while off.
+- **Code editor** hover: point at a name in an assembly or C file to see its signature, type, value, scope and doc comment (no build needed), with live register and SRAM values while running; instructions, registers and I/O bits are explained too.
 - **Assembler** (`crates/mcs-asm`): compatible with Atmel avrasm2.
   - Supports macros, conditionals, includes, expressions, and device definitions (`.include "tn10def.inc"`) generated from the device model.
   - Errors carry exact line and column, and the assembler rejects instructions and registers the device doesn't have.

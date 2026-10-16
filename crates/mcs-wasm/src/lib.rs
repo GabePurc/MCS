@@ -35,6 +35,7 @@ enum Request {
     /// Label keys are code byte addresses as strings (JSON object keys).
     Disassemble { device_id: String, flash: Vec<u8>, labels: HashMap<String, String> },
     InstructionSet { device_id: String },
+    SourceSymbols { source: String, language: String, device_id: String },
     DefInclude { device_id: String },
     ToIntelHex { flash: Vec<u8>, used: usize },
     RegisterCustomDevices { configs: Vec<mcs_api::CustomMcuConfig> },
@@ -64,6 +65,7 @@ fn dispatch(req: Request) -> Value {
             json!(mcs_api::disassemble(&device_id, &flash, &labels))
         }
         Request::InstructionSet { device_id } => json!(mcs_api::instruction_set(&device_id)),
+        Request::SourceSymbols { source, language, device_id } => json!(mcs_api::source_symbols(&source, &language, &device_id)),
         Request::DefInclude { device_id } => json!(mcs_api::def_include(&device_id)),
         Request::ToIntelHex { flash, used } => json!(mcs_api::to_intel_hex(&flash, used)),
         Request::RegisterCustomDevices { configs } => json!(mcs_api::register_custom_devices(&configs)),
