@@ -177,7 +177,11 @@ export async function convertToMachineCode(): Promise<void> {
 export async function openProgramAsMachineCode(name = untitledName('.mc')): Promise<void> {
   const b = useWorkspace.getState().build;
   const spec = useSim.getState().spec;
-  if (!b || !spec) return;
+  if (!b || !spec) {
+    appendOutput('warning', 'Nothing to convert: build a source file or load a program first.');
+    showOutput();
+    return;
+  }
   const labels: Record<number, string> = {};
   for (const s of b.symbols.code) if (!(s.address in labels)) labels[s.address] = s.name;
   try {
