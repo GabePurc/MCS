@@ -5,6 +5,8 @@ the in-app updater shows it as the update notes.
 
 ## [Unreleased]
 
+## [0.4.0]
+
 - **Hover info** (issue #12): hovering a name in an assembly or C file now shows what it is,
   without building first: the signature of a function, the type and initial value of a variable,
   parameters and locals (respecting scope), constants and macros with their values, labels,
