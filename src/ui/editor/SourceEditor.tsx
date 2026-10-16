@@ -4,7 +4,7 @@
  * hover info for registers/symbols and assembly completion.
  */
 import { useEffect, useRef, type JSX } from 'react';
-import { Compartment, EditorSelection, EditorState, RangeSet, StateEffect, StateField, type Extension } from '@codemirror/state';
+import { Compartment, EditorSelection, EditorState, RangeSet, StateEffect, StateField, type Extension, type Text } from '@codemirror/state';
 import {
   Decoration, EditorView, GutterMarker, crosshairCursor, drawSelection, dropCursor, gutter, highlightActiveLine, highlightActiveLineGutter,
   highlightSpecialChars, hoverTooltip, keymap, lineNumbers, rectangularSelection, type DecorationSet,
@@ -175,6 +175,14 @@ function insnHoverDom(forms: InsnInfo[]): HTMLElement {
 
 const cachedSymbols = createSymbolCache(sourceSymbols);
 
+// Documents are immutable: the text of an unchanged document is not rebuilt on every hover.
+let lastDoc: Text | null = null;
+let lastDocText = '';
+function docString(doc: Text): string {
+  if (doc !== lastDoc) [lastDoc, lastDocText] = [doc, doc.toString()];
+  return lastDocText;
+}
+
 /** Tooltip body for a source symbol, with live values from the running simulation when known. */
 function symbolHoverDom(s: SourceSymbol): HTMLElement {
   const t = symbolText(s);
@@ -222,7 +230,7 @@ const hoverInfo = hoverTooltip((view, pos) => {
     if (forms) return { pos: line.from + s, end: line.from + e, above: true, create: () => ({ dom: insnHoverDom(forms) }) };
   }
   const armReg = sim.spec?.arch === 'arm' && st?.core.arch === 'arm' ? /^(?:r(\d{1,2})|(sp)|(lr)|(pc))$/i.exec(word) : null;
-  const reg = /^r(\d{1,2})$/i.exec(word);
+  const reg = lang !== 'c' ? /^r(\d{1,2})$/i.exec(word) : null;
   if (armReg && st) {
     const i = armReg[2] ? 13 : armReg[3] ? 14 : armReg[4] ? 15 : Number(armReg[1]);
     if (i < 16) info = `${word.toUpperCase()} = ${hex(armCore(st).r[i], 8)} (${armCore(st).r[i]})`;
@@ -265,7 +273,7 @@ const hoverInfo = hoverTooltip((view, pos) => {
   };
   if (lang !== 'asm' && lang !== 'c') return buildTip();
   // Symbols of the source itself (works without building).
-  return cachedSymbols(view.state.doc.toString(), lang, spec?.id ?? sim.spec?.id ?? '')
+  return cachedSymbols(docString(view.state.doc), lang, spec?.id ?? sim.spec?.id ?? '')
     .then((syms) => {
       const hit = pickSymbol(syms, word, line.number, lang === 'asm');
       if (!hit) return buildTip();
