@@ -549,7 +549,7 @@ export function drawBlockLive(ctx: CanvasRenderingContext2D, w: number, h: numbe
       if (!n) return;
       const g = memoryGrid(b, spec, w, h);
       if (!g) {
-        const addrW = fs * 3.3;
+        const addrW = Math.min(fs * 3.3, w * 0.4);
         const cols = hexGridCols(n, w - addrW, h - top);
         cellGrid(addrW, top, w - addrW, h - top, n, cols, (i, x, y, cw, ch) => {
           const a = base + i;
@@ -572,7 +572,7 @@ export function drawBlockLive(ctx: CanvasRenderingContext2D, w: number, h: numbe
           ctx.textAlign = 'left';
           if (i % cols === 0) {
             ctx.fillStyle = '#b9c8cf';
-            ctx.font = `${Math.min(ch * 0.36, fs * 0.8)}px ${MONO}`;
+            ctx.font = `${Math.min(ch * 0.36, fs * 0.8, addrW / 2.6)}px ${MONO}`;
             ctx.fillText(hex4(a), 2, y + ch / 2);
           }
         });
