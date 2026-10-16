@@ -63,7 +63,7 @@ Assembly programs work out of the box. To build C programs, also install avr-gcc
 - **Assembler** (`crates/mcs-asm`): compatible with Atmel avrasm2.
   - Supports macros, conditionals, includes, expressions, and device definitions (`.include "tn10def.inc"`) generated from the device model.
   - Errors carry exact line and column, and the assembler rejects instructions and registers the device doesn't have.
-- **Machine code files** (`.mc`): write a program directly as 16-bit instruction words, in hex or binary. Live disassembly appears at the end of every line, and you build and step through them like assembly. **Build ▸ Open Program as Machine Code** turns any program into an editable `.mc` file.
+- **Machine code files** (`.mc`): write a program directly as 16-bit instruction words, in hex or binary. Live disassembly appears at the end of every line, and you build and step through them like assembly. **Build ▸ Convert to Machine Code** (also on the toolbar) assembles the open source file and opens the result as an editable `<name>.mc` file; with no source open it converts the loaded program.
 - **C and GNU assembler** through your installed **avr-gcc**, which is detected automatically. Programs are debugged at the source line using DWARF line tables.
 - **Imports** Intel HEX and ELF images built elsewhere, and exports Intel HEX.
 - **Debugger**

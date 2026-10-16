@@ -5,6 +5,9 @@ the in-app updater shows it as the update notes.
 
 ## [Unreleased]
 
+- **Convert to Machine Code** (issue #11): a toolbar button and Build menu command that assembles
+  (or compiles) the open source file and opens it as an editable machine code file `<name>.mc`.
+
 - **Fixed**: the EEPROM (and small SRAM) bytes in the Chip View are readable on devices with a
   tiny memory, e.g. a custom MCU with an 8-byte EEPROM (issue #7).
 

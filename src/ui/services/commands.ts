@@ -11,7 +11,7 @@ import { useSettings } from '../state/settings';
 import { useSim } from '../state/sim';
 import { activeDoc, clearBreakpoints, clearOutput, docKey, toggleSourceBreakpoint, useWorkspace } from '../state/workspace';
 import { openDialog } from '../state/dialogs';
-import { buildActive, importHexOrElf, isBuildStale, openProgramAsMachineCode } from './build';
+import { buildActive, importHexOrElf, isBuildStale, convertToMachineCode } from './build';
 import { closeDocument, confirmQuit, newFile, openFileDialog, saveAll, saveDoc } from './files';
 import { formatHz } from '../format';
 import { openUpdateDialog } from './updater';
@@ -181,7 +181,13 @@ const list: CommandDef[] = [
   // Build
   { id: 'build.build', label: 'Build', icon: 'Build', keys: ['F7'], run: buildActive, enabled: canBuild },
   { id: 'build.options', label: 'Toolchain Options...', icon: 'Settings', run: () => openDialog('toolchain') },
-  { id: 'build.toMachineCode', label: 'Open Program as Machine Code', icon: 'MachineCode', run: openProgramAsMachineCode, enabled: () => hasProgram() && avrSelected() },
+  {
+    id: 'build.toMachineCode',
+    label: 'Convert to Machine Code (.mc)',
+    icon: 'MachineCode',
+    run: convertToMachineCode,
+    enabled: () => avrSelected() && !useWorkspace.getState().building && ((!!activeDoc() && activeDoc()!.language !== 'mc') || hasProgram()),
+  },
 
   // Debug
   {

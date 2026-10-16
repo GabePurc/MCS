@@ -46,6 +46,7 @@ export function Toolbar(): JSX.Element {
       <CmdButton id="file.import" />
       <div className="tb-sep" />
       <CmdButton id="build.build" label />
+      <CmdButton id="build.toMachineCode" />
       <div className="tb-sep" />
       <CmdButton id="debug.start" />
       <CmdButton id="debug.pause" />
