@@ -156,8 +156,25 @@ export async function loadBundledImage(url: string, name: string): Promise<boole
   }
 }
 
-/** Build > Open Program as Machine Code: the loaded image as an editable .mc document. */
-export async function openProgramAsMachineCode(): Promise<void> {
+/**
+ * Build > Convert to Machine Code (issue #11): assembles / compiles the active source when its
+ * build is missing or stale and opens the image as an editable `<name>.mc` document; without a
+ * source document it converts the loaded program.
+ */
+export async function convertToMachineCode(): Promise<void> {
+  const doc = activeDoc();
+  if (doc && doc.language !== 'mc') {
+    const ws = useWorkspace.getState();
+    if ((ws.build?.docId !== doc.id || isBuildStale()) && !(await buildDoc(doc))) return;
+    const name = `${doc.name.replace(/\.[^.]*$/, '')}.mc`;
+    await openProgramAsMachineCode(useWorkspace.getState().docs.some((d) => d.name === name) ? untitledName('.mc') : name);
+    return;
+  }
+  await openProgramAsMachineCode();
+}
+
+/** The loaded image as an editable .mc document. */
+export async function openProgramAsMachineCode(name = untitledName('.mc')): Promise<void> {
   const b = useWorkspace.getState().build;
   const spec = useSim.getState().spec;
   if (!b || !spec) return;
@@ -165,7 +182,7 @@ export async function openProgramAsMachineCode(): Promise<void> {
   for (const s of b.symbols.code) if (!(s.address in labels)) labels[s.address] = s.name;
   try {
     const text = await programToMachineCode(spec.id, b.program.flash, b.program.flashUsed, labels, b.label);
-    addDoc(untitledName('.mc'), null, text, 'mc');
+    addDoc(name, null, text, 'mc');
   } catch (e) {
     appendOutput('error', `Could not convert the program: ${e instanceof Error ? e.message : String(e)}`);
     showOutput();
