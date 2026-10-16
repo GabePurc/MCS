@@ -297,6 +297,21 @@ function cellGrid(x0: number, y0: number, w: number, h: number, n: number, cols:
   for (let i = 0; i < n; i++) draw(i, x0 + (i % cols) * cw, y0 + Math.floor(i / cols) * ch, cw, ch);
 }
 
+/**
+ * Columns of the labelled hex grid of a small memory (`n` bytes in a `w x h` area): the power of
+ * two up to 16 that gives the largest text, so tiny or narrow blocks (e.g. an 8-byte EEPROM in
+ * its thin column) stay readable instead of squeezing 8 cells into one row.
+ */
+export function hexGridCols(n: number, w: number, h: number): number {
+  let best = 1;
+  let bestFs = -1;
+  for (let cols = 1; cols <= 16 && cols <= Math.max(1, n); cols *= 2) {
+    const fs = Math.min((h / Math.ceil(n / cols)) * 0.5, (w / cols) * 0.42);
+    if (fs > bestFs + 1e-9) [best, bestFs] = [cols, fs];
+  }
+  return best;
+}
+
 /** Header font size of a block canvas of `w x h` pixels. */
 function headerFs(w: number, h: number): number {
   return Math.max(10, Math.min(h * 0.11, w * 0.06, 30));
@@ -534,8 +549,8 @@ export function drawBlockLive(ctx: CanvasRenderingContext2D, w: number, h: numbe
       if (!n) return;
       const g = memoryGrid(b, spec, w, h);
       if (!g) {
-        const cols = n <= 32 ? 8 : 16;
-        const addrW = fs * 3.3;
+        const addrW = Math.min(fs * 3.3, w * 0.4);
+        const cols = hexGridCols(n, w - addrW, h - top);
         cellGrid(addrW, top, w - addrW, h - top, n, cols, (i, x, y, cw, ch) => {
           const a = base + i;
           const eep = b.kind === 'eeprom';
@@ -557,7 +572,7 @@ export function drawBlockLive(ctx: CanvasRenderingContext2D, w: number, h: numbe
           ctx.textAlign = 'left';
           if (i % cols === 0) {
             ctx.fillStyle = '#b9c8cf';
-            ctx.font = `${Math.min(ch * 0.36, fs * 0.8)}px ${MONO}`;
+            ctx.font = `${Math.min(ch * 0.36, fs * 0.8, addrW / 2.6)}px ${MONO}`;
             ctx.fillText(hex4(a), 2, y + ch / 2);
           }
         });
