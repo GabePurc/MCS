@@ -20,7 +20,7 @@ const SOURCE_FILTERS = [
 export function newFile(kind: 'asm' | 'c' | 'mc'): void {
   const id = useSettings.getState().deviceId;
   const name = useDevices.getState().devices.find((d) => d.id === id)?.name ?? 'ATtiny10';
-  addDoc(untitledName(`.${kind}`), null, templateFor(kind, name), kind);
+  addDoc(untitledName(`.${kind}`), null, templateFor(kind, name, id), kind);
 }
 
 export async function openFileDialog(): Promise<void> {

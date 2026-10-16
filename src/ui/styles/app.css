@@ -430,6 +430,18 @@
 .cmcu-size .w7-input { width: 90px; }
 .cmcu-num { width: 70px; }
 .cmcu-two { grid-template-columns: max-content 70px max-content 70px; }
+.cmcu-adv-toggle { margin-top: 8px; }
+.cmcu-adv { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 4px; }
+.cmcu-adv .w7-group { margin: 0; }
+.cmcu-pin-list { max-height: 220px; overflow: auto; background: #fff; border: 1px solid var(--border-soft); margin: 4px 0; }
+.cmcu-pin-row { display: grid; grid-template-columns: 28px 96px 1fr auto; gap: 6px; align-items: center; padding: 1px 4px; }
+.cmcu-pin-row .w7-select { width: 92px; }
+.cmcu-pin-fns { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cmcu-pin-btns { display: flex; gap: 2px; }
+.cmcu-pin-btns .seg-btn { width: 22px; padding: 0; }
+.cmcu-fn-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 3px 8px; max-height: 220px; overflow: auto; margin: 4px 0; }
+.cmcu-fn-grid label { display: flex; align-items: center; justify-content: space-between; gap: 4px; }
+.cmcu-fn-grid .w7-select { width: 92px; }
 .cmcu-summary { margin-top: 8px; padding: 6px 8px; background: #fff; border: 1px solid var(--border-soft); min-height: 36px; }
 .cmcu-summary.error { background: #fff4f4; border-color: #e3b4b4; }
 .w7-input.invalid { border-color: #d33; }

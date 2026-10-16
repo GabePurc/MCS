@@ -147,6 +147,21 @@ pub struct CustomPreview {
     pub ram_end: u16,
     /// Peripheral groups ("TC1", "USART2", ...).
     pub groups: Vec<String>,
+    /// Derived number of 8-bit GPIO ports.
+    pub ports: usize,
+    /// Package pins in order (pin 1 first).
+    pub pin_list: Vec<PreviewPin>,
+    /// Every alternate function that can be assigned to a GPIO, in generation order.
+    pub assignable: Vec<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PreviewPin {
+    pub number: u8,
+    pub name: String,
+    pub gpio: bool,
+    pub functions: Vec<String>,
 }
 
 pub fn custom_device_preview(config: &CustomMcuConfig) -> Result<CustomPreview, String> {
@@ -161,6 +176,9 @@ pub fn custom_device_preview(config: &CustomMcuConfig) -> Result<CustomPreview, 
         sram_start: d.sram_start,
         ram_end: d.ram_end(),
         groups: d.groups.iter().map(|g| g.name.clone()).collect(),
+        ports: config.port_count(),
+        pin_list: d.pins.iter().map(|p| PreviewPin { number: p.number, name: p.name.clone(), gpio: p.gpio.is_some(), functions: p.functions.clone() }).collect(),
+        assignable: config.assignable_functions(),
     })
 }
 

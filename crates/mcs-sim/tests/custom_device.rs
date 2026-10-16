@@ -73,3 +73,32 @@ fn many_instances_build_until_the_vector_table_is_full() {
     let err = devices::register_custom(&too_many).unwrap_err();
     assert!(err.contains("255") || err.to_lowercase().contains("vector"), "{err}");
 }
+
+#[test]
+fn partial_port_gpio_count_toggles_last_pin() {
+    let cfg = CustomMcuConfig { id: "custom-gpio13".into(), gpio_pins: 13, ..CustomMcuConfig::default() };
+    let spec = devices::register_custom(&cfg).unwrap();
+    assert_eq!(spec.gpio_count, 13);
+    assert_eq!(spec.pins.iter().filter(|p| p.gpio.is_some()).count(), 13);
+    assert!(spec.pins.iter().any(|p| p.name == "PB4") && !spec.pins.iter().any(|p| p.name == "PB5"));
+    let src = ".include \"custom-gpio13def.inc\"\n.org 0\n jmp reset\n.org INT_VECTORS_SIZE\nreset:\n sbi DDRB, 4\n loop:\n sbi PINB, 4\n rjmp loop\n";
+    let r = assemble(src, &AssembleOptions::new("t.asm", "custom-gpio13"));
+    assert!(r.ok, "{:#?}", r.diagnostics);
+    let mut m = Machine::new(spec);
+    m.load(&r.program);
+    m.run(1000);
+    assert_eq!(m.sys.pins.len(), 13);
+    let (_, c, l) = m.sys.trace.read_since(0, usize::MAX);
+    assert!((1..c.len()).any(|i| (l[i] ^ l[i - 1]) & (1 << 12) != 0), "PB4 toggled");
+}
+
+#[test]
+fn assigned_function_moves_and_twi_follows() {
+    let mut cfg = CustomMcuConfig { id: "custom-sdamove".into(), ..CustomMcuConfig::default() };
+    cfg.pin_functions.insert("SDA".into(), "PC4".into());
+    cfg.pin_functions.insert("SCL".into(), "PC5".into());
+    let spec = devices::register_custom(&cfg).unwrap();
+    let m = Machine::new(spec);
+    assert_eq!(gpio(&m, "SDA"), 20);
+    assert_eq!(gpio(&m, "SCL"), 21);
+}

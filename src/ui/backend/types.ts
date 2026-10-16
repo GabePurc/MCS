@@ -80,7 +80,7 @@ export interface VectorSpec {
 export interface PinSpec {
   number: number;
   name: string;
-  kind: 'io' | 'vcc' | 'gnd' | 'ref';
+  kind: 'io' | 'vcc' | 'gnd' | 'ref' | 'nc';
   gpio?: number;
   functions: string[];
 }
@@ -567,6 +567,12 @@ export interface CustomMcuConfig {
   sramSize: number;
   eepromSize: number;
   ports: number;
+  /** GPIO pin count; 0 = 8 x ports (the port count then follows the GPIO count). */
+  gpioPins: number;
+  /** Explicit package pin order (pin 1 first): GPIO names or DEDICATED_PINS; empty = automatic. */
+  pinout: string[];
+  /** Alternate function -> GPIO name (e.g. SDA -> PC4); unlisted functions are placed automatically. */
+  pinFunctions: Record<string, string>;
   extInterrupts: number;
   timers8: number;
   timers16: number;
@@ -592,6 +598,10 @@ export interface CustomPreview {
   sramStart: number;
   ramEnd: number;
   groups: string[];
+  ports: number;
+  pinList: { number: number; name: string; gpio: boolean; functions: string[] }[];
+  /** Functions that can be placed with `pinFunctions`, in generation order. */
+  assignable: string[];
 }
 
 export interface CustomRegistration {

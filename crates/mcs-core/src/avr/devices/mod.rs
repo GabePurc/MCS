@@ -65,11 +65,14 @@ pub fn id_from_include_name(name: &str) -> Option<&'static str> {
     if stem.starts_with("custom-") {
         return get(stem).map(|d| d.id.as_str());
     }
-    let (prefix, rest) = [("tn", "attiny"), ("m", "atmega"), ("usb", "at90usb"), ("can", "at90can"), ("pwm", "at90pwm"), ("x", "atxmega")]
+    let builtin = [("tn", "attiny"), ("m", "atmega"), ("usb", "at90usb"), ("can", "at90can"), ("pwm", "at90pwm"), ("x", "atxmega")]
         .iter()
-        .find_map(|(p, full)| stem.strip_prefix(p).map(|r| (*full, r)))?;
-    let id = format!("{prefix}{rest}");
-    get(&id).map(|d| d.id.as_str())
+        .find_map(|(p, full)| stem.strip_prefix(p).map(|r| format!("{full}{r}")))
+        .and_then(|id| get(&id));
+    // Custom devices also by display name ("My MCUdef.inc"), as older MCS templates wrote them.
+    builtin
+        .or_else(|| CUSTOM.read().unwrap_or_else(|e| e.into_inner()).iter().copied().find(|d| d.name.trim().eq_ignore_ascii_case(stem)))
+        .map(|d| d.id.as_str())
 }
 
 #[cfg(test)]
@@ -180,6 +183,8 @@ mod tests {
             .collect();
         assert_eq!(get("CUSTOM-tiny").unwrap().id, "custom-tiny");
         assert_eq!(id_from_include_name("custom-tinydef.inc"), Some("custom-tiny"));
+        let tiny_name = format!("{}def.inc", get("custom-tiny").unwrap().name);
+        assert_eq!(id_from_include_name(&tiny_name), Some("custom-tiny"));
         assert!(register_custom(&CustomMcuConfig { id: "custom-bad".into(), ports: 0, ..Default::default() }).is_err());
         assert!(list().len() >= all().len() + 3);
         for d in all().iter().chain(customs) {
