@@ -45,9 +45,20 @@ function summarize(program: LoadedProgram, deviceId: string): string {
  * Other open assembly documents by name, so `.include "x.inc"` finds an open (even unsaved or
  * untitled) file; on the desktop, files next to the source fill in the rest.
  */
-export function openIncludes(doc: Doc): Record<string, string> {
+export function openIncludes(doc: Doc, text = getDocText(doc.id)): Record<string, string> {
   const out: Record<string, string> = {};
-  for (const d of useWorkspace.getState().docs) if (d.id !== doc.id && d.language === 'asm') out[d.name] = getDocText(d.id);
+  const candidates = useWorkspace.getState().docs.filter((d) => d.id !== doc.id && d.language === 'asm');
+  // Only documents whose name is mentioned by the source or an already picked include.
+  const texts = [text];
+  for (let changed = true; changed; ) {
+    changed = false;
+    for (const d of candidates) {
+      if (d.name in out || !texts.some((t) => t.includes(d.name))) continue;
+      out[d.name] = getDocText(d.id);
+      texts.push(out[d.name]);
+      changed = true;
+    }
+  }
   return out;
 }
 
@@ -74,7 +85,7 @@ export async function buildDoc(doc: Doc): Promise<boolean> {
   try {
     outcome =
       doc.language === 'asm'
-        ? await buildAsm(text, doc.name, doc.path, settings.deviceId, openIncludes(doc))
+        ? await buildAsm(text, doc.name, doc.path, settings.deviceId, openIncludes(doc, text))
         : doc.language === 'mc'
           ? await buildMachineCode(text, doc.name, doc.path, settings.deviceId)
           : await buildC({

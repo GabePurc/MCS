@@ -195,7 +195,9 @@ export function CustomDeviceDialog(): JSX.Element {
               data-tip="Number of I/O pins (1-248). They are grouped into 8-pin ports A, B, C... (I is skipped); the last port may be partial."
               onChange={(e) => {
                 const n = Math.max(1, Math.min(248, Math.floor(Number(e.target.value) || 1)));
-                const next = { ...cfg, gpioPins: n, ports: Math.ceil(n / 8) };
+                const names = new Set(Array.from({ length: n }, (_, g) => gpioName(g)));
+                const pinFunctions = Object.fromEntries(Object.entries(cfg.pinFunctions).filter(([, pin]) => names.has(pin)));
+                const next = { ...cfg, gpioPins: n, ports: Math.ceil(n / 8), pinFunctions };
                 setSaveError(null);
                 setCfg({ ...next, pinout: reconcilePinout(next) });
               }}
@@ -260,8 +262,11 @@ function AdvancedPins({ cfg, preview, onChange }: { cfg: CustomMcuConfig; previe
   const setPin = (i: number, name: string) => {
     const next = [...order];
     const j = gpios.includes(name) ? next.indexOf(name) : -1;
-    if (j >= 0) next[j] = next[i]; // picking a GPIO used elsewhere swaps the two pins
+    const displaced = next[i];
+    if (j >= 0) next[j] = displaced; // picking a GPIO used elsewhere swaps the two pins
     next[i] = name;
+    // A GPIO replaced by a power / special pin moves to the end instead of disappearing.
+    if (j < 0 && gpios.includes(displaced)) next.push(displaced);
     onChange({ pinout: next });
   };
   const move = (i: number, d: number) => {
