@@ -5,6 +5,13 @@ the in-app updater shows it as the update notes.
 
 ## [Unreleased]
 
+- **Custom MCU pins** (issue #9): set the exact number of GPIO pins instead of whole ports, and in
+  the new Advanced section choose what every package pin is (VCC, GND, RESET, AREF, NC, a GPIO...)
+  and which pin carries each function (SDA, TXD0, ADC3...).
+- **Fixed**: new assembly files for a custom MCU included a definitions file that did not exist,
+  so they failed to build (issue #9). Any `.inc` file open in the editor can now be included, even
+  before it is saved.
+
 - **Fixed**: the EEPROM (and small SRAM) bytes in the Chip View are readable on devices with a
   tiny memory, e.g. a custom MCU with an 8-byte EEPROM (issue #7).
 

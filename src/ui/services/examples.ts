@@ -95,8 +95,12 @@ export const EXAMPLES: Example[] = [
 
 export const SHOWCASE = EXAMPLES.filter((e) => !e.template);
 
-/** avrasm2 definitions include for a device name (ATtiny85 -> tn85def.inc, ATmega328P -> m328Pdef.inc). */
-export function defIncludeName(device: string): string {
+/**
+ * avrasm2 definitions include for a device (ATtiny85 -> tn85def.inc, ATmega328P -> m328Pdef.inc;
+ * custom devices use their id: custom-my-mcu -> custom-my-mcudef.inc, as `mcs_asm::def_include_name`).
+ */
+export function defIncludeName(device: string, id = ''): string {
+  if (id.startsWith('custom-')) return `${id}def.inc`;
   for (const [prefix, short] of [['ATtiny', 'tn'], ['ATmega', 'm']] as const) {
     if (device.toLowerCase().startsWith(prefix.toLowerCase())) return `${short}${device.slice(prefix.length)}def.inc`;
   }
@@ -104,9 +108,9 @@ export function defIncludeName(device: string): string {
 }
 
 /** New-file template for the selected device. */
-export function templateFor(kind: 'asm' | 'c' | 'mc', device: string): string {
+export function templateFor(kind: 'asm' | 'c' | 'mc', device: string, id = ''): string {
   const ex = EXAMPLES.find((e) => e.template === kind);
   if (!ex || kind === 'mc' || device === 'ATtiny10') return ex?.text ?? '';
-  if (kind === 'asm') return ex.text.replace('; ATtiny10 assembly program', `; ${device} assembly program`).replace('"tn10def.inc"', `"${defIncludeName(device)}"`);
+  if (kind === 'asm') return ex.text.replace('; ATtiny10 assembly program', `; ${device} assembly program`).replace('"tn10def.inc"', `"${defIncludeName(device, id)}"`);
   return ex.text;
 }

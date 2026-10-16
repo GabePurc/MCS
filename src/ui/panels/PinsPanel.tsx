@@ -331,7 +331,7 @@ function ChipDiagram({ pins, states, name, vcc }: { pins: PinSpec[]; states: Pin
         const lx = left ? x0 - 26 : x0 + bodyW;
         const s = p.gpio !== undefined ? states[p.gpio] : undefined;
         const interactive = p.kind === 'io' && s && !s.reserved;
-        const label = p.kind === 'io' ? p.name : p.kind === 'vcc' ? `VCC ${vcc.toFixed(1)}V` : p.kind === 'ref' ? p.name : 'GND';
+        const label = p.kind === 'vcc' ? `VCC ${vcc.toFixed(1)}V` : p.kind === 'gnd' ? 'GND' : p.name;
         const fns = p.functions.filter((f) => f !== p.name).slice(0, 3).join(' / ');
         return (
           <g

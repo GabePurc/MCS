@@ -65,10 +65,15 @@ fn load_includes(source: &str, dir: Option<&Path>, out: &mut HashMap<String, Str
 }
 
 #[tauri::command]
-fn build_asm(source: String, file_name: String, file_path: Option<String>, device_id: String) -> BuildOutcome {
+fn build_asm(source: String, file_name: String, file_path: Option<String>, device_id: String, includes: Option<HashMap<String, String>>) -> BuildOutcome {
     let dir = file_path.as_deref().and_then(|p| Path::new(p).parent());
-    let mut includes = HashMap::new();
+    // Open documents (sent by the UI) win over files on disk; their own includes come from disk.
+    let mut includes = includes.unwrap_or_default();
+    let open: Vec<String> = includes.values().cloned().collect();
     load_includes(&source, dir, &mut includes, 0);
+    for text in open {
+        load_includes(&text, dir, &mut includes, 1);
+    }
     let name = file_path.clone().unwrap_or(file_name);
     mcs_api::build_asm(&source, &name, &device_id, &includes)
 }

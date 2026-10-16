@@ -18,9 +18,17 @@
 //! * RESET, XTAL1/XTAL2, VCC, GND, AVCC and AREF are dedicated pins (no GPIO shares them).
 //! * The device signature is synthetic (`1E FF FF`); the part does not exist.
 //!
-//! Alternate pin functions are dealt out round-robin over the GPIOs in a fixed order (ADC
-//! channels first, so ADCn sits on GPIO n, then AIN, INT, USART, SPI, TWI, timer pins); functions
-//! only share a pin once every GPIO already carries one, as on real AVRs.
+//! Alternate pin functions are dealt out over the GPIOs in a fixed order (ADC channels first, so
+//! ADCn sits on GPIO n, then AIN, INT, USART, SPI, TWI, timer pins). Functions the user placed
+//! explicitly (`pin_functions`, e.g. SDA -> PC4) go on their GPIO first; each remaining function
+//! goes to the GPIO that carries the fewest functions so far, ties broken round-robin from a
+//! cursor, so functions only share a pin once every GPIO already carries one, as on real AVRs.
+//! PCINTn is fixed to GPIO n.
+//!
+//! The GPIO count may be any 1..=248 (`gpio_pins`); the last port is then partial (its port
+//! registers stay 8 bits wide, only existing pins are wired). The package pinout is automatic
+//! (RESET, VCC, GND, XTAL1, XTAL2, AVCC, [AREF], GPIOs, GND padding to an even count, like the
+//! ATmega328P/2560 families of DS2549) or explicit (`pinout`, pin 1 first).
 
 use std::collections::HashSet;
 
@@ -32,6 +40,8 @@ use super::super::isa::feature;
 pub const MAX_FLASH_BYTES: u32 = 8 << 20;
 pub const MAX_PORTS: u8 = 31;
 pub const MAX_ADC_CHANNELS: u8 = 30;
+/// Non-GPIO package pin names accepted in `CustomMcuConfig::pinout`.
+pub const DEDICATED_PINS: [&str; 8] = ["VCC", "GND", "AVCC", "AREF", "RESET", "XTAL1", "XTAL2", "NC"];
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", default)]
@@ -46,6 +56,14 @@ pub struct CustomMcuConfig {
     pub eeprom_size: u32,
     /// 8-pin GPIO ports A, B, C ... (no `I`), 1..=31.
     pub ports: u8,
+    /// GPIO pin count; 0 = `ports * 8`. When > 0 (1..=248) the port count is `gpio_pins / 8`
+    /// rounded up and `ports` is ignored; the last port is partial.
+    pub gpio_pins: u16,
+    /// Explicit package pin order (pin 1 first); empty = automatic. Entries are GPIO names
+    /// ("PB3") or one of `DEDICATED_PINS`.
+    pub pinout: Vec<String>,
+    /// Alternate function name -> GPIO pin name (e.g. "SDA" -> "PC4").
+    pub pin_functions: std::collections::BTreeMap<String, String>,
     pub ext_interrupts: u8,
     pub timers8: u8,
     pub timers16: u8,
@@ -73,6 +91,9 @@ impl Default for CustomMcuConfig {
             sram_size: 2048,
             eeprom_size: 1024,
             ports: 3,
+            gpio_pins: 0,
+            pinout: Vec::new(),
+            pin_functions: Default::default(),
             ext_interrupts: 2,
             timers8: 2,
             timers16: 1,
@@ -228,8 +249,55 @@ impl CustomMcuConfig {
         c
     }
 
-    fn gpio_count(&self) -> usize {
-        self.ports as usize * 8
+    /// Number of 8-bit GPIO ports (derived from `gpio_pins` when set).
+    pub fn port_count(&self) -> usize {
+        if self.gpio_pins > 0 { (self.gpio_pins as usize).div_ceil(8) } else { self.ports as usize }
+    }
+
+    pub fn gpio_count(&self) -> usize {
+        if self.gpio_pins > 0 { self.gpio_pins as usize } else { self.ports as usize * 8 }
+    }
+
+    /// Name of GPIO `g` ("PB3").
+    pub fn gpio_name(g: usize) -> String {
+        format!("P{}{}", port_name(g / 8), g % 8)
+    }
+
+    /// Every alternate function this configuration generates (all assignable), in the order they
+    /// are dealt out. PCINTn is not included: it is fixed to GPIO n.
+    pub fn assignable_functions(&self) -> Vec<String> {
+        let mut v = Vec::new();
+        let timers = timer_numbers(self.timers8, self.timers16);
+        v.extend((0..self.adc_channels).map(|c| format!("ADC{c}")));
+        if self.analog_comparator {
+            v.push("AIN0".into());
+            v.push("AIN1".into());
+        }
+        v.extend((0..self.ext_interrupts).map(|k| format!("INT{k}")));
+        for k in 0..self.usarts as usize {
+            v.push(format!("RXD{k}"));
+            v.push(format!("TXD{k}"));
+        }
+        for k in 0..self.spis as usize {
+            for f in ["SS", "MOSI", "MISO", "SCK"] {
+                v.push(ix(f, k));
+            }
+        }
+        for k in 0..self.twis as usize {
+            v.push(ix("SDA", k));
+            v.push(ix("SCL", k));
+        }
+        for (n, wide) in timers {
+            if n != 2 {
+                v.push(format!("T{n}"));
+            }
+            v.push(format!("OC{n}A"));
+            v.push(format!("OC{n}B"));
+            if wide {
+                v.push(format!("ICP{n}"));
+            }
+        }
+        v
     }
 
     fn check(&self) -> Result<(), String> {
@@ -256,7 +324,11 @@ impl CustomMcuConfig {
         if self.eeprom_size > 65535 {
             return Err(format!("EEPROM size {} B exceeds 65535 B: the EEPROM address register EEAR and the size field are 16 bits wide", self.eeprom_size));
         }
-        if !(1..=MAX_PORTS).contains(&self.ports) {
+        if self.gpio_pins > 0 {
+            if self.gpio_pins as usize > MAX_PORTS as usize * 8 {
+                return Err(format!("GPIO pin count {} exceeds {}: GPIO indices are 8 bits (at most 255 GPIOs, 8 per port)", self.gpio_pins, MAX_PORTS as usize * 8));
+            }
+        } else if !(1..=MAX_PORTS).contains(&self.ports) {
             return Err(format!("Port count {} must be 1..={MAX_PORTS}: GPIO indices are 8 bits (at most 255 GPIOs, 8 per port)", self.ports));
         }
         // Peripheral counts have no cap of their own: the real limits (255 interrupt vectors,
@@ -287,7 +359,7 @@ impl CustomMcuConfig {
     /// Generates the device description.
     pub fn build(&self) -> Result<AvrDeviceSpec, String> {
         self.check()?;
-        let ports = self.ports as usize;
+        let ports = self.port_count();
         let gpios = self.gpio_count();
         let timers = timer_numbers(self.timers8, self.timers16);
         let has_t = |n: u8| timers.iter().any(|t| t.0 == n);
@@ -300,65 +372,95 @@ impl CustomMcuConfig {
         let pnames: Vec<String> = (0..ports).map(port_name).collect();
 
         // ----- pins and alternate functions -----
+        let all_funcs = self.assignable_functions();
+        let gnames: Vec<String> = (0..gpios).map(Self::gpio_name).collect();
         let mut funcs: Vec<Vec<String>> = vec![Vec::new(); gpios];
-        let mut cursor = 0usize;
-        let mut give = |s: String| {
-            funcs[cursor % gpios].push(s);
-            cursor += 1;
-        };
-        for c in 0..adc {
-            give(format!("ADC{c}"));
-        }
-        if self.analog_comparator {
-            give("AIN0".into());
-            give("AIN1".into());
-        }
-        for k in 0..ints {
-            give(format!("INT{k}"));
-        }
-        for k in 0..usarts {
-            give(format!("RXD{k}"));
-            give(format!("TXD{k}"));
-        }
-        for k in 0..spis {
-            for f in ["SS", "MOSI", "MISO", "SCK"] {
-                give(ix(f, k));
+        let mut placed: HashSet<&str> = HashSet::new();
+        for (f, pin) in &self.pin_functions {
+            if !all_funcs.contains(f) {
+                return Err(format!("Pin function '{f}' is not generated by this configuration (assignable: {}; PCINTn is fixed to its GPIO)", all_funcs.join(", ")));
             }
+            let Some(g) = gnames.iter().position(|n| n.eq_ignore_ascii_case(pin.trim())) else {
+                return Err(format!("Pin function {f} is assigned to '{pin}', which is not a GPIO of this device (GPIOs are {}..{})", gnames[0], gnames[gpios - 1]));
+            };
+            funcs[g].push(f.clone());
+            placed.insert(f);
         }
-        for k in 0..twis {
-            give(ix("SDA", k));
-            give(ix("SCL", k));
-        }
-        for &(n, wide) in &timers {
-            if n != 2 {
-                give(format!("T{n}"));
+        for (cursor, f) in all_funcs.iter().filter(|f| !placed.contains(f.as_str())).enumerate() {
+            let mut best = cursor % gpios;
+            for i in 1..gpios {
+                let g = (cursor + i) % gpios;
+                if funcs[g].len() < funcs[best].len() {
+                    best = g;
+                }
             }
-            give(format!("OC{n}A"));
-            give(format!("OC{n}B"));
-            if wide {
-                give(format!("ICP{n}"));
-            }
+            funcs[best].push(f.clone());
         }
         for (g, f) in funcs.iter_mut().enumerate() {
             f.push(format!("PCINT{g}"));
         }
-        // DIDR bit of the first ADC channel on each GPIO.
         let mut pins: Vec<PinSpec> = Vec::new();
         let power = |name: &str, kind: PinKind, functions: Vec<String>| PinSpec { number: 0, name: name.into(), kind, gpio: None, functions };
-        pins.push(power("RESET", PinKind::Io, vec!["RESET".into()]));
-        pins.push(power("VCC", PinKind::Vcc, vec![]));
-        pins.push(power("GND", PinKind::Gnd, vec![]));
-        pins.push(power("XTAL1", PinKind::Io, vec!["XTAL1".into()]));
-        pins.push(power("XTAL2", PinKind::Io, vec!["XTAL2".into()]));
-        pins.push(power("AVCC", PinKind::Ref, vec![]));
-        if adc > 0 {
-            pins.push(power("AREF", PinKind::Ref, vec!["AREF".into()]));
-        }
-        for (g, f) in funcs.into_iter().enumerate() {
-            pins.push(PinSpec { number: 0, name: format!("P{}{}", pnames[g / 8], g % 8), kind: PinKind::Io, gpio: Some(g as u8), functions: f });
-        }
-        if !pins.len().is_multiple_of(2) && pins.len() < 255 {
-            pins.push(power("GND", PinKind::Gnd, vec![]));
+        let dedicated = |name: &str| match name {
+            "VCC" => power("VCC", PinKind::Vcc, vec![]),
+            "GND" => power("GND", PinKind::Gnd, vec![]),
+            "AVCC" => power("AVCC", PinKind::Ref, vec![]),
+            "AREF" => power("AREF", PinKind::Ref, vec!["AREF".into()]),
+            "RESET" => power("RESET", PinKind::Io, vec!["RESET".into()]),
+            "XTAL1" => power("XTAL1", PinKind::Io, vec!["XTAL1".into()]),
+            "XTAL2" => power("XTAL2", PinKind::Io, vec!["XTAL2".into()]),
+            _ => power("NC", PinKind::Nc, vec![]),
+        };
+        let mut funcs: Vec<Option<Vec<String>>> = funcs.into_iter().map(Some).collect();
+        let mut gpio_pin = |g: usize| PinSpec { number: 0, name: gnames[g].clone(), kind: PinKind::Io, gpio: Some(g as u8), functions: funcs[g].take().unwrap_or_default() };
+        if self.pinout.is_empty() {
+            for n in ["RESET", "VCC", "GND", "XTAL1", "XTAL2", "AVCC"] {
+                pins.push(dedicated(n));
+            }
+            if adc > 0 {
+                pins.push(dedicated("AREF"));
+            }
+            for g in 0..gpios {
+                pins.push(gpio_pin(g));
+            }
+            if !pins.len().is_multiple_of(2) && pins.len() < 255 {
+                pins.push(dedicated("GND"));
+            }
+        } else {
+            let mut seen: HashSet<String> = HashSet::new();
+            for raw in &self.pinout {
+                let name = raw.trim().to_ascii_uppercase();
+                if let Some(g) = gnames.iter().position(|n| *n == name) {
+                    if !seen.insert(name.clone()) {
+                        return Err(format!("Pinout lists GPIO {name} more than once"));
+                    }
+                    pins.push(gpio_pin(g));
+                } else if DEDICATED_PINS.contains(&name.as_str()) {
+                    if !matches!(name.as_str(), "VCC" | "GND" | "NC") && !seen.insert(name.clone()) {
+                        return Err(format!("Pinout lists {name} more than once (only VCC, GND and NC may repeat)"));
+                    }
+                    pins.push(dedicated(&name));
+                } else {
+                    return Err(format!("Pinout entry '{raw}' is neither a GPIO of this device ({}..{}) nor one of {}", gnames[0], gnames[gpios - 1], DEDICATED_PINS.join(", ")));
+                }
+            }
+            if let Some(g) = (0..gpios).find(|g| !seen.contains(&gnames[*g])) {
+                return Err(format!("Pinout is missing GPIO {} (every GPIO must appear exactly once)", gnames[g]));
+            }
+            for (n, why) in [("VCC", "supply"), ("GND", "ground")] {
+                if !pins.iter().any(|p| p.name == n) {
+                    return Err(format!("Pinout needs at least one {n} pin (the {why} pin)"));
+                }
+            }
+            if adc > 0 && !seen.contains("AREF") {
+                return Err("Pinout needs an AREF pin because the device has an ADC".into());
+            }
+            if pins.len() > 254 {
+                return Err(format!("Pinout has {} pins; package pin numbers are 8 bits (at most 254 for an even count)", pins.len()));
+            }
+            if !pins.len().is_multiple_of(2) {
+                return Err(format!("Pinout has {} pins; a two-row DIP/SOIC package needs an even count (add an NC pin)", pins.len()));
+            }
         }
         for (i, p) in pins.iter_mut().enumerate() {
             p.number = (i + 1) as u8;
@@ -488,7 +590,7 @@ impl CustomMcuConfig {
         }
         for (g, pn) in pnames.iter().enumerate() {
             let addr = ex((g < 3).then_some(0x6b + g as u16));
-            r.push(reg(&format!("PCMSK{g}"), addr, "EXINT", &format!("Pin Change Mask Register {g} (P{pn}7..P{pn}0)"), (g * 8..g * 8 + 8).rev().map(|i| field(&format!("PCINT{i}"), 1 << (i % 8), "")).collect()));
+            r.push(reg(&format!("PCMSK{g}"), addr, "EXINT", &format!("Pin Change Mask Register {g} (P{pn}7..P{pn}0)"), (g * 8..(g * 8 + 8).min(gpios)).rev().map(|i| field(&format!("PCINT{i}"), 1 << (i % 8), "")).collect()));
         }
 
         // EEPROM.
@@ -980,5 +1082,65 @@ mod tests {
         c.sram_size = 777;
         c.eeprom_size = 100;
         c.validate().unwrap();
+    }
+
+    fn err(f: &dyn Fn(&mut CustomMcuConfig)) -> String {
+        let mut c = CustomMcuConfig::default();
+        f(&mut c);
+        c.build().expect_err("expected an error")
+    }
+
+    fn pinout13() -> Vec<String> {
+        ["VCC", "GND", "RESET", "AREF", "NC", "PA0", "PA1", "PA2", "PA3", "PA4", "PA5", "PA6", "PA7", "PB0", "PB1", "PB2", "PB3", "PB4"].map(String::from).to_vec()
+    }
+
+    #[test]
+    fn gpio_pin_count_makes_partial_port() {
+        let c = CustomMcuConfig { gpio_pins: 13, adc_channels: 6, ..CustomMcuConfig::default() };
+        assert_eq!((c.port_count(), c.gpio_count()), (2, 13));
+        let d = c.build().unwrap();
+        check_spec(&d);
+        assert_eq!(d.gpio_count, 13);
+        assert_eq!(d.pins.iter().filter(|p| p.gpio.is_some()).count(), 13);
+        assert!(d.register("PCMSK1").unwrap().bits.len() == 5);
+        assert!(err(&|c| c.gpio_pins = 249).contains("248"));
+    }
+
+    #[test]
+    fn explicit_pinout_reorders_and_validates() {
+        let ok = CustomMcuConfig { gpio_pins: 13, pinout: pinout13(), ..CustomMcuConfig::default() };
+        let d = ok.build().unwrap();
+        assert_eq!(d.pins.len(), 18);
+        assert_eq!((d.pins[0].name.as_str(), d.pins[0].kind), ("VCC", PinKind::Vcc));
+        assert_eq!(d.pins[4].kind, PinKind::Nc);
+        assert_eq!(d.pins[17].name, "PB4");
+        let with = |f: &dyn Fn(&mut Vec<String>)| {
+            let mut c = ok.clone();
+            f(&mut c.pinout);
+            c.build().expect_err("expected an error")
+        };
+        assert!(with(&|p| { p.remove(17); p.push("NC".into()); }).contains("missing GPIO PB4"));
+        assert!(with(&|p| p[17] = "PB3".into()).contains("more than once"));
+        assert!(with(&|p| p.push("NC".into())).contains("even"));
+        assert!(with(&|p| p[1] = "NC".into()).contains("GND"));
+        assert!(with(&|p| p[3] = "NC".into()).contains("AREF"));
+        assert!(with(&|p| p[4] = "FOO".into()).contains("FOO"));
+        assert!(with(&|p| p[4] = "RESET".into()).contains("RESET"));
+    }
+
+    #[test]
+    fn pin_functions_assign_and_validate() {
+        let mut c = CustomMcuConfig::default();
+        let base = c.build().unwrap();
+        c.pin_functions.insert("SDA".into(), "PC4".into());
+        let d = c.build().unwrap();
+        check_spec(&d);
+        let on = |d: &AvrDeviceSpec, f: &str| d.pins.iter().find(|p| p.functions.iter().any(|x| x == f)).unwrap().name.clone();
+        assert_eq!(on(&d, "SDA"), "PC4");
+        assert_eq!(on(&d, "ADC3"), "PA3");
+        assert_ne!(on(&base, "SDA"), "PC4");
+        assert!(err(&|c| { c.pin_functions.insert("XYZ".into(), "PA0".into()); }).contains("XYZ"));
+        assert!(err(&|c| { c.pin_functions.insert("SDA".into(), "PZ9".into()); }).contains("PZ9"));
+        assert!(err(&|c| { c.pin_functions.insert("PCINT3".into(), "PA0".into()); }).contains("PCINT3"));
     }
 }

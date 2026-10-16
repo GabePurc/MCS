@@ -86,7 +86,7 @@ export function DeviceInfoPanel(): JSX.Element {
             <thead><tr><th>Pin</th><th>Name</th><th>Functions</th></tr></thead>
             <tbody>
               {spec.pins.map((p) => (
-                <tr key={p.number}><td>{p.number}</td><td><b>{p.name}</b></td><td>{p.kind === 'io' ? p.functions.join(', ') : p.kind === 'vcc' ? 'Supply voltage' : 'Ground'}</td></tr>
+                <tr key={p.number}><td>{p.number}</td><td><b>{p.name}</b></td><td>{p.kind === 'io' ? p.functions.join(', ') : p.kind === 'vcc' ? 'Supply voltage' : p.kind === 'gnd' ? 'Ground' : p.kind === 'nc' ? 'Not connected' : p.functions.join(', ') || 'Analog reference / supply'}</td></tr>
               ))}
             </tbody>
           </table>

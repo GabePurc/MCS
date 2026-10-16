@@ -74,8 +74,11 @@ export const customDeviceDefaults = () => (inTauri ? call<CustomMcuConfig>('cust
 // ---------------------------------------------------------------- build
 export const listDevices = () => (inTauri ? call<DeviceSummary[]>('list_devices') : wasm<DeviceSummary[]>({ method: 'listDevices' }));
 
-export const buildAsm = (source: string, fileName: string, filePath: string | null, deviceId: string) =>
-  inTauri ? call<BuildOutcome>('build_asm', { source, fileName, filePath, deviceId }) : wasm<BuildOutcome>({ method: 'buildAsm', source, fileName, deviceId });
+/** `includes`: open documents by name, used for `.include` before files next to the source. */
+export const buildAsm = (source: string, fileName: string, filePath: string | null, deviceId: string, includes: Record<string, string> = {}) =>
+  inTauri
+    ? call<BuildOutcome>('build_asm', { source, fileName, filePath, deviceId, includes })
+    : wasm<BuildOutcome>({ method: 'buildAsm', source, fileName, deviceId, includes });
 
 export const buildMachineCode = (source: string, fileName: string, filePath: string | null, deviceId: string) =>
   inTauri

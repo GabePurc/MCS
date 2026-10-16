@@ -50,6 +50,8 @@ pub enum PinKind {
     Gnd,
     /// Analog reference / analog supply (AREF, AVCC).
     Ref,
+    /// Not connected: a plain package pin with no function (custom devices).
+    Nc,
 }
 
 #[derive(Clone, Debug, Serialize)]

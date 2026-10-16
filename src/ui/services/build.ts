@@ -41,6 +41,16 @@ function summarize(program: LoadedProgram, deviceId: string): string {
   return `Program memory usage: ${program.flashUsed} bytes (${pct}% of ${size} bytes)`;
 }
 
+/**
+ * Other open assembly documents by name, so `.include "x.inc"` finds an open (even unsaved or
+ * untitled) file; on the desktop, files next to the source fill in the rest.
+ */
+export function openIncludes(doc: Doc): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const d of useWorkspace.getState().docs) if (d.id !== doc.id && d.language === 'asm') out[d.name] = getDocText(d.id);
+  return out;
+}
+
 /** Builds the active document. Returns true on success. */
 export async function buildActive(): Promise<boolean> {
   const doc = activeDoc();
@@ -64,7 +74,7 @@ export async function buildDoc(doc: Doc): Promise<boolean> {
   try {
     outcome =
       doc.language === 'asm'
-        ? await buildAsm(text, doc.name, doc.path, settings.deviceId)
+        ? await buildAsm(text, doc.name, doc.path, settings.deviceId, openIncludes(doc))
         : doc.language === 'mc'
           ? await buildMachineCode(text, doc.name, doc.path, settings.deviceId)
           : await buildC({

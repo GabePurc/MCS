@@ -1283,7 +1283,8 @@ fn wire_custom(m: &mut Machine) {
     let gpio = |f: &str| s.pins.iter().find(|p| p.gpio.is_some() && p.functions.iter().any(|x| x == f)).and_then(|p| p.gpio);
     let gpio_u = |f: &str| gpio(f).unwrap_or_else(|| panic!("{}: no pin carries {f}", s.name)) as usize;
     let sx = |k: usize| if k == 0 { String::new() } else { k.to_string() };
-    let ports = s.gpio_count as usize / 8;
+    let n_gpio = s.gpio_count as usize;
+    let ports = n_gpio.div_ceil(8);
     let prr_bits = s.register("PRR0").map_or(0u16, |p| p.bits.iter().fold(0u16, |a, b| a | b.mask as u16));
 
     let crystal = |k: u8| (k, ClockSource::Crystal);
@@ -1307,10 +1308,11 @@ fn wire_custom(m: &mut Machine) {
     for p in 0..ports {
         let l = mcs_core::avr::devices::port_name(p);
         let base = p * 8;
-        let mut didr: Vec<Option<(u16, u8)>> = (0..8).map(|i| didr_of(base + i)).collect();
+        let top = (base + 8).min(n_gpio);
+        let mut didr: Vec<Option<(u16, u8)>> = (base..top).map(didr_of).collect();
         if has("DIDR1") {
             for (f, bit) in [("AIN0", 0x01u8), ("AIN1", 0x02)] {
-                if let Some(g) = gpio(f).map(usize::from).filter(|g| (base..base + 8).contains(g)) {
+                if let Some(g) = gpio(f).map(usize::from).filter(|g| (base..top).contains(g)) {
                     if didr[g - base].is_none() {
                         didr[g - base] = Some((r("DIDR1"), bit));
                     }
@@ -1322,7 +1324,7 @@ fn wire_custom(m: &mut Machine) {
         }
         add_port(m, PortConfig {
             name: leak(format!("PORT{l}")), pin: r(&format!("PIN{l}")), ddr: r(&format!("DDR{l}")), port: r(&format!("PORT{l}")), pue: None,
-            didr, pud, gpios: (base..base + 8).collect(), reset_gpio: None,
+            didr, pud, gpios: (base..top).collect(), reset_gpio: None,
         });
     }
 
@@ -1355,7 +1357,7 @@ fn wire_custom(m: &mut Machine) {
             .collect(),
         groups: (0..ports)
             .map(|g| PcGroupSpec {
-                gpios: (g * 8..g * 8 + 8).map(|x| x as u8).collect(), msk_reg: r(&format!("PCMSK{g}")), vector: v(&format!("PCINT{g}")),
+                gpios: (g * 8..(g * 8 + 8).min(n_gpio)).map(|x| x as u8).collect(), msk_reg: r(&format!("PCMSK{g}")), vector: v(&format!("PCINT{g}")),
                 enable_reg: r(&pcr(g, "PCICR")), enable_bit: 1 << (g % 8), flag_reg: r(&pcr(g, "PCIFR")), flag_bit: 1 << (g % 8),
             })
             .collect(),

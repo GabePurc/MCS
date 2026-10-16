@@ -13,4 +13,9 @@ describe('templates', () => {
     expect(t).toContain('.include "m328Pdef.inc"');
     expect(t).not.toContain('tn10def');
   });
+
+  it('includes custom devices by id, not by display name (issue #9)', () => {
+    expect(defIncludeName('My MCU', 'custom-my-mcu')).toBe('custom-my-mcudef.inc');
+    expect(templateFor('asm', 'My MCU', 'custom-my-mcu')).toContain('.include "custom-my-mcudef.inc"');
+  });
 });
